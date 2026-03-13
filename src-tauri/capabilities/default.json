@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/templates/tauri_capabilities_schema.json",
+  "identifier": "default",
+  "description": "Default capability set for TapTapDeck",
+  "windows": ["main"],
+  "permissions": [
+    "core:tray:default",
+    "core:tray:allow-new",
+    "core:tray:allow-set-icon",
+    "core:tray:allow-set-visible",
+    "core:tray:allow-set-menu",
+
+    "core:app:default",
+    "core:app:allow-default-window-icon",
+
+    "core:image:default",
+    "core:image:allow-from-path",
+
+    "core:menu:default",
+    "core:menu:allow-new",
+    "core:menu:allow-items",
+    "core:menu:allow-set-text",
+
+    "core:window:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
+
+    "core:default",
+    "opener:default",
+    "core:event:default",
+    "core:event:allow-emit",
+    "core:event:allow-listen"
+  ]
+}

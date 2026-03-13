@@ -1,0 +1,19 @@
+{
+  "id": "vscode",
+  "name": "VS Code",
+  "priority": 50,
+  "triggers": {
+    "process": "Code"
+  },
+  "layout": {
+    "grid": [2, 3],
+    "buttons": [
+      { "label": "Terminal", "emoji": "💻", "action": "vscode.terminal" },
+      { "label": "Run", "emoji": "▶️", "action": "vscode.run" },
+      { "label": "Debug", "emoji": "🐛", "action": "vscode.debug" },
+      { "label": "Git", "emoji": "🔀", "action": "vscode.git" },
+      { "label": "Search", "emoji": "🔍", "action": "vscode.search" },
+      { "label": "Extensions", "emoji": "🧩", "action": "vscode.extensions" }
+    ]
+  }
+}

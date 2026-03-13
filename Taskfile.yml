@@ -1,0 +1,48 @@
+version: "3"
+
+dotenv: [".env"]
+
+tasks:
+  install:
+    desc: Install frontend dependencies
+    cmds:
+      - npm install
+
+  dev:
+    desc: Run TapTapDeck in development mode (Vite + Tauri)
+    cmds:
+      - npx tauri dev
+
+  build:
+    desc: Build production app
+    cmds:
+      - npm run build
+      - npx tauri build
+
+  test:
+    desc: Run all tests
+    cmds:
+      - npm run check
+      - cd src-tauri && cargo test
+
+  check:
+    desc: Type-check frontend
+    cmds:
+      - npm run check
+
+  lint:
+    desc: Lint Rust code
+    cmds:
+      - cd src-tauri && cargo clippy -- -D warnings
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - cd src-tauri && cargo clean
+      - rm -rf dist
+
+  deploy:
+    desc: Build and package for distribution
+    deps: [build]
+    cmds:
+      - echo "Build artifacts are in src-tauri/target/release/bundle/"
