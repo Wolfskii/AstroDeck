@@ -1,0 +1,28 @@
+{
+  "id": "spotify",
+  "name": "Spotify Control",
+  "description": "Playback controls and track actions for Spotify.",
+  "priority": 60,
+  "triggers": {
+    "processesAny": ["*spotify*", "*spotify.exe"]
+  },
+  "view": {
+    "type": "mediaPlayer",
+    "mediaPlayer": {
+      "previous": { "label": "Previous", "emoji": "⏮️", "action": "spotify.prevTrack" },
+      "playPause": { "label": "Play", "emoji": "▶️", "action": "spotify.togglePlay" },
+      "next": { "label": "Next", "emoji": "⏭️", "action": "spotify.nextTrack" },
+      "like": { "label": "Like", "emoji": "❤️", "action": "spotify.like" },
+      "volumeAction": "spotify.setVolume"
+    }
+  },
+  "layout": {
+    "grid": [2, 2],
+    "buttons": [
+      { "label": "Previous", "emoji": "⏮️", "action": "spotify.prevTrack" },
+      { "label": "Play/Pause", "emoji": "⏯️", "action": "spotify.togglePlay" },
+      { "label": "Next", "emoji": "⏭️", "action": "spotify.nextTrack" },
+      { "label": "Like", "emoji": "❤️", "action": "spotify.like" }
+    ]
+  }
+}

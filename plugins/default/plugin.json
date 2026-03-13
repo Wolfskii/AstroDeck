@@ -1,6 +1,7 @@
 {
   "id": "default",
   "name": "Default Deck",
+  "description": "Core app actions and general controls.",
   "priority": 0,
   "triggers": {},
   "layout": {

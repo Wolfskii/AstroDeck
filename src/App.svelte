@@ -7,13 +7,15 @@
   import { Menu } from "@tauri-apps/api/menu";
   import { invoke } from "@tauri-apps/api/core";
   import DeckGrid from "./components/DeckGrid.svelte";
+  import MediaPlayerView from "./components/MediaPlayerView.svelte";
   import {
+    executeActionValue,
     getActiveScene,
+    getPlugins,
     getSpotifyStatus,
     setActiveScene,
-    setSpotifyVolume,
   } from "./services/api";
-  import type { SceneState, LayoutConfig } from "./types";
+  import type { SceneState, LayoutConfig, PluginConfig, DeckButtonConfig } from "./types";
   import {
     getBuiltinLayout,
     getBuiltinSceneIds,
@@ -36,34 +38,52 @@
   let autoScroll = $state(true);
   let logsLinesEl = $state<HTMLElement | null>(null);
   let logBusSocket: WebSocket | null = null;
+  let plugins = $state<PluginConfig[]>([]);
   let spotifyStatus = $state<SpotifyStatus | null>(null);
   let spotifyBusy = $state(false);
   let spotifyVolumeBusy = $state(false);
   let spotifyVolumePercent = $state(50);
-  const displayedLayout = $derived.by(() => {
-    if (!layout) return null;
-    if (sceneId !== "spotify") return layout;
+  let optimisticSpotifySaved = $state<boolean | null>(null);
+  const pluginsById = $derived(new Map(plugins.map((plugin) => [plugin.id, plugin])));
+  const currentPlugin = $derived(plugins.find((plugin) => plugin.id === sceneId) ?? null);
+  const effectiveSpotifySaved = $derived(
+    optimisticSpotifySaved ?? spotifyStatus?.isCurrentTrackSaved ?? null
+  );
+  const currentMediaView = $derived.by(() => {
+    const media = currentPlugin?.view?.type === "mediaPlayer"
+      ? currentPlugin.view.mediaPlayer
+      : null;
+    if (!media) return null;
 
-    const buttons = layout.buttons
-      .filter(
-        (button) =>
-          button.action !== "spotify.volumeUp" && button.action !== "spotify.volumeDown"
-      )
-      .map((button) => {
-        if (button.action !== "spotify.like") return button;
-        const isSaved = spotifyStatus?.isCurrentTrackSaved === true;
-        return {
-          ...button,
-          label: isSaved ? "Dislike" : "Like",
-          emoji: "❤️",
-        };
-      });
+    const withSpotifyLikeState = (button?: DeckButtonConfig | null) => {
+      if (!button || button.action !== "spotify.like") return button ?? null;
+      return {
+        ...button,
+        label: effectiveSpotifySaved ? "Remove" : "Like",
+        emoji: effectiveSpotifySaved ? "🗑️" : "❤️",
+      };
+    };
+
+    const withSpotifyPlayState = (button?: DeckButtonConfig | null) => {
+      if (!button || button.action !== "spotify.togglePlay") return button ?? null;
+      return {
+        ...button,
+        label: spotifyStatus?.isPlaying ? "Pause" : "Play",
+        emoji: spotifyStatus?.isPlaying ? "⏸️" : "▶️",
+      };
+    };
 
     return {
-      ...layout,
-      grid: [2, 2],
-      buttons,
-    } satisfies LayoutConfig;
+      previous: media.previous ?? null,
+      playPause: withSpotifyPlayState(media.playPause),
+      next: media.next ?? null,
+      like: withSpotifyLikeState(media.like),
+      volumeAction: media.volumeAction ?? null,
+    };
+  });
+  const displayedLayout = $derived.by(() => {
+    if (!layout) return null;
+    return layout;
   });
 
   $effect(() => {
@@ -146,6 +166,12 @@
     }
   }
 
+  function requestPlugins() {
+    if (logBusSocket?.readyState === WebSocket.OPEN) {
+      logBusSocket.send(JSON.stringify({ type: "getPlugins" }));
+    }
+  }
+
   function connectSpotify() {
     if (logBusSocket?.readyState !== WebSocket.OPEN) {
       logError("Log bus is not connected; cannot start Spotify auth", "Spotify");
@@ -168,25 +194,31 @@
     if (!isTauri) return;
     try {
       spotifyStatus = await getSpotifyStatus();
+      optimisticSpotifySaved = null;
     } catch (e) {
       logError(`Failed to fetch Spotify status: ${String(e)}`, "Spotify");
     }
   }
 
-  function handleSpotifyVolumeInput(event: Event) {
-    spotifyVolumePercent = Number((event.currentTarget as HTMLInputElement).value);
-  }
-
-  async function commitSpotifyVolume() {
+  async function refreshPluginsForDesktop() {
     if (!isTauri) return;
     try {
-      spotifyVolumeBusy = true;
-      const next = await setSpotifyVolume(spotifyVolumePercent);
-      spotifyVolumePercent = next;
-      logInfo(`Set Spotify volume to ${next}%`, "spotify window");
-      await refreshSpotifyStatusForDesktop();
+      plugins = await getPlugins();
     } catch (e) {
-      logError(`Failed to set Spotify volume: ${String(e)}`, "spotify window");
+      logError(`Failed to fetch plugins: ${String(e)}`, "Plugins");
+    }
+  }
+
+  async function commitSceneVolume(action: string, value: number) {
+    try {
+      spotifyVolumeBusy = true;
+      await executeActionValue(action, value);
+      if (action.startsWith("spotify.")) {
+        spotifyVolumePercent = value;
+        await refreshSpotifyStatusForDesktop();
+      }
+    } catch (e) {
+      logError(`Failed to set volume via ${action}: ${String(e)}`, `${sceneId} window`);
     } finally {
       spotifyVolumeBusy = false;
     }
@@ -278,7 +310,14 @@
   let availableScenes = $state<string[]>([]);
   let loading = $state(true);
   const settingsSceneIds = $derived(
-    Array.from(new Set([...getBuiltinSceneIds(), ...availableScenes, ...seenScenes]))
+    Array.from(
+      new Set([
+        ...getBuiltinSceneIds(),
+        ...plugins.map((plugin) => plugin.id),
+        ...availableScenes,
+        ...seenScenes,
+      ])
+    )
   );
 
   function selectScene(id: string) {
@@ -311,6 +350,7 @@
       availableScenes = state.availableScenes;
       logInfo(`Active scene: ${state.activeSceneId}`, "Scenes");
       markSceneSeen(state.activeSceneId);
+      await refreshPluginsForDesktop();
       if (state.activeSceneId === "spotify") {
         await refreshSpotifyStatusForDesktop();
       }
@@ -360,6 +400,9 @@
       const detail = (ev as CustomEvent<{ action: string }>).detail;
       if (!detail?.action) return;
       if (detail.action.startsWith("spotify.")) {
+        if (detail.action === "spotify.like") {
+          optimisticSpotifySaved = null;
+        }
         if (isTauri) {
           refreshSpotifyStatusForDesktop();
         } else {
@@ -368,8 +411,26 @@
       }
     };
 
+    const handleActionStarted = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ action: string }>).detail;
+      if (!detail?.action) return;
+      if (detail.action === "spotify.like") {
+        optimisticSpotifySaved = !(effectiveSpotifySaved === true);
+      }
+    };
+
+    const handleActionFailed = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ action: string }>).detail;
+      if (!detail?.action) return;
+      if (detail.action === "spotify.like") {
+        optimisticSpotifySaved = null;
+      }
+    };
+
     window.addEventListener("taptapdeck-core-action", handleCoreAction as EventListener);
+    window.addEventListener("taptapdeck-action-started", handleActionStarted as EventListener);
     window.addEventListener("taptapdeck-action-executed", handleActionExecuted as EventListener);
+    window.addEventListener("taptapdeck-action-failed", handleActionFailed as EventListener);
 
     if (!isTauri) {
       // Browser debug mode: start with a static default layout and settings view.
@@ -397,6 +458,7 @@
           updateDebugTitle();
           logInfo("Connected to TapTapDeck log bus", "Browser");
           spotifyBusy = false;
+          requestPlugins();
           requestSpotifyStatus();
         };
 
@@ -412,6 +474,9 @@
               if (payload.type === "spotifyStatus") {
                 spotifyStatus = payload.payload as SpotifyStatus;
                 spotifyBusy = false;
+                optimisticSpotifySaved = null;
+              } else if (payload.type === "plugins") {
+                plugins = (payload.payload as PluginConfig[]) ?? [];
               } else if (payload.type === "spotifyAuthUrl") {
                 spotifyBusy = false;
                 const url = (payload.payload as { url?: string })?.url;
@@ -455,7 +520,9 @@
         logBusSocket?.close();
         logBusSocket = null;
         window.removeEventListener("taptapdeck-core-action", handleCoreAction as EventListener);
+        window.removeEventListener("taptapdeck-action-started", handleActionStarted as EventListener);
         window.removeEventListener("taptapdeck-action-executed", handleActionExecuted as EventListener);
+        window.removeEventListener("taptapdeck-action-failed", handleActionFailed as EventListener);
       };
     }
 
@@ -466,6 +533,7 @@
         initTray();
       }
       refreshScene();
+      refreshPluginsForDesktop();
       if (sceneId === "spotify") {
         refreshSpotifyStatusForDesktop();
       }
@@ -476,6 +544,7 @@
         availableScenes = event.payload.availableScenes;
         logInfo(`Scene changed to: ${event.payload.activeSceneId}`, "Scenes");
         markSceneSeen(event.payload.activeSceneId);
+        refreshPluginsForDesktop();
         if (event.payload.activeSceneId === "spotify") {
           refreshSpotifyStatusForDesktop();
         }
@@ -484,7 +553,9 @@
       return () => {
         unlisten.then((fn) => fn());
         window.removeEventListener("taptapdeck-core-action", handleCoreAction as EventListener);
+        window.removeEventListener("taptapdeck-action-started", handleActionStarted as EventListener);
         window.removeEventListener("taptapdeck-action-executed", handleActionExecuted as EventListener);
+        window.removeEventListener("taptapdeck-action-failed", handleActionFailed as EventListener);
       };
     }
   });
@@ -531,6 +602,28 @@
               </div>
             </div>
             <div class="spotify-status-card">
+              {#if spotifyStatus?.currentCoverArtUrl || spotifyStatus?.currentTrackName}
+                <div class="spotify-now-playing">
+                  {#if spotifyStatus?.currentCoverArtUrl}
+                    <img
+                      class="spotify-cover-art"
+                      src={spotifyStatus.currentCoverArtUrl}
+                      alt={spotifyStatus?.currentTrackName ?? "Current cover art"}
+                    />
+                  {/if}
+                  <div class="spotify-now-playing-meta">
+                    <div class="spotify-playback-state">
+                      {spotifyStatus?.playbackState ?? "stopped"}
+                    </div>
+                    <div class="spotify-track-title">
+                      {spotifyStatus?.currentTrackName ?? "Nothing active"}
+                    </div>
+                    <div class="spotify-track-artist">
+                      {spotifyStatus?.currentArtistName ?? "No artist information"}
+                    </div>
+                  </div>
+                </div>
+              {/if}
               <div class="spotify-status-top">
                 <span
                   class:connected={spotifyStatus?.isAuthenticated}
@@ -551,6 +644,12 @@
                   <span class="spotify-stat-label">Device</span>
                   <span class="spotify-stat-value">
                     {spotifyStatus?.activeDeviceName ?? "No active device"}
+                  </span>
+                </div>
+                <div class="spotify-stat">
+                  <span class="spotify-stat-label">Playback</span>
+                  <span class="spotify-stat-value">
+                    {spotifyStatus?.playbackState ?? "stopped"}
                   </span>
                 </div>
                 <div class="spotify-stat">
@@ -590,9 +689,6 @@
                   </span>
                 </div>
               </div>
-              {#if spotifyStatus?.currentArtistName}
-                <div class="spotify-artist">by {spotifyStatus.currentArtistName}</div>
-              {/if}
               <div class="spotify-scopes">
                 {#if spotifyStatus?.grantedScopes?.length}
                   {#each spotifyStatus.grantedScopes as scope}
@@ -612,16 +708,25 @@
             {:else}
               <div class="scene-grid">
                 {#each settingsSceneIds as id}
+                  {@const plugin = pluginsById.get(id)}
                   {@const meta = getBuiltinSceneMeta(id)}
+                  {@const title = plugin?.name ?? meta?.name ?? id}
+                  {@const description =
+                    plugin?.description ??
+                    meta?.description ??
+                    "Manual scene override for this plugin layout."}
+                  {@const accent = meta?.accent ?? "#8b5cf6"}
+                  {@const grid = plugin?.layout.grid ?? meta?.layout.grid ?? [0, 0]}
+                  {@const buttonCount = plugin?.layout.buttons.length ?? meta?.layout.buttons.length ?? 0}
                   <button
                     class:active={id === sceneId}
                     class="scene-card"
                     onclick={() => selectScene(id)}
                     aria-pressed={id === sceneId}
-                    style={`--scene-accent: ${meta?.accent ?? "#8b5cf6"}`}
+                    style={`--scene-accent: ${accent}`}
                   >
                     <div class="scene-card-top">
-                      <span class="scene-name">{meta?.name ?? id}</span>
+                      <span class="scene-name">{title}</span>
                       {#if id === sceneId}
                         <span class="scene-tag current">current</span>
                       {:else if seenScenes.includes(id)}
@@ -632,14 +737,14 @@
                     </div>
                     <div class="scene-id">{id}</div>
                     <p class="scene-description">
-                      {meta?.description ?? "Manual scene override for this plugin layout."}
+                      {description}
                     </p>
                     <div class="scene-card-footer">
                       <span class="scene-metrics">
-                        {meta?.layout.grid[0] ?? 0}x{meta?.layout.grid[1] ?? 0}
+                        {grid[0]}x{grid[1]}
                       </span>
                       <span class="scene-metrics">
-                        {meta?.layout.buttons.length ?? 0} buttons
+                        {buttonCount} buttons
                       </span>
                     </div>
                   </button>
@@ -652,40 +757,32 @@
     {:else}
       {#if loading}
         <div class="loading">Detecting environment...</div>
+      {:else if currentMediaView}
+        <MediaPlayerView
+          previous={currentMediaView.previous}
+          playPause={currentMediaView.playPause}
+          next={currentMediaView.next}
+          like={currentMediaView.like}
+          title={sceneId === "spotify" ? spotifyStatus?.currentTrackName : null}
+          subtitle={sceneId === "spotify" ? spotifyStatus?.currentArtistName : null}
+          artworkUrl={sceneId === "spotify" ? spotifyStatus?.currentCoverArtUrl : null}
+          playbackState={sceneId === "spotify" ? spotifyStatus?.playbackState ?? "stopped" : "stopped"}
+          volumeAction={currentMediaView.volumeAction}
+          volumePercent={spotifyVolumePercent}
+          volumeBusy={spotifyVolumeBusy}
+          volumeEnabled={sceneId !== "spotify" || !!spotifyStatus?.hasActiveDevice}
+          source={`${sceneId} window`}
+          onVolumeCommit={(value) =>
+            currentMediaView.volumeAction
+              ? commitSceneVolume(currentMediaView.volumeAction, value)
+              : Promise.resolve()}
+        />
       {:else if displayedLayout}
-        {#if sceneId === "spotify"}
-          <div class="spotify-scene-shell">
-            <DeckGrid
-              grid={displayedLayout.grid}
-              buttons={displayedLayout.buttons}
-              sceneId={sceneId}
-            />
-            <section class="spotify-volume-panel">
-              <div class="spotify-volume-header">
-                <span class="spotify-volume-label">Spotify Volume</span>
-                <span class="spotify-volume-value">{spotifyVolumePercent}%</span>
-              </div>
-              <input
-                class="spotify-volume-slider"
-                type="range"
-                min="0"
-                max="100"
-                step="1"
-                value={spotifyVolumePercent}
-                oninput={handleSpotifyVolumeInput}
-                onchange={commitSpotifyVolume}
-                disabled={spotifyVolumeBusy || !spotifyStatus?.hasActiveDevice}
-                aria-label="Spotify volume"
-              />
-            </section>
-          </div>
-        {:else}
-          <DeckGrid
-            grid={displayedLayout.grid}
-            buttons={displayedLayout.buttons}
-            sceneId={sceneId}
-          />
-        {/if}
+        <DeckGrid
+          grid={displayedLayout.grid}
+          buttons={displayedLayout.buttons}
+          sceneId={sceneId}
+        />
       {:else}
         <div class="loading">No active scene</div>
       {/if}
@@ -775,46 +872,6 @@
   .app-main {
     flex: 1 1 auto;
     display: flex;
-  }
-
-  .spotify-scene-shell {
-    display: flex;
-    flex: 1;
-    min-height: 0;
-    flex-direction: column;
-  }
-
-  .spotify-volume-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 0 24px 24px;
-  }
-
-  .spotify-volume-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .spotify-volume-label {
-    font-size: 1rem;
-    font-weight: 700;
-    color: var(--text-primary);
-  }
-
-  .spotify-volume-value {
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: #22c55e;
-  }
-
-  .spotify-volume-slider {
-    width: 100%;
-    height: 28px;
-    accent-color: #22c55e;
-    cursor: pointer;
   }
 
   .loading {
@@ -919,6 +976,53 @@
     border: 1px solid rgba(255, 255, 255, 0.06);
     user-select: text;
     -webkit-user-select: text;
+  }
+
+  .spotify-now-playing {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+
+  .spotify-cover-art {
+    width: 86px;
+    height: 86px;
+    border-radius: 16px;
+    object-fit: cover;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.24);
+  }
+
+  .spotify-now-playing-meta {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .spotify-playback-state {
+    display: inline-flex;
+    align-self: flex-start;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(34, 197, 94, 0.16);
+    color: #bbf7d0;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.72rem;
+    font-weight: 800;
+  }
+
+  .spotify-track-title {
+    font-size: 1.08rem;
+    font-weight: 800;
+    color: var(--text-primary);
+  }
+
+  .spotify-track-artist {
+    color: var(--text-secondary);
+    font-size: 0.96rem;
   }
 
   .spotify-status-top {

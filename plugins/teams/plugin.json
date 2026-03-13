@@ -1,9 +1,10 @@
 {
   "id": "teams",
   "name": "Teams Meeting",
+  "description": "Reactions and in-call controls for meetings.",
   "priority": 100,
   "triggers": {
-    "process": "Teams",
+    "processGlob": "*teams*",
     "windowTitleContains": "Meeting"
   },
   "layout": {

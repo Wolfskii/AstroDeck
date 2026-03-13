@@ -58,6 +58,12 @@ pub struct SpotifyStatus {
     pub current_track_name: Option<String>,
     #[serde(rename = "currentArtistName")]
     pub current_artist_name: Option<String>,
+    #[serde(rename = "currentCoverArtUrl")]
+    pub current_cover_art_url: Option<String>,
+    #[serde(rename = "playbackState")]
+    pub playback_state: String,
+    #[serde(rename = "isPlaying")]
+    pub is_playing: bool,
     #[serde(rename = "currentVolumePercent")]
     pub current_volume_percent: Option<u8>,
     #[serde(rename = "currentItemType")]
@@ -75,11 +81,13 @@ pub struct SpotifyStatus {
 pub struct PlaybackSummary {
     pub device_id: String,
     pub device_name: String,
+    pub is_playing: bool,
     pub volume_percent: u8,
     pub item_id: Option<String>,
     pub item_type: Option<String>,
     pub item_name: Option<String>,
     pub artist_name: Option<String>,
+    pub cover_art_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +108,7 @@ struct TokenResponse {
 #[derive(Debug, Deserialize)]
 struct PlaybackResponse {
     device: PlaybackDevice,
+    is_playing: bool,
     item: Option<PlaybackItem>,
 }
 
@@ -116,7 +125,22 @@ struct PlaybackItem {
     name: String,
     #[serde(rename = "type")]
     item_type: String,
+    #[serde(default)]
     artists: Vec<PlaybackArtist>,
+    album: Option<PlaybackAlbum>,
+    #[serde(default)]
+    images: Vec<PlaybackImage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaybackAlbum {
+    #[serde(default)]
+    images: Vec<PlaybackImage>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct PlaybackImage {
+    url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +206,9 @@ pub fn get_status(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
             active_device_name: None,
             current_track_name: None,
             current_artist_name: None,
+            current_cover_art_url: None,
+            playback_state: "stopped".to_string(),
+            is_playing: false,
             current_volume_percent: None,
             current_item_type: None,
             current_item_id: None,
@@ -199,6 +226,9 @@ pub fn get_status(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
             active_device_name: None,
             current_track_name: None,
             current_artist_name: None,
+            current_cover_art_url: None,
+            playback_state: "stopped".to_string(),
+            is_playing: false,
             current_volume_percent: None,
             current_item_type: None,
             current_item_id: None,
@@ -240,6 +270,13 @@ pub fn get_status(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
                 active_device_name: Some(playback.device_name),
                 current_track_name: playback.item_name,
                 current_artist_name: playback.artist_name,
+                current_cover_art_url: playback.cover_art_url,
+                playback_state: if playback.is_playing {
+                    "playing".to_string()
+                } else {
+                    "paused".to_string()
+                },
+                is_playing: playback.is_playing,
                 current_volume_percent: Some(playback.volume_percent),
                 current_item_type: playback.item_type,
                 current_item_id: playback.item_id,
@@ -255,6 +292,9 @@ pub fn get_status(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
             active_device_name: None,
             current_track_name: None,
             current_artist_name: None,
+            current_cover_art_url: None,
+            playback_state: "stopped".to_string(),
+            is_playing: false,
             current_volume_percent: None,
             current_item_type: None,
             current_item_id: None,
@@ -582,6 +622,7 @@ pub fn get_current_playback(spotify: &SpotifyState) -> Result<PlaybackSummary, S
     Ok(PlaybackSummary {
         device_id,
         device_name: playback.device.name,
+        is_playing: playback.is_playing,
         volume_percent: playback.device.volume_percent.unwrap_or(0),
         item_id: playback.item.as_ref().and_then(|item| item.id.clone()),
         item_type: playback.item.as_ref().map(|item| item.item_type.clone()),
@@ -590,7 +631,16 @@ pub fn get_current_playback(spotify: &SpotifyState) -> Result<PlaybackSummary, S
             .item
             .as_ref()
             .and_then(|item| item.artists.first().map(|artist| artist.name.clone())),
+        cover_art_url: playback.item.as_ref().and_then(playback_item_image_url),
     })
+}
+
+fn playback_item_image_url(item: &PlaybackItem) -> Option<String> {
+    item.album
+        .as_ref()
+        .and_then(|album| album.images.first())
+        .map(|image| image.url.clone())
+        .or_else(|| item.images.first().map(|image| image.url.clone()))
 }
 
 fn get_access_token(spotify: &SpotifyState) -> Result<String, String> {

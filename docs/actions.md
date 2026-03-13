@@ -1,99 +1,81 @@
 # Actions
 
-Actions are the commands invoked when a deck button is pressed. They use a `"namespace.command"` format and are dispatched by the Rust backend.
+Buttons can execute either legacy string actions or declarative `actionSpec` actions.
 
-## Action Format
+## Legacy String Actions
 
-```
+Legacy actions still use the existing format:
+
+```text
 namespace.command
 ```
 
-Examples: `spotify.togglePlay`, `teams.toggleMute`, `core.settings`
+Examples:
 
-## Dispatcher
+- `spotify.togglePlay`
+- `spotify.setVolume`
+- `teams.toggleMute`
+- `core.settings`
 
-- **Location**: `src-tauri/src/actions/mod.rs`
-- **Function**: `dispatch(action: &str) -> Result<(), String>`
-- Splits on first `.`; routes by `namespace` prefix.
-- Unknown namespaces return `Err`.
+These are dispatched in `src-tauri/src/actions/mod.rs`.
 
-## Built-in Namespaces
+## Value-Based Actions
 
-| Namespace | Module | Description |
-|-----------|--------|-------------|
-| `teams` | `teams_actions.rs` | Teams meeting controls |
-| `spotify` | `spotify_actions.rs` | Spotify control |
-| `core` | inline in `mod.rs` | App settings, plugins, refresh, info |
+Some actions also accept a numeric payload through `execute_action_value`.
 
-*Note: `vscode` namespace is planned (Phase 2); plugin exists but actions are not yet wired.*
+Current built-in value action:
 
-## Teams Actions
+| Action | Description |
+|--------|-------------|
+| `spotify.setVolume` | Sets Spotify device volume to `0-100` |
 
-| Command | Description |
-|---------|-------------|
-| `toggleMute` | Ctrl+Shift+M (stub) |
-| `toggleCamera` | Ctrl+Shift+O (stub) |
-| `shareScreen` | Ctrl+Shift+E (stub) |
-| `raiseHand` | Ctrl+Shift+K (stub) |
-| `reaction.like` | Send 👍 reaction |
-| `reaction.heart` | Send ❤️ reaction |
-| `reaction.clap` | Send 👏 reaction |
-| `reaction.laugh` | Send 😂 reaction |
-| `reaction.wow` | Send 😮 reaction |
+This is used by the reusable media-player scene slider.
 
-*Real integration: keyboard shortcut injection or Teams API — future work.*
+## Declarative Plugin Actions
+
+Plugins can define `actionSpec` instead of an explicit string `action`. The loader generates a synthetic runtime action ID and registers it automatically.
+
+Supported declarative kinds:
+
+| Kind | Fields | Behavior |
+|------|--------|----------|
+| `openUrl` | `url` | Opens a URL using the OS |
+| `openPath` | `path` | Opens a local path using the OS |
+| `launch` | `program`, `args?` | Starts an external application or executable |
+
+Examples:
+
+```json
+{ "label": "Docs", "actionSpec": { "kind": "openUrl", "url": "https://example.com" } }
+```
+
+```json
+{ "label": "Open Folder", "actionSpec": { "kind": "openPath", "path": "." } }
+```
+
+```json
+{ "label": "Launch App", "actionSpec": { "kind": "launch", "program": "MyApp.exe", "args": ["--quick"] } }
+```
+
+## Built-In Namespaces
+
+| Namespace | Description |
+|-----------|-------------|
+| `teams` | Teams meeting controls |
+| `spotify` | Spotify controls and Spotify Web API integration |
+| `core` | App-level actions such as settings and refresh |
 
 ## Spotify Actions
 
-| Command | Description |
-|---------|-------------|
-| `togglePlay` | Play/pause |
-| `nextTrack` | Next track |
-| `prevTrack` | Previous track |
-| `volumeUp` | Volume up |
-| `volumeDown` | Volume down |
-| `like` | Like current track |
+| Action | Description |
+|--------|-------------|
+| `spotify.togglePlay` | Toggle play/pause |
+| `spotify.nextTrack` | Next track |
+| `spotify.prevTrack` | Previous track |
+| `spotify.like` | Toggle saved-track state in the user library |
+| `spotify.setVolume` | Set Spotify device volume using a slider/value payload |
 
-*Real integration: Spotify Web API or D-Bus/media controls — future work.*
+## Notes
 
-## Core Actions
-
-| Command | Description |
-|---------|-------------|
-| `settings` | Open settings |
-| `plugins` | List plugins |
-| `refresh` | Refresh scene |
-| `info` | Show app info |
-
-## Adding New Action Handlers
-
-1. Create `src-tauri/src/actions/my_namespace_actions.rs`:
-
-```rust
-pub fn handle(command: &str) -> Result<(), String> {
-    match command {
-        "doSomething" => {
-            log::info!("MyNamespace: do something");
-            Ok(())
-        }
-        _ => Err(format!("Unknown command: {}", command)),
-    }
-}
-```
-
-2. Add module and match arm in `actions/mod.rs`:
-
-```rust
-mod my_namespace_actions;
-
-// In dispatch():
-match namespace {
-    "teams" => teams_actions::handle(command),
-    "spotify" => spotify_actions::handle(command),
-    "my_namespace" => my_namespace_actions::handle(command),
-    "core" => handle_core(command),
-    _ => { ... }
-}
-```
-
-3. Use in plugin JSON: `"action": "my_namespace.doSomething"`
+- String actions remain the compatibility path for existing built-in plugins.
+- Declarative actions are the preferred path for user-authored plugins that should execute real OS behavior without needing new Rust code.

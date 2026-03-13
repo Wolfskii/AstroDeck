@@ -17,6 +17,8 @@ type WsSender = futures_util::stream::SplitSink<WebSocketStream<TcpStream>, Mess
 enum ClientMessage {
     #[serde(rename = "setScene")]
     SetScene { #[serde(rename = "sceneId")] scene_id: String },
+    #[serde(rename = "getPlugins")]
+    GetPlugins,
     #[serde(rename = "spotifyStatus")]
     SpotifyStatus,
     #[serde(rename = "spotifyAuthStart")]
@@ -98,6 +100,25 @@ async fn handle_client(
                                     log::error!("Log bus: failed to set scene to {}: {}", scene_id, e);
                                 } else {
                                     log::info!("Log bus: browser requested scene override -> {}", scene_id);
+                                }
+                            }
+                            Ok(ClientMessage::GetPlugins) => {
+                                let state = app_handle.state::<crate::AppState>();
+                                let plugins_result: Result<Vec<crate::PluginConfig>, String> =
+                                    state.plugins.lock().map(|plugins| plugins.clone()).map_err(|e| e.to_string());
+                                match plugins_result {
+                                    Ok(plugins) => {
+                                        let _ = send_json(&mut sender, &ServerEnvelope {
+                                            kind: "plugins",
+                                            payload: plugins,
+                                        }).await;
+                                    }
+                                    Err(message) => {
+                                        let _ = send_json(&mut sender, &ServerEnvelope {
+                                            kind: "spotifyAuthError",
+                                            payload: serde_json::json!({ "message": message }),
+                                        }).await;
+                                    }
                                 }
                             }
                             Ok(ClientMessage::SpotifyStatus) => {

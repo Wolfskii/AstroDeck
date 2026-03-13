@@ -16,6 +16,11 @@
   async function handleClick() {
     pressed = true;
     try {
+      window.dispatchEvent(
+        new CustomEvent("taptapdeck-action-started", {
+          detail: { action, label },
+        })
+      );
       if (action.startsWith("core.")) {
         window.dispatchEvent(
           new CustomEvent("taptapdeck-core-action", {
@@ -31,6 +36,11 @@
         })
       );
     } catch (e) {
+      window.dispatchEvent(
+        new CustomEvent("taptapdeck-action-failed", {
+          detail: { action, label, error: String(e) },
+        })
+      );
       logError(`Action failed: ${action} (${String(e)})`, source);
     } finally {
       setTimeout(() => (pressed = false), 200);

@@ -1,9 +1,11 @@
 {
   "id": "vscode",
   "name": "VS Code",
+  "description": "Editor, debug, and workspace shortcuts.",
   "priority": 50,
   "triggers": {
-    "process": "Code"
+    "processGlob": "*code*",
+    "excludeProcesses": ["*codec*"]
   },
   "layout": {
     "grid": [2, 3],

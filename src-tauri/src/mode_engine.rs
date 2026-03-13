@@ -59,20 +59,129 @@ pub fn resolve(app_handle: &tauri::AppHandle, matched_ids: &[String]) {
 }
 
 /// Check if a given plugin's triggers match against the current system state.
-pub fn matches_triggers(plugin: &PluginConfig, processes: &[String], _window_title: &str) -> bool {
+pub fn matches_triggers(
+    plugin: &PluginConfig,
+    context: &crate::detectors::DetectionContext,
+) -> bool {
     if let Some(ref proc) = plugin.triggers.process {
-        let proc_lower = proc.to_lowercase();
-        let found = processes.iter().any(|p| p.to_lowercase().contains(&proc_lower));
-        if !found {
+        if !context
+            .processes
+            .iter()
+            .any(|p| p.to_lowercase().contains(&proc.to_lowercase()))
+        {
             return false;
         }
+    }
+
+    if let Some(ref pattern) = plugin.triggers.process_glob {
+        if !context
+            .processes
+            .iter()
+            .any(|value| matches_glob(pattern, value))
+        {
+            return false;
+        }
+    }
+
+    if !plugin.triggers.processes_any.is_empty()
+        && !plugin
+            .triggers
+            .processes_any
+            .iter()
+            .any(|pattern| context.processes.iter().any(|value| matches_glob(pattern, value)))
+    {
+        return false;
+    }
+
+    if !plugin.triggers.processes_all.is_empty()
+        && !plugin
+            .triggers
+            .processes_all
+            .iter()
+            .all(|pattern| context.processes.iter().any(|value| matches_glob(pattern, value)))
+    {
+        return false;
+    }
+
+    if plugin
+        .triggers
+        .exclude_processes
+        .iter()
+        .any(|pattern| context.processes.iter().any(|value| matches_glob(pattern, value)))
+    {
+        return false;
     }
 
     if let Some(ref title_match) = plugin.triggers.window_title_contains {
-        if !title_match.is_empty() && !_window_title.to_lowercase().contains(&title_match.to_lowercase()) {
+        let wanted = title_match.to_lowercase();
+        if !context
+            .window_titles
+            .iter()
+            .any(|title| title.to_lowercase().contains(&wanted))
+        {
             return false;
         }
     }
 
+    if let Some(ref pattern) = plugin.triggers.window_title_glob {
+        if !context
+            .window_titles
+            .iter()
+            .any(|title| matches_glob(pattern, title))
+        {
+            return false;
+        }
+    }
+
+    if !plugin.triggers.window_titles_any.is_empty()
+        && !plugin
+            .triggers
+            .window_titles_any
+            .iter()
+            .any(|pattern| context.window_titles.iter().any(|title| matches_glob(pattern, title)))
+    {
+        return false;
+    }
+
     true
+}
+
+pub fn should_match_plugin(
+    plugin: &PluginConfig,
+    detector_match: bool,
+    context: &crate::detectors::DetectionContext,
+) -> bool {
+    if plugin.triggers.has_rules() {
+        return matches_triggers(plugin, context);
+    }
+
+    detector_match
+}
+
+fn matches_glob(pattern: &str, value: &str) -> bool {
+    let pattern = pattern.to_lowercase();
+    let value = value.to_lowercase();
+    let pattern = pattern.as_bytes();
+    let value = value.as_bytes();
+
+    let mut dp = vec![vec![false; value.len() + 1]; pattern.len() + 1];
+    dp[0][0] = true;
+
+    for i in 1..=pattern.len() {
+        if pattern[i - 1] == b'*' {
+            dp[i][0] = dp[i - 1][0];
+        }
+    }
+
+    for i in 1..=pattern.len() {
+        for j in 1..=value.len() {
+            dp[i][j] = match pattern[i - 1] {
+                b'*' => dp[i - 1][j] || dp[i][j - 1],
+                b'?' => dp[i - 1][j - 1],
+                other => dp[i - 1][j - 1] && other == value[j - 1],
+            };
+        }
+    }
+
+    dp[pattern.len()][value.len()]
 }

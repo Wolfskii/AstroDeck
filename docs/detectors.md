@@ -1,84 +1,78 @@
 # Detectors
 
-Detectors determine which plugins/scenes are "active" based on running processes. They run in a background loop and feed the mode engine with matched plugin IDs.
-
-## Detector Trait
-
-All detectors implement the `Detector` trait in `src-tauri/src/detectors/mod.rs`:
-
-```rust
-pub trait Detector: Send + Sync {
-    fn id(&self) -> &str;           // Plugin ID this detector matches (e.g. "teams")
-    fn detect(&self, system: &System) -> bool;  // Returns true if app is running
-}
-```
-
-- `id()` returns the plugin ID that this detector activates when it matches.
-- `detect()` receives a `sysinfo::System` and returns whether the target app is running.
-
-## Built-in Detectors
-
-| Detector | ID | Detects |
-|----------|-----|---------|
-| `TeamsDetector` | `teams` | Processes containing "teams" or "ms-teams" |
-| `SpotifyDetector` | `spotify` | Spotify process |
-| `VscodeDetector` | `vscode` | VS Code / Code process |
-| `DefaultDetector` | `default` | Always matches (fallback) |
+Detectors determine which plugins/scenes are active based on running processes and window titles.
 
 ## Detection Loop
 
-- Runs in a **background thread** spawned at app startup.
-- Interval: `DETECTOR_INTERVAL` env var (default **2000** ms).
-- Uses `sysinfo` crate for cross-platform process enumeration.
-- Each tick:
-  1. Refreshes process list.
-  2. For each plugin, checks: (a) detector match by `id`, or (b) trigger match (process name, window title).
-  3. Calls `mode_engine::resolve()` with matched plugin IDs.
+The detection loop runs in a background thread every `DETECTOR_INTERVAL` milliseconds, defaulting to `2000`.
 
-## Trigger Matching
+Each cycle:
 
-Plugins can also match via **triggers** in their JSON (no detector needed):
+1. Refresh running processes using `sysinfo`.
+2. Collect process names and executable filenames.
+3. Collect visible window titles on Windows.
+4. Evaluate each plugin against either:
+   - a built-in detector for that plugin `id`, or
+   - JSON trigger rules
+5. Resolve the highest-priority matched scene.
 
-- `process`: substring match against process names (case-insensitive).
-- `windowTitleContains`: substring match against focused window title (platform-specific; currently stubbed).
+## Built-In Detectors
 
-Trigger matching is done in `mode_engine::matches_triggers()` and combined with detector matches via OR.
+Built-in detectors still exist for:
 
-## Adding a New Detector
+- `default`
+- `teams`
+- `spotify`
+- `vscode`
 
-1. Create `src-tauri/src/detectors/my_detector.rs`:
+If a plugin defines explicit trigger rules, those trigger rules are used as the authoritative match instead of letting the hardcoded detector bypass stricter filters.
 
-```rust
-use super::Detector;
-use sysinfo::System;
+## Trigger Fields
 
-pub struct MyDetector;
+Supported plugin trigger fields:
 
-impl Detector for MyDetector {
-    fn id(&self) -> &str {
-        "my-plugin-id"
-    }
+| Field | Description |
+|-------|-------------|
+| `process` | Case-insensitive substring match |
+| `processGlob` | Wildcard process match using `*` and `?` |
+| `processesAny` | Match if any listed process pattern matches |
+| `processesAll` | Match only if all listed process patterns match |
+| `excludeProcesses` | Reject the plugin if any listed process pattern matches |
+| `windowTitleContains` | Case-insensitive substring match across visible window titles |
+| `windowTitleGlob` | Wildcard match against visible window titles |
+| `windowTitlesAny` | Match if any listed window-title pattern matches |
 
-    fn detect(&self, system: &System) -> bool {
-        system.processes().values().any(|p| {
-            p.name().to_string_lossy().to_lowercase().contains("myapp")
-        })
-    }
+## Wildcard Matching
+
+Wildcard trigger fields support:
+
+- `*` for any sequence of characters
+- `?` for any single character
+
+Examples:
+
+- `*spotify*`
+- `spotify.exe`
+- `*meeting*`
+- `Code?`
+
+## Example
+
+```json
+{
+  "triggers": {
+    "processesAny": ["*spotify*", "*spotify.exe"],
+    "excludeProcesses": ["*helper*"],
+    "windowTitleGlob": "*Now Playing*"
+  }
 }
 ```
 
-2. Add the module and register in `detectors/mod.rs`:
+## Window Detection Notes
 
-```rust
-mod my_detector;
-// ...
+- Window-title matching currently collects visible top-level window titles on Windows.
+- Non-Windows platforms fall back to process-only matching for now.
 
-fn all_detectors() -> Vec<Box<dyn Detector>> {
-    vec![
-        // ... existing detectors ...
-        Box::new(my_detector::MyDetector),
-    ]
-}
-```
+## Adding A New Detector
 
-3. Create a plugin JSON in `plugins/` with matching `id` and triggers (optional).
+Hardcoded detectors are still useful for platform-specific heuristics, but most user-authored plugins should rely on JSON triggers first.

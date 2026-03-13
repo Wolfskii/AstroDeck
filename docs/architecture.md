@@ -6,40 +6,39 @@ TapTapDeck is a context-aware control deck: a cross-platform desktop app that dy
 
 ## High-Level System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              TapTapDeck                                       │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌──────────────┐    ┌─────────────────────┐    ┌──────────────────────┐   │
-│  │  Detectors   │───▶│ Mode/Scene Engine   │───▶│   Layout Engine       │   │
-│  │  (sysinfo)   │    │ (priority resolve)  │    │ (lookup by scene ID)  │   │
-│  └──────────────┘    └─────────────────────┘    └───────────┬──────────┘   │
-│         │                          │                        │              │
-│         │                          │                        │              │
-│         ▼                          ▼                        ▼              │
-│  ┌──────────────┐           ┌──────────────┐         ┌──────────────┐      │
-│  │   Plugins    │           │  AppState    │         │ Plugin Engine│      │
-│  │  (JSON)      │           │  (Mutex)     │         │ (load/scan)  │      │
-│  └──────────────┘           └──────┬───────┘         └──────────────┘      │
-│                                   │                                         │
-│                                   │ scene-changed event                     │
-│                                   ▼                                         │
-│                            ┌──────────────┐                                 │
-│                            │     UI       │                                 │
-│                            │ (Svelte 5)   │                                 │
-│                            └──────────────┘                                 │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  builtinPlugins[BuiltInPluginDirs]
+  externalPlugins[ExternalUserPluginDirs]
+  pluginLoader[PluginLoader]
+  pluginRegistry[PluginRegistry]
+  detectionLoop[DetectionLoop]
+  modeEngine[ModeEngine]
+  templateRenderer[TemplateRenderer]
+  actionRuntime[ActionRuntime]
+  osAdapters[OSAndApiAdapters]
+  ui[UI]
+
+  builtinPlugins --> pluginLoader
+  externalPlugins --> pluginLoader
+  pluginLoader --> pluginRegistry
+  pluginRegistry --> detectionLoop
+  detectionLoop --> modeEngine
+  pluginRegistry --> templateRenderer
+  modeEngine --> templateRenderer
+  templateRenderer --> ui
+  pluginRegistry --> actionRuntime
+  actionRuntime --> osAdapters
 ```
 
 ## Data Flow
 
-1. **Detectors** check running processes (via `sysinfo` crate) every `DETECTOR_INTERVAL` ms (default 2000).
-2. **Mode engine** resolves which scene is active: matched plugin IDs are filtered by priority; highest wins.
-3. **Layout engine** looks up layout config by scene ID from loaded plugins.
-4. **Plugin engine** provides plugin definitions (loaded from `plugins/` JSON files).
-5. **UI** renders the grid and buttons based on the layout; listens for `scene-changed` Tauri events.
+1. The plugin engine loads built-in plugin folders and external user plugin folders.
+2. Plugin-local assets are normalized and declarative `actionSpec` buttons are registered.
+3. The detector loop builds a detection context from process names, executable names, and visible window titles.
+4. The mode engine resolves the active scene by trigger match and priority.
+5. The frontend renders either a generic grid scene or a template-driven scene such as `mediaPlayer`.
+6. Button clicks route to either legacy string handlers or declarative plugin runtime actions.
 
 ## Directory Structure
 
@@ -47,14 +46,15 @@ TapTapDeck is a context-aware control deck: a cross-platform desktop app that dy
 |------|-------------|
 | `src/` | Frontend: Svelte 5, Vite, TypeScript |
 | `src-tauri/` | Backend: Rust, Tauri 2 |
-| `plugins/` | JSON plugin definitions (auto-loaded on startup) |
+| `plugins/` | Built-in plugin folders and legacy flat manifests |
+| `~/TapTapDeck/plugins/` | External user plugin folders loaded at runtime |
 
 ## Frontend Stack
 
 - **Svelte 5** with runes (`$props`, `$state`, `$derived`)
 - **Vite** for build and dev server
 - **TypeScript** for type safety
-- Components: `DeckGrid`, `DeckButton`, mode-specific views (`TeamsMeetingMode`, `DefaultMode`)
+- Components: `DeckGrid`, `DeckButton`, `MediaPlayerView`
 
 ## Backend Stack
 
@@ -65,19 +65,18 @@ TapTapDeck is a context-aware control deck: a cross-platform desktop app that dy
 
 ## State Management
 
-- **AppState** (Rust): `Mutex`-wrapped `plugins` and `active_scene_id`
+- **AppState** (Rust): `Mutex`-wrapped `plugins`, `plugin_actions`, and `active_scene_id`
 - **Frontend sync**: Tauri `scene-changed` event carries `SceneResponse` (active scene, layout, available scenes)
 - Frontend subscribes via `app.listen()` and updates local state
 
 ## Plugins
 
-- JSON files in `plugins/` directory
-- Scanned on startup; no restart needed to add new files (hot-reload planned via `notify` crate)
-- Each plugin defines: id, name, priority, triggers, layout (grid + buttons)
+- Plugin folders can contain `plugin.json` plus local assets
+- Legacy flat JSON manifests are still accepted
+- External plugins override built-ins on `id` collisions
+- Each plugin defines: id, name, priority, triggers, layout, and optional `view` template metadata
 
-## Future: WebSocket Server
+## Browser Debug Panel
 
-- Planned for **mobile companion** support
-- Stub in `src-tauri/src/websocket.rs`
-- Will listen on configurable port (e.g. `WEBSOCKET_PORT`, default 3211)
-- Broadcast `scene-changed` to connected clients; accept action commands from remote clients
+- `src-tauri/src/websocket.rs` exposes the log bus to the browser debug/settings panel
+- It now also serves live plugin metadata in addition to logs and Spotify state

@@ -205,3 +205,25 @@ pub fn handle(command: &str, spotify: &crate::spotify::SpotifyState) -> Result<(
         return handle_unsupported(command);
     }
 }
+
+pub fn handle_value(
+    command: &str,
+    value: serde_json::Value,
+    spotify: &crate::spotify::SpotifyState,
+) -> Result<(), String> {
+    match command {
+        "setVolume" => {
+            let volume = value
+                .as_u64()
+                .ok_or_else(|| "spotify.setVolume expects a numeric value".to_string())?
+                .clamp(0, 100) as u8;
+            let next = crate::spotify::set_volume(spotify, volume, None)?;
+            log::info!("Spotify: set device volume to {}%", next);
+            Ok(())
+        }
+        _ => Err(format!(
+            "Spotify action '{}' does not support a value payload",
+            command
+        )),
+    }
+}

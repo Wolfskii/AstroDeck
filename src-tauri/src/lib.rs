@@ -6,6 +6,7 @@ mod plugin_engine;
 mod spotify;
 mod websocket;
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 use tokio::sync::broadcast;
@@ -14,6 +15,7 @@ pub use plugin_engine::PluginConfig;
 
 pub struct AppState {
     pub plugins: Mutex<Vec<PluginConfig>>,
+    pub plugin_actions: Mutex<HashMap<String, plugin_engine::ActionSpec>>,
     pub active_scene_id: Mutex<String>,
     pub manual_scene_override: Mutex<Option<String>>,
     pub spotify: spotify::SpotifyState,
@@ -25,6 +27,7 @@ impl AppState {
         let (log_tx, _) = broadcast::channel(512);
         Self {
             plugins: Mutex::new(Vec::new()),
+            plugin_actions: Mutex::new(HashMap::new()),
             active_scene_id: Mutex::new("default".to_string()),
             manual_scene_override: Mutex::new(None),
             spotify: spotify::SpotifyState::default(),
@@ -143,6 +146,16 @@ fn execute_action(action: String, app: tauri::AppHandle, state: tauri::State<App
 }
 
 #[tauri::command]
+fn execute_action_value(
+    action: String,
+    value: serde_json::Value,
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    actions::dispatch_value(&action, value, &app, &state)
+}
+
+#[tauri::command]
 fn get_plugins(state: tauri::State<AppState>) -> Result<Vec<PluginConfig>, String> {
     let plugins = state.plugins.lock().map_err(|e| e.to_string())?;
     Ok(plugins.clone())
@@ -228,6 +241,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_active_scene,
             execute_action,
+            execute_action_value,
             get_plugins,
             set_active_scene,
             log_to_bus,

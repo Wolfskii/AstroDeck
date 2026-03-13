@@ -21,6 +21,15 @@ export async function executeAction(action: string): Promise<void> {
   return invoke("execute_action", { action });
 }
 
+export async function executeActionValue(action: string, value: unknown): Promise<void> {
+  if (!isTauri) {
+    logInfo(`(browser) would execute action value: ${action} => ${String(value)}`, "Browser actions");
+    return;
+  }
+
+  return invoke("execute_action_value", { action, value });
+}
+
 export async function getPlugins(): Promise<PluginConfig[]> {
   return invoke<PluginConfig[]>("get_plugins");
 }
@@ -41,6 +50,9 @@ export interface SpotifyStatus {
   activeDeviceName?: string | null;
   currentTrackName?: string | null;
   currentArtistName?: string | null;
+  currentCoverArtUrl?: string | null;
+  playbackState: string;
+  isPlaying: boolean;
   currentVolumePercent?: number | null;
   currentItemType?: string | null;
   currentItemId?: string | null;

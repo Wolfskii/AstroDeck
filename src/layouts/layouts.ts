@@ -50,13 +50,11 @@ const builtinScenes: Record<string, BuiltinSceneMeta> = {
     description: "Playback and volume controls for Spotify.",
     accent: "#22c55e",
     layout: {
-      grid: [2, 3],
+      grid: [2, 2],
       buttons: [
+        { label: "Prev Track", emoji: "⏮️", action: "spotify.prevTrack" },
         { label: "Play/Pause", emoji: "⏯️", action: "spotify.togglePlay" },
         { label: "Next Track", emoji: "⏭️", action: "spotify.nextTrack" },
-        { label: "Prev Track", emoji: "⏮️", action: "spotify.prevTrack" },
-        { label: "Volume Up", emoji: "🔊", action: "spotify.volumeUp" },
-        { label: "Volume Down", emoji: "🔉", action: "spotify.volumeDown" },
         { label: "Like", emoji: "❤️", action: "spotify.like" },
       ],
     },
