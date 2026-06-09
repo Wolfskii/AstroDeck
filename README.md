@@ -30,7 +30,7 @@ A context-aware control deck for touchscreen monitors. Dynamically changes its U
 ### Setup
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Wolfskii/AstroDeck.git
 cd AstroDeck
 npm install
 cp .env.example .env
