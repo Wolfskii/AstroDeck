@@ -5,6 +5,10 @@ node_modules/
 dist/
 src-tauri/target/
 .artifacts/
+release-artifacts/
+version-manifest.json
+release-notes.md
+app-icon-square.png
 
 # Environment
 .env

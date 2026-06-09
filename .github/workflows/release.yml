@@ -1,0 +1,196 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - develop
+      - production
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+      channel: ${{ steps.resolve.outputs.channel }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Resolve release version
+        id: resolve
+        run: node scripts/ci-resolve-version.mjs "${{ github.ref_name }}"
+
+      - name: Sync project version files
+        run: node scripts/sync-version.mjs
+
+      - name: Upload version manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-files
+          path: |
+            VERSION
+            version-manifest.json
+            package.json
+            src-tauri/Cargo.toml
+            src-tauri/tauri.conf.json
+          retention-days: 1
+
+  build:
+    needs: version
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - platform: linux
+            os: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+          - platform: macos
+            os: macos-latest
+            rust_target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download resolved version files
+        uses: actions/download-artifact@v4
+        with:
+          name: version-files
+          path: .
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            libglib2.0-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            pkg-config \
+            xdg-utils
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Tauri bundles
+        run: npx tauri build --target ${{ matrix.rust_target }}
+        env:
+          CI: true
+
+      - name: Collect release artifacts
+        run: node scripts/ci-collect-artifacts.mjs ${{ matrix.platform }} ${{ matrix.rust_target }}
+
+      - name: Upload platform artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: release-artifacts/${{ matrix.platform }}/*
+          retention-days: 7
+
+  release:
+    needs: [version, build]
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download version files
+        uses: actions/download-artifact@v4
+        with:
+          name: version-files
+          path: .
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-windows
+          path: dist/windows
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-linux
+          path: dist/linux
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-macos
+          path: dist/macos
+
+      - name: Generate release notes
+        run: node scripts/ci-changelog.mjs
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: AstroDeck ${{ needs.version.outputs.version }}
+          body_path: release-notes.md
+          prerelease: ${{ needs.version.outputs.prerelease }}
+          files: |
+            dist/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Rust for lockfile sync
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          cd src-tauri && cargo check --quiet && cd ..
+          git add VERSION package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
+          if git diff --staged --quiet; then
+            echo "No version file changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: bump version to ${{ needs.version.outputs.version }} [skip ci]"
+          git push

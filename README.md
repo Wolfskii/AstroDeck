@@ -43,9 +43,28 @@ Or using Taskfile (after copying `.env.example` to `.env`):
 task install && task dev
 ```
 
+## Releases (GitHub Actions)
+
+Pushes and merges to **`develop`** and **`production`** trigger the [Release workflow](.github/workflows/release.yml).
+
+| Branch | Version bump | GitHub release |
+| --- | --- | --- |
+| `develop` | Patch (`0.1.0` → `0.1.1`) | Pre-release (`v0.1.1-dev`) |
+| `production` | Minor, patch reset (`0.1.x` → `0.2.0`) | Stable release (`v0.2.0`) |
+
+Each run builds **Windows**, **Linux**, and **macOS** artifacts (installers + portable builds) and attaches them to the release with sorted commit notes.
+
+### Version file
+
+The canonical version lives in [`VERSION`](VERSION) (currently `0.1.0`). CI syncs it into `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
+
+To **pin a specific version**, edit `VERSION` and commit it with your changes. If that commit changes `VERSION` to something other than the auto-bump result, the pipeline uses your value instead.
+
+After a successful release, the workflow commits the resolved version back to the branch with `[skip ci]`.
+
 ## Packaging
 
-AstroDeck can now build native production packages through the Taskfile or npm scripts.
+AstroDeck can also build native production packages locally through the Taskfile or npm scripts.
 
 ### Default Host Build
 
