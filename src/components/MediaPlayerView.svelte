@@ -1,22 +1,41 @@
 <script lang="ts">
+  import "@fontsource/dseg7-classic/400.css";
   import type { DeckButtonConfig } from "../types";
-  import DeckButton from "./DeckButton.svelte";
+  import { executeAction, executeActionValue } from "../services/api";
+  import { logError } from "../services/logger";
+  import {
+    DEFAULT_CAR_BACKGROUNDS,
+    extractDominantAlbumColor,
+    paletteToCarThingBackgrounds,
+  } from "../lib/albumArtColor";
 
   interface Props {
     previous?: DeckButtonConfig | null;
     playPause?: DeckButtonConfig | null;
     next?: DeckButtonConfig | null;
     like?: DeckButtonConfig | null;
+    shuffle?: DeckButtonConfig | null;
     title?: string | null;
     subtitle?: string | null;
+    albumName?: string | null;
     artworkUrl?: string | null;
     playbackState?: string;
+    progressMs?: number | null;
+    durationMs?: number | null;
     volumeAction?: string | null;
+    seekAction?: string | null;
     volumePercent?: number;
     volumeBusy?: boolean;
     volumeEnabled?: boolean;
+    seekEnabled?: boolean;
+    shuffleActive?: boolean;
+    trackSaved?: boolean | null;
     source?: string;
     onVolumeCommit?: (value: number) => Promise<void> | void;
+    onSeekCommit?: (positionMs: number) => Promise<void> | void;
+    showFullscreenToggle?: boolean;
+    presentationFullscreen?: boolean;
+    onToggleFullscreen?: () => void;
   }
 
   let {
@@ -24,267 +43,916 @@
     playPause = null,
     next = null,
     like = null,
+    shuffle = null,
     title = null,
     subtitle = null,
+    albumName = null,
     artworkUrl = null,
     playbackState = "stopped",
+    progressMs = null,
+    durationMs = null,
     volumeAction = null,
+    seekAction = null,
     volumePercent = 50,
     volumeBusy = false,
     volumeEnabled = true,
+    seekEnabled = true,
+    shuffleActive = false,
+    trackSaved = null,
     source = "media window",
     onVolumeCommit,
+    onSeekCommit,
+    showFullscreenToggle = false,
+    presentationFullscreen = false,
+    onToggleFullscreen,
   }: Props = $props();
 
   let localVolume = $state(50);
+  let playbackDisplayMs = $state(0);
+  let scrubMs = $state(0);
+  let progressDragging = $state(false);
+  let progressHovering = $state(false);
+  let progressTrackEl = $state<HTMLElement | null>(null);
+  let faderTrackEl = $state<HTMLElement | null>(null);
+  let faderDragging = $state(false);
+  let seekHoldMs = $state<number | null>(null);
+  let carBodyBg = $state(DEFAULT_CAR_BACKGROUNDS.body);
+  let carFooterBg = $state(DEFAULT_CAR_BACKGROUNDS.footer);
+
+  const isPlaying = $derived(playbackState === "playing");
+  const hasDuration = $derived((durationMs ?? 0) > 0);
+  const playbackRatio = $derived(
+    hasDuration
+      ? Math.min(1, Math.max(0, playbackDisplayMs / (durationMs as number)))
+      : 0
+  );
+  const scrubRatio = $derived(
+    hasDuration ? Math.min(1, Math.max(0, scrubMs / (durationMs as number))) : 0
+  );
+  const progressInteracting = $derived(progressHovering || progressDragging);
+  const progressAriaValue = $derived(progressInteracting ? scrubMs : playbackDisplayMs);
+  const showProgressPreview = $derived(progressInteracting && scrubRatio > playbackRatio);
+  const progressPreviewWidth = $derived(Math.max(0, (scrubRatio - playbackRatio) * 100));
 
   $effect(() => {
+    if (faderDragging || volumeBusy) return;
     localVolume = volumePercent;
   });
 
-  function handleVolumeInput(event: Event) {
-    localVolume = Number((event.currentTarget as HTMLInputElement).value);
+  $effect(() => {
+    if (progressDragging || progressMs == null) return;
+    if (seekHoldMs != null) {
+      if (Math.abs(progressMs - seekHoldMs) <= 2500) {
+        seekHoldMs = null;
+        playbackDisplayMs = progressMs;
+      }
+      return;
+    }
+    playbackDisplayMs = progressMs;
+  });
+
+  $effect(() => {
+    if (!isPlaying || progressDragging || !hasDuration) return;
+    const tick = window.setInterval(() => {
+      playbackDisplayMs = Math.min(
+        durationMs as number,
+        playbackDisplayMs + 1000
+      );
+    }, 1000);
+    return () => window.clearInterval(tick);
+  });
+
+  function applyOptimisticSeek(positionMs: number) {
+    seekHoldMs = positionMs;
+    playbackDisplayMs = positionMs;
+    scrubMs = positionMs;
   }
 
-  async function handleVolumeCommit() {
+  function updateScrubFromClientX(clientX: number) {
+    if (!progressTrackEl || !hasDuration) return;
+    const rect = progressTrackEl.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    scrubMs = Math.round(ratio * (durationMs as number));
+  }
+
+  function volumeFromClientY(clientY: number): number {
+    if (!faderTrackEl) return localVolume;
+    const rect = faderTrackEl.getBoundingClientRect();
+    const ratio = 1 - Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+    return Math.round(ratio * 100);
+  }
+
+  function handleProgressPointerDown(event: PointerEvent) {
+    if (!seekAction || !onSeekCommit || !seekEnabled || !hasDuration) return;
+    progressDragging = true;
+    progressHovering = true;
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    updateScrubFromClientX(event.clientX);
+    applyOptimisticSeek(scrubMs);
+  }
+
+  function handleProgressPointerMove(event: PointerEvent) {
+    if (!progressHovering && !progressDragging) return;
+    updateScrubFromClientX(event.clientX);
+    if (progressDragging) {
+      applyOptimisticSeek(scrubMs);
+    }
+  }
+
+  function handleProgressPointerUp(event: PointerEvent) {
+    const wasDragging = progressDragging;
+    if (wasDragging) {
+      progressDragging = false;
+      (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+      applyOptimisticSeek(scrubMs);
+      if (seekAction && onSeekCommit && seekEnabled) {
+        void onSeekCommit(scrubMs);
+      }
+    }
+
+    const el = progressTrackEl;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      progressHovering =
+        event.clientX >= rect.left &&
+        event.clientX <= rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY <= rect.bottom;
+    } else {
+      progressHovering = false;
+    }
+  }
+
+  function handleProgressPointerEnter(event: PointerEvent) {
+    if (!seekEnabled || !hasDuration) return;
+    progressHovering = true;
+    updateScrubFromClientX(event.clientX);
+  }
+
+  function handleProgressPointerLeave() {
+    if (!progressDragging) progressHovering = false;
+  }
+
+  function handleFaderPointerDown(event: PointerEvent) {
+    if (!volumeAction || !onVolumeCommit || volumeBusy || !volumeEnabled) return;
+    faderDragging = true;
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    localVolume = volumeFromClientY(event.clientY);
+  }
+
+  function handleFaderPointerMove(event: PointerEvent) {
+    if (!faderDragging) return;
+    localVolume = volumeFromClientY(event.clientY);
+  }
+
+  function handleFaderPointerUp(event: PointerEvent) {
+    if (!faderDragging) return;
+    faderDragging = false;
+    (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
     if (!volumeAction || !onVolumeCommit) return;
-    await onVolumeCommit(localVolume);
+    void onVolumeCommit(localVolume);
+  }
+
+  $effect(() => {
+    const url = artworkUrl;
+    if (!url) {
+      carBodyBg = DEFAULT_CAR_BACKGROUNDS.body;
+      carFooterBg = DEFAULT_CAR_BACKGROUNDS.footer;
+      return;
+    }
+
+    let cancelled = false;
+    void extractDominantAlbumColor(url).then((rgb) => {
+      if (cancelled) return;
+      if (!rgb) {
+        carBodyBg = DEFAULT_CAR_BACKGROUNDS.body;
+        carFooterBg = DEFAULT_CAR_BACKGROUNDS.footer;
+        return;
+      }
+      const palette = paletteToCarThingBackgrounds(rgb);
+      carBodyBg = palette.body;
+      carFooterBg = palette.footer;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  async function runTransportAction(action: string, label: string, value?: unknown) {
+    try {
+      window.dispatchEvent(
+        new CustomEvent("taptapdeck-action-started", { detail: { action, label } })
+      );
+      if (value !== undefined) {
+        await executeActionValue(action, value);
+      } else {
+        await executeAction(action);
+      }
+      window.dispatchEvent(
+        new CustomEvent("taptapdeck-action-executed", { detail: { action, label } })
+      );
+    } catch (e) {
+      window.dispatchEvent(
+        new CustomEvent("taptapdeck-action-failed", {
+          detail: { action, label, error: String(e) },
+        })
+      );
+      logError(`${label} failed: ${String(e)}`, source);
+    }
+  }
+
+  function formatTime(ms: number): string {
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    const min = Math.floor(totalSec / 60);
+    const sec = totalSec % 60;
+    return `${min}:${sec.toString().padStart(2, "0")}`;
   }
 </script>
 
-<div class="media-player-view">
-  <section class="media-now-playing">
-    {#if artworkUrl}
-      <img class="media-artwork" src={artworkUrl} alt={title ?? "Current cover art"} />
-    {:else}
-      <div class="media-artwork media-artwork-placeholder" aria-hidden="true">♪</div>
+<div
+  class="car-thing"
+  style={`--car-body-bg: ${carBodyBg}; --car-footer-bg: ${carFooterBg};`}
+>
+  <div
+    class="car-thing-body"
+    class:car-thing-body--fs={showFullscreenToggle && onToggleFullscreen && !presentationFullscreen}
+  >
+    {#if showFullscreenToggle && onToggleFullscreen && !presentationFullscreen}
+      <button
+        type="button"
+        class="car-fullscreen-btn"
+        title="Fullscreen on this display (Esc to exit)"
+        aria-label="Enter fullscreen"
+        onclick={() => onToggleFullscreen()}
+      >
+        ⛶
+      </button>
     {/if}
 
-    <div class="media-meta">
-      <div class="media-state-badge media-state-{playbackState}">{playbackState}</div>
-      <div class="media-title">{title ?? "Nothing playing"}</div>
-      <div class="media-subtitle">{subtitle ?? "No artist information"}</div>
-    </div>
-  </section>
+    <section class="car-now-playing">
+      <div class="car-art-column">
+        {#if artworkUrl}
+          <img class="car-artwork" src={artworkUrl} alt={title ?? "Album art"} />
+        {:else}
+          <div class="car-artwork car-artwork-placeholder" aria-hidden="true">♪</div>
+        {/if}
+      </div>
 
-  <div class="media-player-row">
-    <div class="media-slot media-slot-side">
-      {#if previous}
-        <DeckButton
-          label={previous.label}
-          emoji={previous.emoji}
-          image={previous.image}
-          action={previous.action}
-          source={source}
-        />
+      <div class="car-meta-column">
+        {#if albumName}
+          <div class="car-album-line">{albumName}</div>
+        {/if}
+        <h2 class="car-track-title">{title ?? "Nothing playing"}</h2>
+        <p class="car-artist-name">{subtitle ?? "No artist information"}</p>
+      </div>
+    </section>
+  </div>
+
+  <div
+    class="car-progress-wrap"
+    class:car-progress-disabled={!seekEnabled || !hasDuration}
+    class:car-progress-active={progressInteracting}
+    bind:this={progressTrackEl}
+    role="slider"
+    tabindex="0"
+    aria-label="Track progress"
+    aria-valuemin={0}
+    aria-valuemax={durationMs ?? 0}
+    aria-valuenow={progressAriaValue}
+    aria-disabled={!seekEnabled || !hasDuration}
+    onpointerenter={handleProgressPointerEnter}
+    onpointerleave={handleProgressPointerLeave}
+    onpointerdown={handleProgressPointerDown}
+    onpointermove={handleProgressPointerMove}
+    onpointerup={handleProgressPointerUp}
+    onpointercancel={handleProgressPointerUp}
+  >
+    <div class="car-progress-rail">
+      <div
+        class="car-progress-played"
+        class:car-progress-played-hover={progressInteracting}
+        style={`width: ${playbackRatio * 100}%`}
+      ></div>
+      {#if showProgressPreview}
+        <div
+          class="car-progress-preview"
+          style={`left: ${playbackRatio * 100}%; width: ${progressPreviewWidth}%`}
+        ></div>
       {/if}
-    </div>
-    <div class="media-slot media-slot-center">
-      {#if playPause}
-        <DeckButton
-          label={playPause.label}
-          emoji={playPause.emoji}
-          image={playPause.image}
-          action={playPause.action}
-          source={source}
-        />
-      {/if}
-    </div>
-    <div class="media-slot media-slot-side">
-      {#if next}
-        <DeckButton
-          label={next.label}
-          emoji={next.emoji}
-          image={next.image}
-          action={next.action}
-          source={source}
-        />
+      {#if progressInteracting}
+        <div class="car-progress-knob" style={`left: ${playbackRatio * 100}%`}></div>
+        <div class="car-progress-tooltip-anchor" style={`left: ${scrubRatio * 100}%`}>
+          <span class="car-progress-tooltip">{formatTime(scrubMs)}</span>
+        </div>
       {/if}
     </div>
   </div>
 
-  {#if like}
-    <div class="media-player-like">
-      <DeckButton
-        label={like.label}
-        emoji={like.emoji}
-        image={like.image}
-        action={like.action}
-        source={source}
-      />
+  <footer class="car-controls">
+    <div class="car-controls-row">
+        {#if shuffle}
+          <button
+            type="button"
+            class="car-transport-btn"
+            class:car-transport-active={shuffleActive}
+            aria-label={shuffle.label}
+            aria-pressed={shuffleActive}
+            onclick={() => runTransportAction(shuffle.action, shuffle.label)}
+          >
+            <svg class="car-transport-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm-.67 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"
+              />
+            </svg>
+          </button>
+        {/if}
+        {#if previous}
+          <button
+            type="button"
+            class="car-transport-btn"
+            aria-label={previous.label}
+            onclick={() => runTransportAction(previous.action, previous.label)}
+          >
+            <svg class="car-transport-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M6 6h2v12H6V6zm3.5 6 8.5 6V6l-8.5 6z" />
+            </svg>
+          </button>
+        {/if}
+        {#if playPause}
+          <button
+            type="button"
+            class="car-transport-btn car-transport-center"
+            aria-label={playPause.label}
+            onclick={() => runTransportAction(playPause.action, playPause.label)}
+          >
+            {#if isPlaying}
+              <svg class="car-transport-icon car-transport-icon-center" viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z" />
+              </svg>
+            {:else}
+              <svg class="car-transport-icon car-transport-icon-center" viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="currentColor" d="M8 5v14l11-7L8 5z" />
+              </svg>
+            {/if}
+          </button>
+        {/if}
+        {#if next}
+          <button
+            type="button"
+            class="car-transport-btn"
+            aria-label={next.label}
+            onclick={() => runTransportAction(next.action, next.label)}
+          >
+            <svg class="car-transport-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
+            </svg>
+          </button>
+        {/if}
+        {#if like}
+          <button
+            type="button"
+            class="car-transport-btn"
+            class:car-transport-liked={trackSaved === true}
+            aria-label={like.label}
+            aria-pressed={trackSaved === true}
+            onclick={() => runTransportAction(like.action, like.label, !(trackSaved === true))}
+          >
+            <svg class="car-transport-icon" viewBox="0 0 24 24" aria-hidden="true">
+              {#if trackSaved}
+                <path
+                  fill="currentColor"
+                  d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"
+                />
+              {:else}
+                <path
+                  fill="currentColor"
+                  d="M16.5 3c-1.74 0-3.41.81-4.5 2.09C10.91 3.81 9.24 3 7.5 3 4.42 3 2 5.42 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5 22 5.42 19.58 3 16.5 3zm-4.4 15.55-.1.1-.1-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5c2 0 3.5 1.5 3.5 3.5 0 2.89-3.14 5.74-7.9 10.05z"
+                />
+              {/if}
+            </svg>
+          </button>
+        {/if}
     </div>
-  {/if}
+  </footer>
 
   {#if volumeAction}
-    <section class="media-volume-panel">
-      <div class="media-volume-header">
-        <span class="media-volume-label">Volume</span>
-        <span class="media-volume-value">{localVolume}%</span>
+    <aside class="car-fader" aria-label="Volume">
+      <div class="car-volume-display" aria-hidden="true">
+        <span class="car-volume-led">{localVolume}</span>
       </div>
-      <input
-        class="media-volume-slider"
-        type="range"
-        min="0"
-        max="100"
-        step="1"
-        value={localVolume}
-        oninput={handleVolumeInput}
-        onchange={handleVolumeCommit}
-        disabled={volumeBusy || !volumeEnabled}
-        aria-label="Media volume"
-      />
-    </section>
+      <div
+        class="car-fader-track"
+        class:car-fader-disabled={volumeBusy || !volumeEnabled}
+        bind:this={faderTrackEl}
+        role="slider"
+        tabindex="0"
+        aria-label="Volume"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={localVolume}
+        aria-disabled={volumeBusy || !volumeEnabled}
+        onpointerdown={handleFaderPointerDown}
+        onpointermove={handleFaderPointerMove}
+        onpointerup={handleFaderPointerUp}
+        onpointercancel={handleFaderPointerUp}
+      >
+        <div class="car-fader-scale car-fader-scale-left">
+          {#each Array(21) as _, i}
+            <span
+              class="car-fader-tick"
+              class:car-fader-tick-long={i === 0 || i === 10 || i === 20}
+              class:car-fader-tick-mid={i % 5 === 0 && i !== 0 && i !== 10 && i !== 20}
+            ></span>
+          {/each}
+        </div>
+        <div class="car-fader-rail">
+          <div class="car-fader-cap car-fader-cap-top"></div>
+          <div class="car-fader-slot">
+            <div
+              class="car-fader-thumb"
+              style={`top: ${100 - localVolume}%`}
+            >
+              <span class="car-fader-thumb-line"></span>
+            </div>
+          </div>
+          <div class="car-fader-cap car-fader-cap-bottom"></div>
+        </div>
+        <div class="car-fader-scale car-fader-scale-right">
+          {#each Array(21) as _, i}
+            <span
+              class="car-fader-tick"
+              class:car-fader-tick-long={i === 0 || i === 10 || i === 20}
+              class:car-fader-tick-mid={i % 5 === 0 && i !== 0 && i !== 10 && i !== 20}
+            ></span>
+          {/each}
+        </div>
+      </div>
+    </aside>
   {/if}
 </div>
 
 <style>
-  .media-player-view {
-    display: flex;
+  .car-thing {
+    display: grid;
     flex: 1;
     min-height: 0;
-    flex-direction: column;
-    padding: 18px 24px 24px;
-    gap: 18px;
-    justify-content: center;
+    width: 100%;
+    align-self: stretch;
+    overflow: hidden;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto auto;
+    background: var(--car-body-bg, #0a0a0a);
+    color: #f5f5f5;
+    transition: background 0.45s ease;
   }
 
-  .media-now-playing {
+  .car-thing:has(.car-fader) {
+    grid-template-columns: minmax(0, 1fr) 124px;
+  }
+
+  .car-thing-body {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 16px 0 20px;
+    gap: 0;
+    position: relative;
+    overflow: hidden;
+    background: var(--car-body-bg, #0a0a0a);
+    transition: background 0.45s ease;
+  }
+
+  .car-fullscreen-btn {
+    position: absolute;
+    top: 8px;
+    left: 12px;
+    z-index: 2;
+    padding: 6px;
+    border: none;
+    background: transparent;
+    font-size: 3.3rem;
+    line-height: 1;
+    color: rgba(255, 255, 255, 0.75);
+    cursor: pointer;
+  }
+
+  .car-fullscreen-btn:hover {
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  .car-now-playing {
+    flex: 1 1 0;
+    min-height: 0;
+    width: 100%;
+    display: grid;
+    grid-template-columns: 35% minmax(0, 1fr);
+    align-items: stretch;
+    padding-bottom: 8px;
+    overflow: hidden;
+  }
+
+  .car-thing-body--fs .car-now-playing {
+    padding-top: 42px;
+  }
+
+  .car-art-column {
     display: flex;
     align-items: center;
-    gap: 18px;
-    padding: 6px 0;
+    justify-content: center;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    align-self: stretch;
+    padding-right: 28px;
   }
 
-  .media-artwork {
-    width: 112px;
-    height: 112px;
-    border-radius: 20px;
-    object-fit: cover;
-    flex: 0 0 auto;
-    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.28);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+  .car-artwork {
+    display: block;
+    height: 76%;
+    width: auto;
+    max-width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: contain;
+    object-position: center;
+    border-radius: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    background: #1a1a1a;
   }
 
-  .media-artwork-placeholder {
+  .car-thing-body--fs .car-artwork {
+    height: 68%;
+  }
+
+  .car-artwork-placeholder {
     display: grid;
     place-items: center;
-    font-size: 2.4rem;
-    background: rgba(255, 255, 255, 0.05);
-    color: var(--text-secondary);
+    font-size: 3rem;
+    background: #1a1a1a;
+    color: #666;
   }
 
-  .media-meta {
+  .car-meta-column {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    justify-content: center;
+    gap: 14px;
+    padding-left: 56px;
+    padding-right: 12px;
   }
 
-  .media-state-badge {
-    display: inline-flex;
-    align-self: flex-start;
-    padding: 5px 10px;
-    border-radius: 999px;
-    font-size: 0.72rem;
-    font-weight: 800;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--text-secondary);
-  }
-
-  .media-state-playing {
-    background: rgba(34, 197, 94, 0.18);
-    color: #bbf7d0;
-  }
-
-  .media-state-paused {
-    background: rgba(245, 158, 11, 0.18);
-    color: #fde68a;
-  }
-
-  .media-state-stopped {
-    background: rgba(148, 163, 184, 0.16);
-    color: #cbd5e1;
-  }
-
-  .media-title {
-    font-size: 1.35rem;
-    font-weight: 800;
-    line-height: 1.15;
-    color: var(--text-primary);
-  }
-
-  .media-subtitle {
-    font-size: 1rem;
-    color: var(--text-secondary);
-  }
-
-  .media-player-row {
-    display: grid;
-    grid-template-columns: 1fr 1.25fr 1fr;
-    gap: 16px;
-    align-items: stretch;
-  }
-
-  .media-slot {
-    display: flex;
-    align-items: stretch;
-  }
-
-  .media-slot :global(.deck-button) {
+  .car-album-line {
+    font-size: clamp(1rem, 1.9vw, 1.35rem);
+    font-weight: 500;
+    color: #b3b3b3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     width: 100%;
-    min-height: 160px;
   }
 
-  .media-slot-center :global(.deck-button) {
-    min-height: 190px;
+  .car-track-title {
+    margin: 0;
+    font-size: clamp(2.1rem, 5vw, 3.5rem);
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    width: 100%;
   }
 
-  .media-slot-center :global(.button-emoji) {
-    font-size: 2.8rem;
+  .car-artist-name {
+    margin: 0;
+    font-size: clamp(1.35rem, 2.8vw, 2.1rem);
+    font-weight: 500;
+    color: #e8e8e8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    width: 100%;
   }
 
-  .media-player-like {
+  .car-progress-wrap {
+    grid-column: 1;
+    grid-row: 2;
+    flex-shrink: 0;
+    padding: 0 0 10px;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+    background: var(--car-footer-bg, #0c0808);
+    transition: background 0.45s ease;
+  }
+
+  .car-progress-wrap.car-progress-disabled {
+    opacity: 0.45;
+    cursor: default;
+    pointer-events: none;
+  }
+
+  .car-progress-rail {
+    position: relative;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 0;
+    transition: height 0.15s ease;
+  }
+
+  .car-progress-wrap.car-progress-active .car-progress-rail {
+    height: 10px;
+  }
+
+  .car-progress-played {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: #fff;
+    border-radius: 0;
+    pointer-events: none;
+    transition: background 0.12s ease, height 0.15s ease;
+  }
+
+  .car-progress-played.car-progress-played-hover {
+    background: #1db954;
+  }
+
+  .car-progress-wrap.car-progress-active .car-progress-played {
+    border-radius: 0;
+  }
+
+  .car-progress-preview {
+    position: absolute;
+    inset: 0 auto 0 auto;
+    background: #fff;
+    border-radius: 0;
+    pointer-events: none;
+  }
+
+  .car-progress-knob {
+    position: absolute;
+    top: 50%;
+    width: 28px;
+    height: 28px;
+    background: #fff;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 2;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+
+  .car-progress-tooltip-anchor {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  .car-progress-tooltip {
+    position: absolute;
+    bottom: calc(100% + 14px);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 16px;
+    background: #282828;
+    color: #fff;
+    font-size: 1.44rem;
+    font-weight: 600;
+    line-height: 1;
+    border-radius: 6px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+  }
+
+  .car-progress-tooltip::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-top-color: #282828;
+  }
+
+  .car-controls {
+    grid-column: 1;
+    grid-row: 3;
+    flex-shrink: 0;
+    padding: 12px 24px max(20px, env(safe-area-inset-bottom, 0px));
+    min-height: 148px;
+    background: var(--car-footer-bg, #0c0808);
+    transition: background 0.45s ease;
+  }
+
+  .car-controls-row {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: center;
+    justify-items: center;
+    gap: 12px;
+    max-width: min(100%, 720px);
+    margin: 0 auto;
+  }
+
+  .car-transport-btn {
+    position: relative;
     display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 104px;
+    height: 104px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.92);
+    cursor: pointer;
+    transition: color 0.15s ease, transform 0.12s ease;
+  }
+
+  .car-transport-btn:hover {
+    color: #fff;
+  }
+
+  .car-transport-btn:active {
+    transform: scale(0.94);
+  }
+
+  .car-transport-center {
+    width: 104px;
+    height: 104px;
+  }
+
+  .car-transport-icon {
+    width: 56px;
+    height: 56px;
+  }
+
+  .car-transport-icon-center {
+    width: 60px;
+    height: 60px;
+  }
+
+  .car-transport-active {
+    color: #1db954;
+  }
+
+  .car-transport-liked {
+    color: #1db954;
+  }
+
+  .car-fader {
+    grid-column: 2;
+    grid-row: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: stretch;
+    gap: 0;
+    padding: 20px 20px max(20px, env(safe-area-inset-bottom, 0px));
+    background: var(--car-footer-bg, #0c0808);
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    min-height: 0;
+    transition: background 0.45s ease;
+  }
+
+  .car-volume-display {
+    flex-shrink: 0;
+    width: calc(100% - 12px);
+    padding: 16px 18px 18px;
+    margin: 4px 6px 20px;
+    background: linear-gradient(180deg, #050505 0%, #0a0a0a 100%);
+    border: 2px solid #1a1a1a;
+    border-radius: 4px;
+    box-shadow:
+      inset 0 2px 8px rgba(0, 0, 0, 0.9),
+      inset 0 0 12px rgba(255, 0, 0, 0.04),
+      0 1px 0 rgba(255, 255, 255, 0.04);
+    display: flex;
+    align-items: center;
     justify-content: center;
   }
 
-  .media-player-like :global(.deck-button) {
-    min-width: 220px;
+  .car-volume-led {
+    font-family: "DSEG7 Classic", "Courier New", monospace;
+    font-size: 2.35rem;
+    font-weight: 400;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    color: #ff1a1a;
+    text-shadow:
+      0 0 4px rgba(255, 30, 30, 0.95),
+      0 0 12px rgba(255, 20, 20, 0.75),
+      0 0 24px rgba(255, 0, 0, 0.45);
+    font-variant-numeric: tabular-nums;
   }
 
-  .media-volume-panel {
+  .car-fader-track {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    max-height: none;
+    display: grid;
+    grid-template-columns: 14px 1fr 14px;
+    gap: 6px;
+    align-items: stretch;
+    cursor: ns-resize;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .car-fader-track.car-fader-disabled {
+    opacity: 0.45;
+    pointer-events: none;
+  }
+
+  .car-fader-scale {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    align-items: center;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 2px 0;
   }
 
-  .media-volume-header {
+  .car-fader-scale-right {
+    align-items: flex-start;
+  }
+
+  .car-fader-tick {
+    display: block;
+    width: 6px;
+    height: 1px;
+    background: #555;
+  }
+
+  .car-fader-tick-mid {
+    width: 10px;
+    background: #777;
+  }
+
+  .car-fader-tick-long {
+    width: 14px;
+    background: #999;
+  }
+
+  .car-fader-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 0;
+  }
+
+  .car-fader-cap {
+    width: 42px;
+    height: 10px;
+    background: linear-gradient(180deg, #2a2a2a, #1a1a1a);
+    border: 1px solid #333;
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  .car-fader-slot {
+    position: relative;
+    flex: 1;
+    width: 42px;
+    min-height: 120px;
+    background: linear-gradient(180deg, #111 0%, #0a0a0a 50%, #111 100%);
+    border-left: 1px solid #222;
+    border-right: 1px solid #222;
+  }
+
+  .car-fader-thumb {
+    position: absolute;
+    left: 50%;
+    width: 51px;
+    height: 78px;
+    transform: translate(-50%, -50%);
+    background: linear-gradient(180deg, #3a3a3a 0%, #252525 45%, #1a1a1a 100%);
+    border: 1px solid #444;
+    border-radius: 4px;
+    box-shadow:
+      0 2px 6px rgba(0, 0, 0, 0.55),
+      inset 0 1px 0 rgba(255, 255, 255, 0.08);
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+    justify-content: center;
+    pointer-events: none;
   }
 
-  .media-volume-label {
-    font-size: 1rem;
-    font-weight: 700;
-    color: var(--text-primary);
-  }
-
-  .media-volume-value {
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: var(--accent);
-  }
-
-  .media-volume-slider {
-    width: min(100%, 720px);
-    max-width: 720px;
-    height: 96px;
-    accent-color: var(--accent);
-    cursor: pointer;
+  .car-fader-thumb-line {
+    display: block;
+    width: 80%;
+    height: 2px;
+    background: #fff;
+    border-radius: 1px;
+    box-shadow: 0 0 4px rgba(255, 255, 255, 0.35);
   }
 </style>

@@ -13,7 +13,9 @@
       "playPause": { "label": "Play", "emoji": "▶️", "action": "spotify.togglePlay" },
       "next": { "label": "Next", "emoji": "⏭️", "action": "spotify.nextTrack" },
       "like": { "label": "Like", "emoji": "❤️", "action": "spotify.like" },
-      "volumeAction": "spotify.setVolume"
+      "shuffle": { "label": "Shuffle", "emoji": "🔀", "action": "spotify.toggleShuffle" },
+      "volumeAction": "spotify.setVolume",
+      "seekAction": "spotify.seek"
     }
   },
   "layout": {

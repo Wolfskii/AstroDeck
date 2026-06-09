@@ -176,8 +176,15 @@ fn log_to_bus(entry: String, state: tauri::State<AppState>) -> Result<(), String
 }
 
 #[tauri::command]
-fn get_spotify_status(state: tauri::State<AppState>) -> Result<spotify::SpotifyStatus, String> {
-    spotify::get_status(&state.spotify)
+fn get_spotify_status(
+    fresh: Option<bool>,
+    state: tauri::State<AppState>,
+) -> Result<spotify::SpotifyStatus, String> {
+    if fresh.unwrap_or(false) {
+        spotify::get_status_fresh(&state.spotify)
+    } else {
+        spotify::get_status(&state.spotify)
+    }
 }
 
 #[tauri::command]

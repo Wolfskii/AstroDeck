@@ -44,6 +44,7 @@
   let spotifyStatus = $state<SpotifyStatus | null>(null);
   let spotifyBusy = $state(false);
   let spotifyVolumeBusy = $state(false);
+  let spotifySeekTargetMs = $state<number | null>(null);
   let spotifyVolumePercent = $state(50);
   /** Shown under Spotify buttons in the desktop app (Tauri has no debug log panel). */
   let spotifyAuthHint = $state<string | null>(null);
@@ -51,12 +52,38 @@
   let spotifyClientLockedByEnv = $state(false);
   let spotifySavingClientId = $state(false);
   let optimisticSpotifySaved = $state<boolean | null>(null);
+  let optimisticSpotifyShuffle = $state<boolean | null>(null);
+  let optimisticSpotifyPlaying = $state<boolean | null>(null);
+  let spotifyVolumeTarget = $state<number | null>(null);
+  let spotifyStatusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let spotifyStatusLastRefresh = 0;
+  const SPOTIFY_STATUS_MIN_INTERVAL_MS = 5000;
+  const SPOTIFY_STATUS_POLL_MS = 30000;
+  const SPOTIFY_LOW_PRIORITY_REFRESH_ACTIONS = new Set([
+    "spotify.togglePlay",
+    "spotify.nextTrack",
+    "spotify.prevTrack",
+    "spotify.setVolume",
+    "spotify.seek",
+    "spotify.volumeUp",
+    "spotify.volumeDown",
+  ]);
   /** True when this window is in OS fullscreen (used after our fullscreen + borderless presentation). */
   let deckPresentationFullscreen = $state(false);
   const pluginsById = $derived(new Map(plugins.map((plugin) => [plugin.id, plugin])));
   const currentPlugin = $derived(plugins.find((plugin) => plugin.id === sceneId) ?? null);
   const effectiveSpotifySaved = $derived(
     optimisticSpotifySaved ?? spotifyStatus?.isCurrentTrackSaved ?? null
+  );
+  const effectiveSpotifyShuffle = $derived(
+    optimisticSpotifyShuffle ?? spotifyStatus?.isShuffle ?? false
+  );
+  const effectiveSpotifyPlaybackState = $derived(
+    optimisticSpotifyPlaying !== null
+      ? optimisticSpotifyPlaying
+        ? "playing"
+        : "paused"
+      : (spotifyStatus?.playbackState ?? "stopped")
   );
   const currentMediaView = $derived.by(() => {
     const media = currentPlugin?.view?.type === "mediaPlayer"
@@ -75,10 +102,12 @@
 
     const withSpotifyPlayState = (button?: DeckButtonConfig | null) => {
       if (!button || button.action !== "spotify.togglePlay") return button ?? null;
+      const playing =
+        optimisticSpotifyPlaying ?? spotifyStatus?.isPlaying ?? false;
       return {
         ...button,
-        label: spotifyStatus?.isPlaying ? "Pause" : "Play",
-        emoji: spotifyStatus?.isPlaying ? "⏸️" : "▶️",
+        label: playing ? "Pause" : "Play",
+        emoji: playing ? "⏸️" : "▶️",
       };
     };
 
@@ -87,9 +116,12 @@
       playPause: withSpotifyPlayState(media.playPause),
       next: media.next ?? null,
       like: withSpotifyLikeState(media.like),
+      shuffle: media.shuffle ?? null,
       volumeAction: media.volumeAction ?? null,
+      seekAction: media.seekAction ?? null,
     };
   });
+  const isMediaDeckView = $derived(isTauri && !isSettingsWindow && currentMediaView !== null);
   const displayedLayout = $derived.by(() => {
     if (!layout) return null;
     return layout;
@@ -98,6 +130,13 @@
   $effect(() => {
     const next = spotifyStatus?.currentVolumePercent;
     if (next == null || spotifyVolumeBusy) return;
+    if (spotifyVolumeTarget != null) {
+      if (Math.abs(next - spotifyVolumeTarget) <= 2) {
+        spotifyVolumeTarget = null;
+      } else {
+        return;
+      }
+    }
     spotifyVolumePercent = next;
   });
 
@@ -184,7 +223,7 @@
     spotifyAuthHint = null;
     try {
       await setSpotifyClientId(spotifyClientIdDraft.trim());
-      await refreshSpotifyStatusForDesktop();
+      await refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
       spotifyAuthHint = spotifyClientIdDraft.trim()
         ? "Client ID saved locally."
         : "Cleared saved Client ID.";
@@ -308,7 +347,7 @@
       try {
         await invoke("disconnect_spotify");
         spotifyAuthHint = null;
-        await refreshSpotifyStatusForDesktop();
+        await refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
         logInfo("Disconnected Spotify", "Spotify");
       } catch (e) {
         spotifyAuthHint = String(e);
@@ -326,14 +365,105 @@
     logBusSocket.send(JSON.stringify({ type: "spotifyDisconnect" }));
   }
 
-  async function refreshSpotifyStatusForDesktop() {
+  async function refreshSpotifyStatusForDesktop(options?: {
+    fresh?: boolean;
+    immediate?: boolean;
+  }) {
     if (!isTauri) return;
+
+    const fresh = options?.fresh ?? false;
+    const immediate = options?.immediate ?? false;
+
+    if (!immediate && !fresh) {
+      const elapsed = Date.now() - spotifyStatusLastRefresh;
+      if (elapsed < SPOTIFY_STATUS_MIN_INTERVAL_MS) {
+        if (spotifyStatusRefreshTimer) clearTimeout(spotifyStatusRefreshTimer);
+        spotifyStatusRefreshTimer = setTimeout(() => {
+          spotifyStatusRefreshTimer = null;
+          void refreshSpotifyStatusForDesktop({ fresh });
+        }, SPOTIFY_STATUS_MIN_INTERVAL_MS - elapsed);
+        return;
+      }
+    }
+
+    spotifyStatusLastRefresh = Date.now();
     try {
-      spotifyStatus = await getSpotifyStatus();
-      optimisticSpotifySaved = null;
+      const next = mergeSpotifyStatusFromServer(
+        await getSpotifyStatus({ fresh })
+      );
+      spotifyStatus = next;
+      if (next.isAuthenticated) {
+        spotifyAuthHint = null;
+      }
     } catch (e) {
       logError(`Failed to fetch Spotify status: ${String(e)}`, "Spotify");
     }
+  }
+
+  function mergeSpotifyStatusFromServer(next: SpotifyStatus): SpotifyStatus {
+    const sameTrack =
+      next.currentItemId != null &&
+      next.currentItemId === spotifyStatus?.currentItemId;
+
+    if (!sameTrack) {
+      optimisticSpotifySaved = null;
+      optimisticSpotifyPlaying = null;
+      spotifyVolumeTarget = null;
+      spotifySeekTargetMs = null;
+    }
+
+    let merged: SpotifyStatus = { ...next };
+
+    if (optimisticSpotifyShuffle !== null) {
+      if (next.isShuffle === optimisticSpotifyShuffle) {
+        optimisticSpotifyShuffle = null;
+      } else {
+        merged.isShuffle = optimisticSpotifyShuffle;
+      }
+    }
+
+    if (spotifySeekTargetMs != null && next.progressMs != null) {
+      if (Math.abs(next.progressMs - spotifySeekTargetMs) <= 2500) {
+        spotifySeekTargetMs = null;
+      } else {
+        merged.progressMs = spotifySeekTargetMs;
+      }
+    }
+
+    if (spotifyVolumeTarget != null) {
+      if (
+        next.currentVolumePercent != null &&
+        Math.abs(next.currentVolumePercent - spotifyVolumeTarget) <= 2
+      ) {
+        spotifyVolumeTarget = null;
+      } else {
+        merged.currentVolumePercent = spotifyVolumeTarget;
+      }
+    }
+
+    if (sameTrack) {
+      if (optimisticSpotifySaved !== null) {
+        if (
+          next.isCurrentTrackSaved != null &&
+          next.isCurrentTrackSaved === optimisticSpotifySaved
+        ) {
+          optimisticSpotifySaved = null;
+        } else {
+          merged.isCurrentTrackSaved = optimisticSpotifySaved;
+        }
+      }
+
+      if (optimisticSpotifyPlaying !== null) {
+        if (next.isPlaying === optimisticSpotifyPlaying) {
+          optimisticSpotifyPlaying = null;
+        } else {
+          merged.isPlaying = optimisticSpotifyPlaying;
+          merged.playbackState = optimisticSpotifyPlaying ? "playing" : "paused";
+        }
+      }
+    }
+
+    return merged;
   }
 
   async function refreshPluginsForDesktop() {
@@ -346,19 +476,41 @@
   }
 
   async function commitSceneVolume(action: string, value: number) {
+    spotifyVolumePercent = value;
+    spotifyVolumeTarget = value;
     try {
       spotifyVolumeBusy = true;
       await executeActionValue(action, value);
-      if (action.startsWith("spotify.")) {
-        spotifyVolumePercent = value;
-        await refreshSpotifyStatusForDesktop();
-      }
     } catch (e) {
       logError(`Failed to set volume via ${action}: ${String(e)}`, `${sceneId} window`);
+      spotifyVolumeTarget = null;
     } finally {
       spotifyVolumeBusy = false;
     }
   }
+
+  function commitSceneSeek(action: string, positionMs: number) {
+    spotifySeekTargetMs = positionMs;
+    if (spotifyStatus) {
+      spotifyStatus = { ...spotifyStatus, progressMs: positionMs };
+    }
+    void (async () => {
+      try {
+        await executeActionValue(action, positionMs);
+      } catch (e) {
+        logError(`Failed to seek via ${action}: ${String(e)}`, `${sceneId} window`);
+        spotifySeekTargetMs = null;
+      }
+    })();
+  }
+
+  $effect(() => {
+    if (!isTauri || sceneId !== "spotify" || !spotifyStatus?.isPlaying) return;
+    const id = window.setInterval(() => {
+      void refreshSpotifyStatusForDesktop();
+    }, SPOTIFY_STATUS_POLL_MS);
+    return () => window.clearInterval(id);
+  });
 
   $effect(() => {
     // Track log changes so this effect reruns when new entries arrive.
@@ -502,7 +654,7 @@
       markSceneSeen(state.activeSceneId);
       await refreshPluginsForDesktop();
       if (state.activeSceneId === "spotify") {
-        await refreshSpotifyStatusForDesktop();
+        await refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
       }
     } catch (e) {
       logError(`Failed to fetch scene state: ${String(e)}`);
@@ -552,12 +704,11 @@
       const detail = (ev as CustomEvent<{ action: string }>).detail;
       if (!detail?.action) return;
       if (detail.action.startsWith("spotify.")) {
-        if (detail.action === "spotify.like") {
-          optimisticSpotifySaved = null;
-        }
         if (isTauri) {
-          refreshSpotifyStatusForDesktop();
-        } else {
+          if (!SPOTIFY_LOW_PRIORITY_REFRESH_ACTIONS.has(detail.action)) {
+            void refreshSpotifyStatusForDesktop();
+          }
+        } else if (!SPOTIFY_LOW_PRIORITY_REFRESH_ACTIONS.has(detail.action)) {
           requestSpotifyStatus();
         }
       }
@@ -567,7 +718,23 @@
       const detail = (ev as CustomEvent<{ action: string }>).detail;
       if (!detail?.action) return;
       if (detail.action === "spotify.like") {
-        optimisticSpotifySaved = !(effectiveSpotifySaved === true);
+        const nextSaved = !(effectiveSpotifySaved === true);
+        optimisticSpotifySaved = nextSaved;
+        if (spotifyStatus) {
+          spotifyStatus = { ...spotifyStatus, isCurrentTrackSaved: nextSaved };
+        }
+      }
+      if (detail.action === "spotify.toggleShuffle") {
+        const nextShuffle = !effectiveSpotifyShuffle;
+        optimisticSpotifyShuffle = nextShuffle;
+        if (spotifyStatus) {
+          spotifyStatus = { ...spotifyStatus, isShuffle: nextShuffle };
+        }
+      }
+      if (detail.action === "spotify.togglePlay") {
+        const playing =
+          optimisticSpotifyPlaying ?? spotifyStatus?.isPlaying ?? false;
+        optimisticSpotifyPlaying = !playing;
       }
     };
 
@@ -576,6 +743,12 @@
       if (!detail?.action) return;
       if (detail.action === "spotify.like") {
         optimisticSpotifySaved = null;
+      }
+      if (detail.action === "spotify.toggleShuffle") {
+        optimisticSpotifyShuffle = null;
+      }
+      if (detail.action === "spotify.togglePlay") {
+        optimisticSpotifyPlaying = null;
       }
     };
 
@@ -624,9 +797,8 @@
                 };
             if ("type" in payload && payload.type) {
               if (payload.type === "spotifyStatus") {
-                spotifyStatus = payload.payload as SpotifyStatus;
+                spotifyStatus = mergeSpotifyStatusFromServer(payload.payload as SpotifyStatus);
                 spotifyBusy = false;
-                optimisticSpotifySaved = null;
               } else if (payload.type === "plugins") {
                 plugins = (payload.payload as PluginConfig[]) ?? [];
               } else if (payload.type === "spotifyAuthUrl") {
@@ -704,21 +876,11 @@
       refreshScene();
       refreshPluginsForDesktop();
       if (sceneId === "spotify") {
-        refreshSpotifyStatusForDesktop();
+        void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
       }
 
       const onWindowFocus = () => {
-        void (async () => {
-          try {
-            const s = await getSpotifyStatus();
-            spotifyStatus = s;
-            if (s.isAuthenticated) {
-              spotifyAuthHint = null;
-            }
-          } catch {
-            // ignore
-          }
-        })();
+        void refreshSpotifyStatusForDesktop();
       };
       window.addEventListener("focus", onWindowFocus);
 
@@ -730,7 +892,7 @@
         markSceneSeen(event.payload.activeSceneId);
         refreshPluginsForDesktop();
         if (event.payload.activeSceneId === "spotify") {
-          refreshSpotifyStatusForDesktop();
+          void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
         }
       });
 
@@ -749,29 +911,31 @@
 </script>
 
 <div class="app">
-  <header class="app-header">
-    <div class="app-header-left">
-      <h1 class="app-title">TapTapDeck</h1>
-      {#if isTauri && viewMode === "settings"}
-        <button type="button" class="back-to-deck" onclick={() => (viewMode = "deck")}>
-          ← Back to deck
+  {#if !isMediaDeckView}
+    <header class="app-header">
+      <div class="app-header-left">
+        <h1 class="app-title">TapTapDeck</h1>
+        {#if isTauri && viewMode === "settings"}
+          <button type="button" class="back-to-deck" onclick={() => (viewMode = "deck")}>
+            ← Back to deck
+          </button>
+        {:else if isTauri && !isSettingsWindow}
+          <span class="scene-badge">{sceneId}</span>
+        {/if}
+      </div>
+      {#if isTauri}
+        <button
+          type="button"
+          class="header-fullscreen-btn"
+          title={deckPresentationFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen on this display"}
+          aria-label={deckPresentationFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+          onclick={() => toggleDeckPresentationFullscreen()}
+        >
+          {deckPresentationFullscreen ? "⤡" : "⛶ Fullscreen"}
         </button>
-      {:else if isTauri && !isSettingsWindow}
-        <span class="scene-badge">{sceneId}</span>
       {/if}
-    </div>
-    {#if isTauri}
-      <button
-        type="button"
-        class="header-fullscreen-btn"
-        title={deckPresentationFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen on this display"}
-        aria-label={deckPresentationFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-        onclick={() => toggleDeckPresentationFullscreen()}
-      >
-        {deckPresentationFullscreen ? "Exit ⎋" : "⛶ Fullscreen"}
-      </button>
-    {/if}
-  </header>
+    </header>
+  {/if}
 
   <main class="app-main">
     {#if isSettingsWindow}
@@ -1018,19 +1182,34 @@
           playPause={currentMediaView.playPause}
           next={currentMediaView.next}
           like={currentMediaView.like}
+          shuffle={currentMediaView.shuffle}
+          shuffleActive={sceneId === "spotify" ? effectiveSpotifyShuffle : false}
+          trackSaved={sceneId === "spotify" ? effectiveSpotifySaved : null}
           title={sceneId === "spotify" ? spotifyStatus?.currentTrackName : null}
           subtitle={sceneId === "spotify" ? spotifyStatus?.currentArtistName : null}
+          albumName={sceneId === "spotify" ? spotifyStatus?.currentAlbumName : null}
           artworkUrl={sceneId === "spotify" ? spotifyStatus?.currentCoverArtUrl : null}
-          playbackState={sceneId === "spotify" ? spotifyStatus?.playbackState ?? "stopped" : "stopped"}
+          playbackState={sceneId === "spotify" ? effectiveSpotifyPlaybackState : "stopped"}
+          progressMs={sceneId === "spotify" ? spotifyStatus?.progressMs : null}
+          durationMs={sceneId === "spotify" ? spotifyStatus?.durationMs : null}
           volumeAction={currentMediaView.volumeAction}
+          seekAction={currentMediaView.seekAction}
           volumePercent={spotifyVolumePercent}
           volumeBusy={spotifyVolumeBusy}
           volumeEnabled={sceneId !== "spotify" || !!spotifyStatus?.hasActiveDevice}
+          seekEnabled={sceneId !== "spotify" || !!spotifyStatus?.hasActiveDevice}
           source={`${sceneId} window`}
           onVolumeCommit={(value) =>
             currentMediaView.volumeAction
               ? commitSceneVolume(currentMediaView.volumeAction, value)
               : Promise.resolve()}
+          onSeekCommit={(positionMs) =>
+            currentMediaView.seekAction
+              ? commitSceneSeek(currentMediaView.seekAction, positionMs)
+              : Promise.resolve()}
+          showFullscreenToggle={isTauri && !deckPresentationFullscreen}
+          presentationFullscreen={deckPresentationFullscreen}
+          onToggleFullscreen={enterDeckPresentationFullscreen}
         />
       {:else if displayedLayout}
         <DeckGrid
@@ -1109,6 +1288,13 @@
     flex-shrink: 0;
   }
 
+  .app-header-media {
+    justify-content: flex-end;
+    padding: 6px 14px 0;
+    border-bottom: none;
+    background: #0a0a0a;
+  }
+
   .app-header-left {
     display: flex;
     align-items: center;
@@ -1130,6 +1316,20 @@
 
   .header-fullscreen-btn:hover {
     background: var(--bg-secondary);
+  }
+
+  .header-fullscreen-btn-icon {
+    padding: 4px;
+    border: none;
+    background: transparent;
+    font-size: 1.65rem;
+    line-height: 1;
+    color: rgba(255, 255, 255, 0.75);
+  }
+
+  .header-fullscreen-btn-icon:hover {
+    background: transparent;
+    color: rgba(255, 255, 255, 0.95);
   }
 
   .app-title {
@@ -1165,7 +1365,9 @@
 
   .app-main {
     flex: 1 1 auto;
+    min-height: 0;
     display: flex;
+    overflow: hidden;
   }
 
   .loading {

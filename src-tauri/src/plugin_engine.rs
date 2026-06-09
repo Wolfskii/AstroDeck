@@ -109,8 +109,12 @@ pub struct MediaPlayerViewConfig {
     pub next: Option<ButtonConfig>,
     #[serde(default)]
     pub like: Option<ButtonConfig>,
+    #[serde(default)]
+    pub shuffle: Option<ButtonConfig>,
     #[serde(rename = "volumeAction", default)]
     pub volume_action: Option<String>,
+    #[serde(rename = "seekAction", default)]
+    pub seek_action: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

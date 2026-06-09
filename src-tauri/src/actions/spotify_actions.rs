@@ -170,6 +170,18 @@ pub fn handle(command: &str, spotify: &crate::spotify::SpotifyState) -> Result<(
                 );
                 return Ok(());
             }
+            "toggleShuffle" => {
+                let next = crate::spotify::toggle_shuffle(spotify)?;
+                log::info!("Spotify: shuffle {}", if next { "on" } else { "off" });
+                return Ok(());
+            }
+            "togglePlay" | "nextTrack" | "prevTrack" => {
+                let result = handle_windows(command);
+                if result.is_ok() {
+                    crate::spotify::invalidate_playback_cache(spotify);
+                }
+                return result;
+            }
             _ => return handle_windows(command),
         }
     }
@@ -196,6 +208,18 @@ pub fn handle(command: &str, spotify: &crate::spotify::SpotifyState) -> Result<(
                 );
                 return Ok(());
             }
+            "toggleShuffle" => {
+                let next = crate::spotify::toggle_shuffle(spotify)?;
+                log::info!("Spotify: shuffle {}", if next { "on" } else { "off" });
+                return Ok(());
+            }
+            "togglePlay" | "nextTrack" | "prevTrack" => {
+                let result = handle_macos(command);
+                if result.is_ok() {
+                    crate::spotify::invalidate_playback_cache(spotify);
+                }
+                return result;
+            }
             _ => return handle_macos(command),
         }
     }
@@ -219,6 +243,26 @@ pub fn handle_value(
                 .clamp(0, 100) as u8;
             let next = crate::spotify::set_volume(spotify, volume, None)?;
             log::info!("Spotify: set device volume to {}%", next);
+            Ok(())
+        }
+        "seek" => {
+            let position_ms = value
+                .as_u64()
+                .ok_or_else(|| "spotify.seek expects a numeric position in milliseconds".to_string())?;
+            crate::spotify::seek(spotify, position_ms)?;
+            log::info!("Spotify: seek to {} ms", position_ms);
+            Ok(())
+        }
+        "like" => {
+            let should_save = value.as_bool().ok_or_else(|| {
+                "spotify.like expects a boolean saved state (true = save, false = remove)".to_string()
+            })?;
+            log::info!("Spotify: invoking track library update (should_save={})", should_save);
+            let now_saved = crate::spotify::set_current_track_saved(spotify, should_save)?;
+            log::info!(
+                "Spotify: current track is now {} the library",
+                if now_saved { "saved to" } else { "removed from" }
+            );
             Ok(())
         }
         _ => Err(format!(

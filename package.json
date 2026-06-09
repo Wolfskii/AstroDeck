@@ -17,13 +17,14 @@
     "@tauri-apps/api": "^2"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
+    "@fontsource/dseg7-classic": "^5.2.5",
     "@sveltejs/vite-plugin-svelte": "^5",
+    "@tauri-apps/cli": "^2",
     "@tsconfig/svelte": "^5",
     "svelte": "^5",
     "svelte-check": "^4",
-    "typescript": "^5",
     "tslib": "^2",
+    "typescript": "^5",
     "vite": "^6"
   }
 }

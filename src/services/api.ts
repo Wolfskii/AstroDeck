@@ -51,18 +51,26 @@ export interface SpotifyStatus {
   currentTrackName?: string | null;
   currentArtistName?: string | null;
   currentCoverArtUrl?: string | null;
+  currentAlbumName?: string | null;
+  progressMs?: number | null;
+  durationMs?: number | null;
   playbackState: string;
   isPlaying: boolean;
   currentVolumePercent?: number | null;
   currentItemType?: string | null;
   currentItemId?: string | null;
   isCurrentTrackSaved?: boolean | null;
+  isShuffle?: boolean;
   grantedScopes?: string[];
   message: string;
 }
 
-export async function getSpotifyStatus(): Promise<SpotifyStatus> {
-  return invoke<SpotifyStatus>("get_spotify_status");
+export async function getSpotifyStatus(options?: {
+  fresh?: boolean;
+}): Promise<SpotifyStatus> {
+  return invoke<SpotifyStatus>("get_spotify_status", {
+    fresh: options?.fresh ?? false,
+  });
 }
 
 export interface SpotifyClientConfig {

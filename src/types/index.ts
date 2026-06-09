@@ -46,7 +46,9 @@ export interface MediaPlayerTemplateConfig {
   playPause?: DeckButtonConfig;
   next?: DeckButtonConfig;
   like?: DeckButtonConfig;
+  shuffle?: DeckButtonConfig;
   volumeAction?: string;
+  seekAction?: string;
 }
 
 export interface PluginViewConfig {

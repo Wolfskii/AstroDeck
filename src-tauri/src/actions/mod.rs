@@ -29,7 +29,6 @@ pub fn dispatch(action: &str, _app: &tauri::AppHandle, state: &crate::AppState) 
         "teams" => teams_actions::handle(command),
         "spotify" => {
             spotify_actions::handle(command, &state.spotify)?;
-            publish_spotify_status(state);
             Ok(())
         }
         "core" => handle_core(command),
@@ -57,7 +56,6 @@ pub fn dispatch_value(
     match namespace {
         "spotify" => {
             spotify_actions::handle_value(command, value, &state.spotify)?;
-            publish_spotify_status(state);
             Ok(())
         }
         _ => Err(format!(
@@ -89,16 +87,6 @@ fn handle_core(command: &str) -> Result<(), String> {
             log::warn!("Unknown core command: {}", command);
             Err(format!("Unknown core command: {}", command))
         }
-    }
-}
-
-fn publish_spotify_status(state: &crate::AppState) {
-    if let Ok(status) = crate::spotify::get_status(&state.spotify) {
-        let payload = serde_json::json!({
-            "type": "spotifyStatus",
-            "payload": status,
-        });
-        let _ = state.log_bus.send(payload.to_string());
     }
 }
 
