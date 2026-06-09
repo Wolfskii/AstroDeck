@@ -201,6 +201,31 @@ fn start_spotify_auth(app: tauri::AppHandle, state: tauri::State<AppState>) -> R
     launch_spotify_auth(&app, &state)
 }
 
+#[tauri::command]
+fn disconnect_spotify(state: tauri::State<AppState>) -> Result<(), String> {
+    spotify::disconnect(&state.spotify)
+}
+
+#[tauri::command]
+fn get_spotify_client_config(
+    state: tauri::State<AppState>,
+) -> Result<spotify::SpotifyClientConfigResponse, String> {
+    Ok(spotify::get_client_config_for_ui(&state.spotify))
+}
+
+#[tauri::command]
+fn set_spotify_client_id(client_id: String, state: tauri::State<AppState>) -> Result<(), String> {
+    spotify::set_client_id_from_settings(&state.spotify, &client_id)?;
+    if let Ok(status) = spotify::get_status(&state.spotify) {
+        let payload = serde_json::json!({
+            "type": "spotifyStatus",
+            "payload": status,
+        });
+        let _ = state.log_bus.send(payload.to_string());
+    }
+    Ok(())
+}
+
 /// Create or focus the dedicated settings window from the tray or buttons.
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
@@ -248,6 +273,9 @@ pub fn run() {
             get_spotify_status,
             set_spotify_volume,
             start_spotify_auth,
+            disconnect_spotify,
+            get_spotify_client_config,
+            set_spotify_client_id,
             open_settings_window,
             quit_app,
         ])

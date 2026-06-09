@@ -12,8 +12,10 @@
     executeActionValue,
     getActiveScene,
     getPlugins,
+    getSpotifyClientConfig,
     getSpotifyStatus,
     setActiveScene,
+    setSpotifyClientId,
   } from "./services/api";
   import type { SceneState, LayoutConfig, PluginConfig, DeckButtonConfig } from "./types";
   import {
@@ -31,9 +33,9 @@
   let trayMenu: Menu | null = null;
   let windowLabel = $state("main");
   let seenScenes = $state<string[]>([]);
-  // Desktop (Tauri) windows are for the buttons/scene UI.
-  // The browser (`http://localhost:1420/`) acts as the dedicated settings/debug window.
-  const isSettingsWindow = $derived(!isTauri);
+  // Tauri: main window can show deck or settings (viewMode). Browser: always settings/debug.
+  let viewMode = $state<"deck" | "settings">("deck");
+  const isSettingsWindow = $derived(!isTauri || viewMode === "settings");
   let logStatus = $state<"connecting" | "connected" | "disconnected">("connecting");
   let autoScroll = $state(true);
   let logsLinesEl = $state<HTMLElement | null>(null);
@@ -43,7 +45,14 @@
   let spotifyBusy = $state(false);
   let spotifyVolumeBusy = $state(false);
   let spotifyVolumePercent = $state(50);
+  /** Shown under Spotify buttons in the desktop app (Tauri has no debug log panel). */
+  let spotifyAuthHint = $state<string | null>(null);
+  let spotifyClientIdDraft = $state("");
+  let spotifyClientLockedByEnv = $state(false);
+  let spotifySavingClientId = $state(false);
   let optimisticSpotifySaved = $state<boolean | null>(null);
+  /** True when this window is in OS fullscreen (used after our fullscreen + borderless presentation). */
+  let deckPresentationFullscreen = $state(false);
   const pluginsById = $derived(new Map(plugins.map((plugin) => [plugin.id, plugin])));
   const currentPlugin = $derived(plugins.find((plugin) => plugin.id === sceneId) ?? null);
   const effectiveSpotifySaved = $derived(
@@ -91,6 +100,100 @@
     if (next == null || spotifyVolumeBusy) return;
     spotifyVolumePercent = next;
   });
+
+  const SPOTIFY_DEV_DASHBOARD = "https://developer.spotify.com/dashboard";
+
+  $effect(() => {
+    if (!isTauri || viewMode !== "settings") return;
+    void (async () => {
+      try {
+        const c = await getSpotifyClientConfig();
+        spotifyClientIdDraft = c.clientId;
+        spotifyClientLockedByEnv = c.lockedByEnv;
+      } catch {
+        // ignore
+      }
+    })();
+  });
+
+  function openSpotifyDeveloperDashboard() {
+    window.open(SPOTIFY_DEV_DASHBOARD, "_blank", "noopener,noreferrer");
+  }
+
+  async function syncDeckFullscreenState() {
+    if (!isTauri) return;
+    try {
+      const win = getCurrentWindow();
+      const fs = await win.isFullscreen();
+      deckPresentationFullscreen = fs;
+      if (!fs) {
+        await win.setDecorations(true);
+      }
+    } catch {
+      deckPresentationFullscreen = false;
+    }
+  }
+
+  async function enterDeckPresentationFullscreen() {
+    if (!isTauri) return;
+    const win = getCurrentWindow();
+    try {
+      await win.setDecorations(false);
+      await win.setFullscreen(true);
+    } catch (e) {
+      logError(String(e), "Window");
+      try {
+        await win.setFullscreen(false);
+        await win.setDecorations(true);
+      } catch {
+        // ignore
+      }
+    }
+    await syncDeckFullscreenState();
+  }
+
+  async function exitDeckPresentationFullscreen() {
+    if (!isTauri) return;
+    const win = getCurrentWindow();
+    try {
+      await win.setFullscreen(false);
+      await win.setDecorations(true);
+    } catch (e) {
+      logError(String(e), "Window");
+    }
+    await syncDeckFullscreenState();
+  }
+
+  async function toggleDeckPresentationFullscreen() {
+    if (!isTauri) return;
+    try {
+      if (await getCurrentWindow().isFullscreen()) {
+        await exitDeckPresentationFullscreen();
+      } else {
+        await enterDeckPresentationFullscreen();
+      }
+    } catch (e) {
+      logError(String(e), "Window");
+      await syncDeckFullscreenState();
+    }
+  }
+
+  async function saveSpotifyClientId() {
+    if (!isTauri || spotifyClientLockedByEnv) return;
+    spotifySavingClientId = true;
+    spotifyAuthHint = null;
+    try {
+      await setSpotifyClientId(spotifyClientIdDraft.trim());
+      await refreshSpotifyStatusForDesktop();
+      spotifyAuthHint = spotifyClientIdDraft.trim()
+        ? "Client ID saved locally."
+        : "Cleared saved Client ID.";
+    } catch (e) {
+      spotifyAuthHint = String(e);
+    } finally {
+      spotifySavingClientId = false;
+    }
+  }
 
   function updateDebugTitle() {
     if (typeof document === "undefined" || isTauri) return;
@@ -172,7 +275,25 @@
     }
   }
 
-  function connectSpotify() {
+  async function connectSpotify() {
+    if (isTauri) {
+      spotifyAuthHint = null;
+      spotifyBusy = true;
+      try {
+        const url = await invoke<string>("start_spotify_auth");
+        window.open(url, "_blank", "noopener,noreferrer");
+        logInfo("Opened Spotify authorization page", "Spotify");
+        spotifyAuthHint =
+          "Finish signing in in your browser. When you return here, status updates automatically.";
+      } catch (e) {
+        const msg = String(e);
+        spotifyAuthHint = msg;
+        logError(msg, "Spotify");
+      } finally {
+        spotifyBusy = false;
+      }
+      return;
+    }
     if (logBusSocket?.readyState !== WebSocket.OPEN) {
       logError("Log bus is not connected; cannot start Spotify auth", "Spotify");
       return;
@@ -181,7 +302,22 @@
     logBusSocket.send(JSON.stringify({ type: "spotifyAuthStart" }));
   }
 
-  function disconnectSpotify() {
+  async function disconnectSpotify() {
+    if (isTauri) {
+      spotifyBusy = true;
+      try {
+        await invoke("disconnect_spotify");
+        spotifyAuthHint = null;
+        await refreshSpotifyStatusForDesktop();
+        logInfo("Disconnected Spotify", "Spotify");
+      } catch (e) {
+        spotifyAuthHint = String(e);
+        logError(String(e), "Spotify");
+      } finally {
+        spotifyBusy = false;
+      }
+      return;
+    }
     if (logBusSocket?.readyState !== WebSocket.OPEN) {
       logError("Log bus is not connected; cannot disconnect Spotify", "Spotify");
       return;
@@ -254,6 +390,7 @@
                 const item = await trayMenu?.get("toggle");
                 if (item) await item.setText("Show TapTapDeck");
               } else {
+                viewMode = "deck";
                 await win.show();
                 await win.unminimize();
                 await win.setFocus();
@@ -261,6 +398,19 @@
                 const item = await trayMenu?.get("toggle");
                 if (item) await item.setText("Hide TapTapDeck");
               }
+            },
+          },
+          {
+            id: "settings",
+            text: "Settings",
+            action: async () => {
+              logInfo("Settings requested from tray menu", "Tray");
+              viewMode = "settings";
+              await win.show();
+              await win.unminimize();
+              await win.setFocus();
+              const item = await trayMenu?.get("toggle");
+              if (item) await item.setText("Hide TapTapDeck");
             },
           },
           { item: "Separator" },
@@ -369,7 +519,7 @@
       windowLabel = "browser";
     }
     loadSeenScenes();
-    const handleCoreAction = (ev: Event) => {
+    const handleCoreAction = async (ev: Event) => {
       const detail = (ev as CustomEvent<{ action: string; label: string }>).detail;
       if (!detail) return;
       const { action, label } = detail;
@@ -377,13 +527,15 @@
       if (action === "core.settings") {
         logInfo(`Settings requested from button: ${label}`, "Settings window");
         if (isTauri) {
-          // Open or focus the browser-based debug/settings panel.
-          if (typeof window !== "undefined") {
-            window.open("http://localhost:1420", "_blank", "noopener,noreferrer");
+          viewMode = "settings";
+          const win = getCurrentWindow();
+          if (!(await win.isVisible())) {
+            await win.show();
+            await win.unminimize();
+            await win.setFocus();
           }
-        } else {
-          // In browser debug mode we're already in the settings/debug window.
         }
+        // In browser debug mode we're already in the settings/debug window.
       } else if (action === "core.refresh") {
         if (isTauri) {
           logInfo("Refresh requested from button", "Scenes");
@@ -532,11 +684,43 @@
       if (windowLabel === "main") {
         initTray();
       }
+      void syncDeckFullscreenState();
+      window.addEventListener("resize", syncDeckFullscreenState);
+
+      const onEscapeFullscreen = (ev: KeyboardEvent) => {
+        if (ev.key !== "Escape") return;
+        void (async () => {
+          try {
+            if (!(await getCurrentWindow().isFullscreen())) return;
+            ev.preventDefault();
+            await exitDeckPresentationFullscreen();
+          } catch {
+            // ignore
+          }
+        })();
+      };
+      window.addEventListener("keydown", onEscapeFullscreen, true);
+
       refreshScene();
       refreshPluginsForDesktop();
       if (sceneId === "spotify") {
         refreshSpotifyStatusForDesktop();
       }
+
+      const onWindowFocus = () => {
+        void (async () => {
+          try {
+            const s = await getSpotifyStatus();
+            spotifyStatus = s;
+            if (s.isAuthenticated) {
+              spotifyAuthHint = null;
+            }
+          } catch {
+            // ignore
+          }
+        })();
+      };
+      window.addEventListener("focus", onWindowFocus);
 
       const unlisten = listen<SceneState>("scene-changed", (event) => {
         sceneId = event.payload.activeSceneId;
@@ -551,6 +735,9 @@
       });
 
       return () => {
+        window.removeEventListener("resize", syncDeckFullscreenState);
+        window.removeEventListener("keydown", onEscapeFullscreen, true);
+        window.removeEventListener("focus", onWindowFocus);
         unlisten.then((fn) => fn());
         window.removeEventListener("taptapdeck-core-action", handleCoreAction as EventListener);
         window.removeEventListener("taptapdeck-action-started", handleActionStarted as EventListener);
@@ -563,9 +750,26 @@
 
 <div class="app">
   <header class="app-header">
-    <h1 class="app-title">TapTapDeck</h1>
-    {#if isTauri && !isSettingsWindow}
-      <span class="scene-badge">{sceneId}</span>
+    <div class="app-header-left">
+      <h1 class="app-title">TapTapDeck</h1>
+      {#if isTauri && viewMode === "settings"}
+        <button type="button" class="back-to-deck" onclick={() => (viewMode = "deck")}>
+          ← Back to deck
+        </button>
+      {:else if isTauri && !isSettingsWindow}
+        <span class="scene-badge">{sceneId}</span>
+      {/if}
+    </div>
+    {#if isTauri}
+      <button
+        type="button"
+        class="header-fullscreen-btn"
+        title={deckPresentationFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen on this display"}
+        aria-label={deckPresentationFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+        onclick={() => toggleDeckPresentationFullscreen()}
+      >
+        {deckPresentationFullscreen ? "Exit ⎋" : "⛶ Fullscreen"}
+      </button>
     {/if}
   </header>
 
@@ -581,6 +785,49 @@
                 <p class="settings-help">
                   Connect Spotify once to enable track liking and Spotify-only volume control.
                 </p>
+                {#if isTauri}
+                  <div class="spotify-client-block">
+                    <label class="spotify-client-label" for="spotify-client-id">Spotify Client ID</label>
+                    <p class="settings-help spotify-client-help">
+                      Create a Spotify app, add redirect URI <code>http://127.0.0.1:43821/callback</code>,
+                      then paste the Client ID here (saved on this PC). Or set <code>SPOTIFY_CLIENT_ID</code> in
+                      the environment instead.
+                    </p>
+                    <div class="spotify-client-row">
+                      <input
+                        id="spotify-client-id"
+                        class="spotify-client-input"
+                        type="text"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="Your Spotify app Client ID"
+                        bind:value={spotifyClientIdDraft}
+                        disabled={spotifyClientLockedByEnv || spotifySavingClientId}
+                      />
+                      <button
+                        type="button"
+                        class="spotify-dashboard-btn"
+                        onclick={openSpotifyDeveloperDashboard}
+                      >
+                        Open dashboard
+                      </button>
+                      <button
+                        type="button"
+                        class="spotify-save-client-btn"
+                        onclick={saveSpotifyClientId}
+                        disabled={spotifyClientLockedByEnv || spotifySavingClientId}
+                      >
+                        {spotifySavingClientId ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+                    {#if spotifyClientLockedByEnv}
+                      <p class="spotify-env-note">
+                        Using <code>SPOTIFY_CLIENT_ID</code> from the environment; unset it to edit the saved
+                        Client ID here.
+                      </p>
+                    {/if}
+                  </div>
+                {/if}
               </div>
               <div class="spotify-actions">
                 <button class="spotify-connect" onclick={connectSpotify} disabled={spotifyBusy}>
@@ -601,6 +848,14 @@
                 </button>
               </div>
             </div>
+            {#if isTauri && spotifyAuthHint}
+              <p
+                class="spotify-auth-hint"
+                class:spotify-auth-hint--ok={spotifyAuthHint.startsWith("Finish")}
+              >
+                {spotifyAuthHint}
+              </p>
+            {/if}
             <div class="spotify-status-card">
               {#if spotifyStatus?.currentCoverArtUrl || spotifyStatus?.currentTrackName}
                 <div class="spotify-now-playing">
@@ -847,9 +1102,34 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 20px;
+    gap: 12px;
+    padding: 10px 16px 10px 20px;
     border-bottom: 1px solid var(--border-subtle);
     background: var(--bg-surface);
+    flex-shrink: 0;
+  }
+
+  .app-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .header-fullscreen-btn {
+    flex-shrink: 0;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .header-fullscreen-btn:hover {
+    background: var(--bg-secondary);
   }
 
   .app-title {
@@ -867,6 +1147,20 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-weight: 600;
+  }
+
+  .back-to-deck {
+    font-size: 0.85rem;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .back-to-deck:hover {
+    background: var(--bg-secondary);
   }
 
   .app-main {
@@ -932,10 +1226,108 @@
     gap: 16px;
   }
 
+  .spotify-client-block {
+    margin-top: 14px;
+    max-width: 52rem;
+  }
+
+  .spotify-client-label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+  }
+
+  .spotify-client-help {
+    margin-top: 0;
+    margin-bottom: 10px;
+  }
+
+  .spotify-client-help code {
+    font-size: 0.78em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--bg-primary);
+  }
+
+  .spotify-client-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .spotify-client-input {
+    flex: 1 1 220px;
+    min-width: 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+  }
+
+  .spotify-client-input:disabled {
+    opacity: 0.65;
+  }
+
+  .spotify-dashboard-btn,
+  .spotify-save-client-btn {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+  }
+
+  .spotify-save-client-btn {
+    background: rgba(59, 130, 246, 0.2);
+    border-color: rgba(59, 130, 246, 0.35);
+    color: #bfdbfe;
+  }
+
+  .spotify-dashboard-btn:hover,
+  .spotify-save-client-btn:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+
+  .spotify-dashboard-btn:disabled,
+  .spotify-save-client-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .spotify-env-note {
+    margin: 10px 0 0;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+  }
+
+  .spotify-env-note code {
+    font-size: 0.85em;
+  }
+
   .spotify-actions {
     display: flex;
     align-items: center;
     gap: 10px;
+  }
+
+  .spotify-auth-hint {
+    margin: 10px 0 0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    color: #fecaca;
+    max-width: 52ch;
+  }
+
+  .spotify-auth-hint--ok {
+    color: #a7f3d0;
   }
 
   .spotify-connect {

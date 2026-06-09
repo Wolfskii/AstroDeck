@@ -34,6 +34,20 @@ pub struct SpotifyConfig {
     pub client_id: String,
     pub redirect_uri: String,
     pub token_path: Option<PathBuf>,
+    /// `app_local_data_dir/spotify_client.json` — used when `SPOTIFY_CLIENT_ID` is unset.
+    pub client_store_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SpotifyClientFile {
+    client_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotifyClientConfigResponse {
+    pub client_id: String,
+    pub locked_by_env: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,26 +162,47 @@ struct PlaybackArtist {
     name: String,
 }
 
-pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String> {
-    let client_id = std::env::var("SPOTIFY_CLIENT_ID").unwrap_or_default();
-    let redirect_uri = std::env::var("SPOTIFY_REDIRECT_URI")
-        .unwrap_or_else(|_| "http://127.0.0.1:43821/callback".to_string());
+fn read_stored_client_id(path: &PathBuf) -> Option<String> {
+    let raw = fs::read_to_string(path).ok()?;
+    let parsed: SpotifyClientFile = serde_json::from_str(&raw).ok()?;
+    let id = parsed.client_id.trim().to_string();
+    (!id.is_empty()).then_some(id)
+}
 
-    let token_path = app
+fn env_client_id() -> String {
+    std::env::var("SPOTIFY_CLIENT_ID")
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String> {
+    let base = app
         .path()
         .app_local_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("spotify_tokens.json");
+        .map_err(|e| e.to_string())?;
+    fs::create_dir_all(&base).map_err(|e| e.to_string())?;
 
-    if let Some(parent) = token_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
+    let client_store_path = base.join("spotify_client.json");
+    let token_path = base.join("spotify_tokens.json");
+
+    let from_env = env_client_id();
+    let from_file = read_stored_client_id(&client_store_path).unwrap_or_default();
+    let client_id = if !from_env.is_empty() {
+        from_env
+    } else {
+        from_file
+    };
+
+    let redirect_uri = std::env::var("SPOTIFY_REDIRECT_URI")
+        .unwrap_or_else(|_| "http://127.0.0.1:43821/callback".to_string());
 
     {
         let mut config = spotify.config.lock().map_err(|e| e.to_string())?;
         config.client_id = client_id;
         config.redirect_uri = redirect_uri;
         config.token_path = Some(token_path.clone());
+        config.client_store_path = Some(client_store_path);
     }
 
     if token_path.exists() {
@@ -185,6 +220,57 @@ pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String
         }
     }
 
+    Ok(())
+}
+
+pub fn get_client_config_for_ui(spotify: &SpotifyState) -> SpotifyClientConfigResponse {
+    let locked_by_env = !env_client_id().is_empty();
+    let client_id = spotify
+        .config
+        .lock()
+        .map(|c| c.client_id.clone())
+        .unwrap_or_default();
+    SpotifyClientConfigResponse {
+        client_id,
+        locked_by_env,
+    }
+}
+
+pub fn set_client_id_from_settings(
+    spotify: &SpotifyState,
+    client_id: &str,
+) -> Result<(), String> {
+    if !env_client_id().is_empty() {
+        return Err(
+            "SPOTIFY_CLIENT_ID is set in the environment; unset it to save a Client ID from Settings."
+                .to_string(),
+        );
+    }
+
+    let store_path = {
+        let guard = spotify.config.lock().map_err(|e| e.to_string())?;
+        guard
+            .client_store_path
+            .clone()
+            .ok_or_else(|| "Spotify paths not initialized.".to_string())?
+    };
+
+    let trimmed = client_id.trim();
+    if trimmed.is_empty() {
+        let _ = fs::remove_file(&store_path);
+        let mut cfg = spotify.config.lock().map_err(|e| e.to_string())?;
+        cfg.client_id.clear();
+        return Ok(());
+    }
+
+    let file = SpotifyClientFile {
+        client_id: trimmed.to_string(),
+    };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    fs::write(&store_path, json).map_err(|e| e.to_string())?;
+
+    let mut cfg = spotify.config.lock().map_err(|e| e.to_string())?;
+    cfg.client_id = trimmed.to_string();
     Ok(())
 }
 
@@ -214,7 +300,8 @@ pub fn get_status(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
             current_item_id: None,
             is_current_track_saved: None,
             granted_scopes,
-            message: "Set SPOTIFY_CLIENT_ID to enable Spotify integration.".to_string(),
+            message: "Save your Spotify Client ID in Settings (desktop app), or set SPOTIFY_CLIENT_ID. Use Open Spotify Developer Dashboard to create an app and copy the Client ID."
+                .to_string(),
         });
     }
 

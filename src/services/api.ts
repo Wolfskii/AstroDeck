@@ -65,6 +65,19 @@ export async function getSpotifyStatus(): Promise<SpotifyStatus> {
   return invoke<SpotifyStatus>("get_spotify_status");
 }
 
+export interface SpotifyClientConfig {
+  clientId: string;
+  lockedByEnv: boolean;
+}
+
+export async function getSpotifyClientConfig(): Promise<SpotifyClientConfig> {
+  return invoke<SpotifyClientConfig>("get_spotify_client_config");
+}
+
+export async function setSpotifyClientId(clientId: string): Promise<void> {
+  return invoke("set_spotify_client_id", { clientId });
+}
+
 export async function setSpotifyVolume(volumePercent: number): Promise<number> {
   return invoke<number>("set_spotify_volume", { volumePercent });
 }

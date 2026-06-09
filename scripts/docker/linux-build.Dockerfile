@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
   patchelf \
   pkg-config \
   wget \
+  xdg-utils \
   xz-utils \
   zip \
   && rm -rf /var/lib/apt/lists/*
