@@ -285,7 +285,7 @@
 >
   <div
     class="car-thing-body"
-    class:car-thing-body--fs={showFullscreenToggle && onToggleFullscreen && !presentationFullscreen}
+    class:car-thing-body--has-icon={showFullscreenToggle && onToggleFullscreen}
   >
     {#if showFullscreenToggle && onToggleFullscreen}
       <button
@@ -300,20 +300,22 @@
     {/if}
 
     <section class="car-now-playing">
-      <div class="car-art-column">
-        {#if artworkUrl}
-          <img class="car-artwork" src={artworkUrl} alt={title ?? "Album art"} />
-        {:else}
-          <div class="car-artwork car-artwork-placeholder" aria-hidden="true">♪</div>
-        {/if}
-      </div>
+      <div class="car-now-playing-inner">
+        <div class="car-art-column">
+          {#if artworkUrl}
+            <img class="car-artwork" src={artworkUrl} alt={title ?? "Album art"} />
+          {:else}
+            <div class="car-artwork car-artwork-placeholder" aria-hidden="true">♪</div>
+          {/if}
+        </div>
 
-      <div class="car-meta-column">
-        {#if albumName}
-          <div class="car-album-line">{albumName}</div>
-        {/if}
-        <h2 class="car-track-title">{title ?? "Nothing playing"}</h2>
-        <p class="car-artist-name">{subtitle ?? "No artist information"}</p>
+        <div class="car-meta-column">
+          {#if albumName}
+            <div class="car-album-line">{albumName}</div>
+          {/if}
+          <h2 class="car-track-title">{title ?? "Nothing playing"}</h2>
+          <p class="car-artist-name">{subtitle ?? "No artist information"}</p>
+        </div>
       </div>
     </section>
   </div>
@@ -526,6 +528,10 @@
     grid-template-columns: minmax(0, 1fr) 124px;
   }
 
+  .car-thing:has(.car-fader) .car-thing-body {
+    padding-right: 8px;
+  }
+
   .car-thing-body {
     grid-column: 1;
     grid-row: 1;
@@ -533,7 +539,7 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    padding: 20px 16px 0 20px;
+    padding: 20px 16px 0 0;
     gap: 0;
     position: relative;
     overflow: hidden;
@@ -560,8 +566,8 @@
 
   .car-app-icon {
     display: block;
-    width: 40px;
-    height: 40px;
+    width: 96px;
+    height: 96px;
     object-fit: contain;
   }
 
@@ -569,15 +575,26 @@
     flex: 1 1 0;
     min-height: 0;
     width: 100%;
-    display: grid;
-    grid-template-columns: 35% minmax(0, 1fr);
-    align-items: stretch;
-    padding-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 0 20px 44px clamp(172px, 19vw, 300px);
     overflow: hidden;
   }
 
-  .car-thing-body--fs .car-now-playing {
-    padding-top: 42px;
+  .car-thing-body--has-icon .car-now-playing {
+    padding-top: 100px;
+  }
+
+  .car-now-playing-inner {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    column-gap: 72px;
+    align-items: center;
+    width: 100%;
+    max-height: 100%;
+    height: 100%;
+    min-width: 0;
   }
 
   .car-art-column {
@@ -588,12 +605,11 @@
     min-height: 0;
     height: 100%;
     align-self: stretch;
-    padding-right: 28px;
   }
 
   .car-artwork {
     display: block;
-    height: 76%;
+    height: 100%;
     width: auto;
     max-width: 100%;
     aspect-ratio: 1 / 1;
@@ -604,8 +620,8 @@
     background: #1a1a1a;
   }
 
-  .car-thing-body--fs .car-artwork {
-    height: 68%;
+  .car-thing-body--has-icon .car-artwork {
+    height: 100%;
   }
 
   .car-artwork-placeholder {
@@ -618,12 +634,11 @@
 
   .car-meta-column {
     min-width: 0;
+    max-width: min(36rem, 50vw);
     display: flex;
     flex-direction: column;
     justify-content: center;
     gap: 14px;
-    padding-left: 56px;
-    padding-right: 12px;
   }
 
   .car-album-line {
@@ -642,10 +657,13 @@
     font-weight: 800;
     line-height: 1.05;
     letter-spacing: -0.02em;
-    white-space: nowrap;
+    width: 100%;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
     overflow: hidden;
     text-overflow: ellipsis;
-    width: 100%;
+    overflow-wrap: break-word;
   }
 
   .car-artist-name {
@@ -663,7 +681,7 @@
     grid-column: 1;
     grid-row: 2;
     flex-shrink: 0;
-    padding: 0 0 10px;
+    padding: 12px 0 10px;
     cursor: pointer;
     touch-action: none;
     user-select: none;

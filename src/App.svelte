@@ -1478,8 +1478,8 @@
 
   .header-app-icon {
     display: block;
-    width: 32px;
-    height: 32px;
+    width: 72px;
+    height: 72px;
     object-fit: contain;
   }
 

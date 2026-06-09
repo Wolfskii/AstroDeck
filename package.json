@@ -12,7 +12,8 @@
     "package:windows": "node scripts/package-app.mjs --platform windows --target x86_64-pc-windows-msvc",
     "package:macos": "node scripts/package-app.mjs --platform macos --target aarch64-apple-darwin",
     "package:linux": "node scripts/package-app.mjs --platform linux --target x86_64-unknown-linux-gnu",
-    "version:sync": "node scripts/sync-version.mjs"
+    "version:sync": "node scripts/sync-version.mjs",
+    "icons:sync": "node scripts/prepare-bundle-icon.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"
@@ -22,6 +23,7 @@
     "@sveltejs/vite-plugin-svelte": "^5",
     "@tauri-apps/cli": "^2",
     "@tsconfig/svelte": "^5",
+    "sharp": "^0.34.5",
     "svelte": "^5",
     "svelte-check": "^4",
     "tslib": "^2",
