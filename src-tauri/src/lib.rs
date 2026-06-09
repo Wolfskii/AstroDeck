@@ -10,6 +10,7 @@ mod websocket;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
+use tauri_plugin_opener::OpenerExt;
 use tokio::sync::broadcast;
 
 pub use plugin_engine::PluginConfig;
@@ -86,6 +87,9 @@ pub fn apply_scene_change(
 
 pub fn launch_spotify_auth(app: &tauri::AppHandle, state: &AppState) -> Result<String, String> {
     let auth_url = spotify::start_auth_flow(&state.spotify)?;
+    app.opener()
+        .open_url(&auth_url, None::<&str>)
+        .map_err(|e| format!("Failed to open browser for Spotify sign-in: {e}"))?;
     let log_bus = state.log_bus.clone();
     let app_handle = app.clone();
     std::thread::spawn(move || {

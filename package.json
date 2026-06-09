@@ -16,12 +16,13 @@
     "icons:sync": "node scripts/prepare-bundle-icon.mjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2"
+    "@tauri-apps/api": "2.11.0",
+    "@tauri-apps/plugin-opener": "^2.5.4"
   },
   "devDependencies": {
     "@fontsource/dseg7-classic": "^5.2.5",
     "@sveltejs/vite-plugin-svelte": "^5",
-    "@tauri-apps/cli": "^2",
+    "@tauri-apps/cli": "2.11.0",
     "@tsconfig/svelte": "^5",
     "sharp": "^0.34.5",
     "svelte": "^5",

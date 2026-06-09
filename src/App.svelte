@@ -6,6 +6,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { Menu } from "@tauri-apps/api/menu";
   import { invoke } from "@tauri-apps/api/core";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import DeckGrid from "./components/DeckGrid.svelte";
   import MediaPlayerView from "./components/MediaPlayerView.svelte";
   import appIconUrl from "./assets/app-icon.png";
@@ -170,8 +171,20 @@
     })();
   });
 
+  async function openExternalUrl(url: string, label = "External link") {
+    try {
+      if (isTauri) {
+        await openUrl(url);
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      logError(`Failed to open ${label}: ${String(e)}`, "Spotify");
+    }
+  }
+
   function openSpotifyDeveloperDashboard() {
-    window.open(SPOTIFY_DEV_DASHBOARD, "_blank", "noopener,noreferrer");
+    void openExternalUrl(SPOTIFY_DEV_DASHBOARD, "Spotify Developer Dashboard");
   }
 
   async function syncDeckFullscreenState() {
@@ -334,9 +347,8 @@
       spotifyAuthHint = null;
       spotifyBusy = true;
       try {
-        const url = await invoke<string>("start_spotify_auth");
-        window.open(url, "_blank", "noopener,noreferrer");
-        logInfo("Opened Spotify authorization page", "Spotify");
+        await invoke<string>("start_spotify_auth");
+        logInfo("Opened Spotify authorization page in the default browser", "Spotify");
         spotifyAuthHint =
           "Finish signing in in your browser. When you return here, status updates automatically.";
       } catch (e) {
@@ -1001,7 +1013,7 @@
                 spotifyBusy = false;
                 const url = (payload.payload as { url?: string })?.url;
                 if (url) {
-                  window.open(url, "_blank", "noopener,noreferrer");
+                  void openExternalUrl(url, "Spotify authorization page");
                   logInfo("Opened Spotify authorization page", "Spotify");
                 }
               } else if (payload.type === "spotifyAuthError") {
@@ -1436,8 +1448,19 @@
           shuffle={currentMediaView.shuffle}
           shuffleActive={sceneId === "spotify" ? effectiveSpotifyShuffle : false}
           trackSaved={sceneId === "spotify" ? effectiveSpotifySaved : null}
-          title={sceneId === "spotify" ? spotifyStatus?.currentTrackName : null}
-          subtitle={sceneId === "spotify" ? spotifyStatus?.currentArtistName : null}
+          title={sceneId === "spotify"
+            ? spotifyStatus?.currentTrackName ??
+              (spotifyStatus?.isConfigured === false
+                ? "Spotify setup required"
+                : spotifyStatus?.isAuthenticated === false
+                  ? "Connect Spotify"
+                  : "Nothing playing")
+            : null}
+          subtitle={sceneId === "spotify"
+            ? spotifyStatus?.currentArtistName ??
+              (spotifyStatus?.message ??
+                "Tray → Settings: save Client ID, then Connect Spotify")
+            : null}
           albumName={sceneId === "spotify" ? spotifyStatus?.currentAlbumName : null}
           artworkUrl={sceneId === "spotify" ? spotifyStatus?.currentCoverArtUrl : null}
           playbackState={sceneId === "spotify" ? effectiveSpotifyPlaybackState : "stopped"}
@@ -1686,15 +1709,19 @@
   }
 
   .settings-root {
-    flex: 1;
+    flex: 1 1 auto;
+    min-height: 0;
     display: flex;
-    padding: 16px 20px;
+    padding: 16px 20px 24px;
     gap: 16px;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .settings-section {
     width: 100%;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 12px;
