@@ -21,6 +21,7 @@ const SPOTIFY_SEEK_URL: &str = "https://api.spotify.com/v1/me/player/seek";
 const SPOTIFY_SHUFFLE_URL: &str = "https://api.spotify.com/v1/me/player/shuffle";
 const SPOTIFY_LIBRARY_URL: &str = "https://api.spotify.com/v1/me/library";
 const SPOTIFY_LIBRARY_CONTAINS_URL: &str = "https://api.spotify.com/v1/me/library/contains";
+const SPOTIFY_QUEUE_URL: &str = "https://api.spotify.com/v1/me/player/queue";
 #[derive(Serialize)]
 struct LibraryUrisBody {
     uris: Vec<String>,
@@ -37,9 +38,34 @@ struct SavedTrackCache {
     saved_lookup_track_id: Option<String>,
 }
 
+#[derive(Debug, Copy, Clone)]
+enum RateLimitScope {
+    PlaybackRead,
+    Library,
+}
+
 #[derive(Default)]
 struct ApiRateLimitState {
-    limited_until: Option<SystemTime>,
+    playback_read_until: Option<SystemTime>,
+    library_until: Option<SystemTime>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TrackPreview {
+    #[serde(rename = "itemId")]
+    pub item_id: String,
+    #[serde(rename = "itemType")]
+    pub item_type: String,
+    #[serde(rename = "trackName")]
+    pub track_name: String,
+    #[serde(rename = "artistName")]
+    pub artist_name: Option<String>,
+    #[serde(rename = "albumName")]
+    pub album_name: Option<String>,
+    #[serde(rename = "coverArtUrl")]
+    pub cover_art_url: Option<String>,
+    #[serde(rename = "durationMs")]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Default)]
@@ -48,10 +74,23 @@ struct PlaybackCache {
     fetched_at: Option<SystemTime>,
 }
 
+#[derive(Default)]
+struct QueueCache {
+    up_next: Vec<TrackPreview>,
+    fetched_at: Option<SystemTime>,
+}
+
+#[derive(Default)]
+struct PlaybackHistory {
+    recent: Vec<TrackPreview>,
+}
+
 const SPOTIFY_HTTP_TIMEOUT: Duration = Duration::from_secs(12);
 const SAVED_TRACK_CACHE_TTL: Duration = Duration::from_secs(120);
 /// Reuse /me/player responses for routine status polls (UI extrapolates progress locally).
 const PLAYBACK_CACHE_TTL: Duration = Duration::from_secs(30);
+const QUEUE_CACHE_TTL: Duration = Duration::from_secs(45);
+const PLAYBACK_HISTORY_MAX: usize = 12;
 /// Default backoff when Spotify omits Retry-After on a 429.
 const SPOTIFY_DEFAULT_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(60);
 /// Max wait before a single automatic retry (user-initiated actions).
@@ -65,11 +104,19 @@ pub struct SpotifyState {
     saved_track_cache: Mutex<SavedTrackCache>,
     api_rate_limit: Mutex<ApiRateLimitState>,
     playback_cache: Mutex<PlaybackCache>,
+    queue_cache: Mutex<QueueCache>,
+    playback_history: Mutex<PlaybackHistory>,
 }
 
 pub fn invalidate_playback_cache(spotify: &SpotifyState) {
     let mut cache = spotify.playback_cache.lock().unwrap();
     cache.summary = None;
+    cache.fetched_at = None;
+}
+
+pub fn invalidate_queue_cache(spotify: &SpotifyState) {
+    let mut cache = spotify.queue_cache.lock().unwrap();
+    cache.up_next.clear();
     cache.fetched_at = None;
 }
 
@@ -106,7 +153,30 @@ fn read_playback_cache(spotify: &SpotifyState, max_age: Duration) -> Option<Play
     Some(interpolate_playback_progress(summary.clone(), fetched_at))
 }
 
+fn read_playback_cache_stale(spotify: &SpotifyState) -> Option<PlaybackSummary> {
+    let cache = spotify.playback_cache.lock().unwrap();
+    let summary = cache.summary.as_ref()?.clone();
+    let fetched_at = cache.fetched_at?;
+    Some(interpolate_playback_progress(summary, fetched_at))
+}
+
+fn get_playback_for_mutation(spotify: &SpotifyState) -> Result<PlaybackSummary, String> {
+    if let Some(cached) = read_playback_cache_stale(spotify) {
+        return Ok(cached);
+    }
+    get_current_playback(spotify)
+}
+
 fn store_playback_cache(spotify: &SpotifyState, summary: &PlaybackSummary) {
+    let previous = spotify
+        .playback_cache
+        .lock()
+        .unwrap()
+        .summary
+        .clone();
+    if let Some(prev) = previous.as_ref() {
+        record_track_change(spotify, prev, summary);
+    }
     let mut cache = spotify.playback_cache.lock().unwrap();
     cache.summary = Some(summary.clone());
     cache.fetched_at = Some(SystemTime::now());
@@ -150,57 +220,99 @@ fn retry_after_from_response(response: &reqwest::blocking::Response) -> Duration
         .unwrap_or(SPOTIFY_DEFAULT_RATE_LIMIT_BACKOFF)
 }
 
-fn set_api_rate_limit(spotify: &SpotifyState, backoff: Duration) {
+fn scope_rate_limit_until(state: &mut ApiRateLimitState, scope: RateLimitScope) -> &mut Option<SystemTime> {
+    match scope {
+        RateLimitScope::PlaybackRead => &mut state.playback_read_until,
+        RateLimitScope::Library => &mut state.library_until,
+    }
+}
+
+fn set_scope_rate_limit(spotify: &SpotifyState, scope: RateLimitScope, backoff: Duration) {
     let until = SystemTime::now() + backoff;
     let mut state = spotify.api_rate_limit.lock().unwrap();
-    state.limited_until = Some(match state.limited_until {
+    let slot = scope_rate_limit_until(&mut state, scope);
+    *slot = Some(match *slot {
         Some(existing) if existing > until => existing,
         _ => until,
     });
 }
 
-fn clear_api_rate_limit(spotify: &SpotifyState) {
+fn clear_scope_rate_limit(spotify: &SpotifyState, scope: RateLimitScope) {
     let mut state = spotify.api_rate_limit.lock().unwrap();
-    state.limited_until = None;
+    *scope_rate_limit_until(&mut state, scope) = None;
 }
 
-fn api_rate_limit_wait_remaining(spotify: &SpotifyState) -> Option<Duration> {
+fn scope_rate_limit_wait_remaining(
+    spotify: &SpotifyState,
+    scope: RateLimitScope,
+) -> Option<Duration> {
     let state = spotify.api_rate_limit.lock().unwrap();
-    state
-        .limited_until
-        .and_then(|until| until.duration_since(SystemTime::now()).ok())
+    let until = match scope {
+        RateLimitScope::PlaybackRead => state.playback_read_until?,
+        RateLimitScope::Library => state.library_until?,
+    };
+    until
+        .duration_since(SystemTime::now())
+        .ok()
         .filter(|duration| !duration.is_zero())
 }
 
-fn is_api_rate_limited(spotify: &SpotifyState) -> bool {
-    api_rate_limit_wait_remaining(spotify).is_some()
+fn is_scope_rate_limited(spotify: &SpotifyState, scope: RateLimitScope) -> bool {
+    scope_rate_limit_wait_remaining(spotify, scope).is_some()
 }
 
-fn api_rate_limited_error() -> String {
-    "Spotify API is rate-limited. Wait for Retry-After, then try again.".to_string()
+fn is_playback_read_rate_limited(spotify: &SpotifyState) -> bool {
+    is_scope_rate_limited(spotify, RateLimitScope::PlaybackRead)
 }
 
-fn apply_api_rate_limit_from_response(spotify: &SpotifyState, response: &reqwest::blocking::Response) {
+fn is_library_rate_limited(spotify: &SpotifyState) -> bool {
+    is_scope_rate_limited(spotify, RateLimitScope::Library)
+}
+
+fn scope_rate_limited_error(scope: RateLimitScope) -> String {
+    match scope {
+        RateLimitScope::PlaybackRead => {
+            "Spotify playback read API is rate-limited. Wait for Retry-After, then try again."
+                .to_string()
+        }
+        RateLimitScope::Library => {
+            "Spotify library API is rate-limited. Wait for Retry-After, then try again."
+                .to_string()
+        }
+    }
+}
+
+fn apply_scope_rate_limit_from_response(
+    spotify: &SpotifyState,
+    scope: RateLimitScope,
+    response: &reqwest::blocking::Response,
+) {
     if response.status().as_u16() != 429 {
         return;
     }
     let backoff = retry_after_from_response(response);
-    set_api_rate_limit(spotify, backoff);
+    set_scope_rate_limit(spotify, scope, backoff);
     log::warn!(
-        "Spotify API returned 429; backing off for {} seconds (Retry-After)",
+        "Spotify {:?} API returned 429; backing off for {} seconds (Retry-After)",
+        scope,
         backoff.as_secs()
     );
 }
 
-/// Wait until Retry-After expires. Caps sleep for user-initiated retries.
-fn wait_for_api_rate_limit(spotify: &SpotifyState, cap: Option<Duration>) {
-    let Some(mut remaining) = api_rate_limit_wait_remaining(spotify) else {
+/// Wait until Retry-After expires for a scope. Caps sleep for user-initiated retries.
+fn wait_for_scope_rate_limit(
+    spotify: &SpotifyState,
+    scope: RateLimitScope,
+    cap: Option<Duration>,
+) {
+    let Some(mut remaining) = scope_rate_limit_wait_remaining(spotify, scope) else {
         return;
     };
     if let Some(max) = cap {
         if remaining > max {
             log::info!(
-                "Spotify Retry-After is {}s; waiting {}s before retry",
+                "Spotify {:?} Retry-After is {}s; waiting {}s before retry",
+                scope,
                 remaining.as_secs(),
                 max.as_secs()
             );
@@ -208,21 +320,36 @@ fn wait_for_api_rate_limit(spotify: &SpotifyState, cap: Option<Duration>) {
         }
     } else {
         log::info!(
-            "Spotify API rate-limited; waiting {}s per Retry-After",
+            "Spotify {:?} API rate-limited; waiting {}s per Retry-After",
+            scope,
             remaining.as_secs()
         );
     }
     std::thread::sleep(remaining);
 }
 
-fn ensure_api_available_for_background(spotify: &SpotifyState) -> Result<(), String> {
-    if is_api_rate_limited(spotify) {
-        let seconds = api_rate_limit_wait_remaining(spotify)
+fn ensure_playback_read_available(spotify: &SpotifyState) -> Result<(), String> {
+    if is_playback_read_rate_limited(spotify) {
+        let seconds = scope_rate_limit_wait_remaining(spotify, RateLimitScope::PlaybackRead)
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
         return Err(format!(
             "{} Retry again in ~{} seconds.",
-            api_rate_limited_error(),
+            scope_rate_limited_error(RateLimitScope::PlaybackRead),
+            seconds
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_library_read_available(spotify: &SpotifyState) -> Result<(), String> {
+    if is_library_rate_limited(spotify) {
+        let seconds = scope_rate_limit_wait_remaining(spotify, RateLimitScope::Library)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        return Err(format!(
+            "{} Retry again in ~{} seconds.",
+            scope_rate_limited_error(RateLimitScope::Library),
             seconds
         ));
     }
@@ -296,6 +423,10 @@ pub struct SpotifyStatus {
     pub is_shuffle: bool,
     #[serde(rename = "grantedScopes")]
     pub granted_scopes: Vec<String>,
+    #[serde(rename = "nextTrackPreview", skip_serializing_if = "Option::is_none")]
+    pub next_track_preview: Option<TrackPreview>,
+    #[serde(rename = "prevTrackPreview", skip_serializing_if = "Option::is_none")]
+    pub prev_track_preview: Option<TrackPreview>,
     pub message: String,
 }
 
@@ -329,6 +460,12 @@ struct TokenResponse {
     expires_in: u64,
     scope: String,
     refresh_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QueueResponse {
+    #[serde(default)]
+    queue: Vec<PlaybackItem>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -491,6 +628,207 @@ pub fn set_client_id_from_settings(
     Ok(())
 }
 
+fn preview_image_url(item: &PlaybackItem) -> Option<String> {
+    item.album
+        .as_ref()
+        .and_then(|album| album.images.first())
+        .map(|image| image.url.clone())
+        .or_else(|| item.images.first().map(|image| image.url.clone()))
+}
+
+fn playback_item_to_preview(item: &PlaybackItem) -> Option<TrackPreview> {
+    let item_id = item.id.clone()?;
+    Some(TrackPreview {
+        item_id,
+        item_type: item.item_type.clone(),
+        track_name: item.name.clone(),
+        artist_name: item
+            .artists
+            .first()
+            .map(|artist| artist.name.clone()),
+        album_name: item.album.as_ref().and_then(|album| album.name.clone()),
+        cover_art_url: preview_image_url(item),
+        duration_ms: item.duration_ms,
+    })
+}
+
+fn playback_summary_to_preview(summary: &PlaybackSummary) -> Option<TrackPreview> {
+    let item_id = summary.item_id.clone()?;
+    Some(TrackPreview {
+        item_id,
+        item_type: summary.item_type.clone().unwrap_or_else(|| "track".to_string()),
+        track_name: summary.item_name.clone().unwrap_or_default(),
+        artist_name: summary.artist_name.clone(),
+        album_name: summary.album_name.clone(),
+        cover_art_url: summary.cover_art_url.clone(),
+        duration_ms: summary.duration_ms,
+    })
+}
+
+fn preview_to_playback_summary(preview: &TrackPreview, base: &PlaybackSummary) -> PlaybackSummary {
+    PlaybackSummary {
+        device_id: base.device_id.clone(),
+        device_name: base.device_name.clone(),
+        is_playing: base.is_playing,
+        volume_percent: base.volume_percent,
+        item_id: Some(preview.item_id.clone()),
+        item_type: Some(preview.item_type.clone()),
+        item_name: Some(preview.track_name.clone()),
+        artist_name: preview.artist_name.clone(),
+        album_name: preview.album_name.clone(),
+        cover_art_url: preview.cover_art_url.clone(),
+        progress_ms: Some(0),
+        duration_ms: preview.duration_ms,
+        shuffle_state: base.shuffle_state,
+    }
+}
+
+fn dedupe_queue_previews(items: Vec<TrackPreview>) -> Vec<TrackPreview> {
+    let mut deduped: Vec<TrackPreview> = Vec::new();
+    for item in items {
+        if deduped
+            .last()
+            .is_some_and(|last| last.item_id == item.item_id)
+        {
+            continue;
+        }
+        deduped.push(item);
+    }
+    deduped
+}
+
+fn push_playback_history(spotify: &SpotifyState, preview: TrackPreview) {
+    let mut history = spotify.playback_history.lock().unwrap();
+    if history.recent.first().map(|t| t.item_id.as_str()) == Some(preview.item_id.as_str()) {
+        return;
+    }
+    history.recent.retain(|track| track.item_id != preview.item_id);
+    history.recent.insert(0, preview);
+    history.recent.truncate(PLAYBACK_HISTORY_MAX);
+}
+
+fn record_track_change(
+    spotify: &SpotifyState,
+    previous: &PlaybackSummary,
+    next: &PlaybackSummary,
+) {
+    if previous.item_id == next.item_id {
+        return;
+    }
+    if let Some(preview) = playback_summary_to_preview(previous) {
+        push_playback_history(spotify, preview);
+    }
+}
+
+fn next_preview_from_cache(spotify: &SpotifyState, current_id: Option<&str>) -> Option<TrackPreview> {
+    let cache = spotify.queue_cache.lock().unwrap();
+    cache
+        .up_next
+        .iter()
+        .find(|track| Some(track.item_id.as_str()) != current_id)
+        .cloned()
+}
+
+fn prev_preview_from_history(spotify: &SpotifyState, current_id: Option<&str>) -> Option<TrackPreview> {
+    let history = spotify.playback_history.lock().unwrap();
+    history
+        .recent
+        .iter()
+        .find(|track| Some(track.item_id.as_str()) != current_id)
+        .cloned()
+}
+
+fn consume_queue_preview(spotify: &SpotifyState, item_id: &str) {
+    let mut cache = spotify.queue_cache.lock().unwrap();
+    if let Some(index) = cache.up_next.iter().position(|track| track.item_id == item_id) {
+        cache.up_next.remove(index);
+    }
+}
+
+fn fetch_playback_queue(spotify: &SpotifyState) -> Result<Vec<TrackPreview>, String> {
+    ensure_playback_read_available(spotify)?;
+    let access_token = get_access_token(spotify)?;
+    let client = spotify_http_client()?;
+    let response = client
+        .get(SPOTIFY_QUEUE_URL)
+        .bearer_auth(&access_token)
+        .send()
+        .map_err(|e| format!("Spotify queue request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        apply_scope_rate_limit_from_response(spotify, RateLimitScope::PlaybackRead, &response);
+        let body = response.text().unwrap_or_default();
+        return Err(format!("Spotify queue query failed: {} {}", status, body));
+    }
+
+    let queue: QueueResponse = response.json().map_err(|e| e.to_string())?;
+    Ok(queue
+        .queue
+        .iter()
+        .filter_map(playback_item_to_preview)
+        .collect())
+}
+
+fn maybe_refresh_queue_cache(spotify: &SpotifyState, force: bool) {
+    if !force {
+        let cache = spotify.queue_cache.lock().unwrap();
+        if let Some(fetched_at) = cache.fetched_at {
+            if SystemTime::now()
+                .duration_since(fetched_at)
+                .unwrap_or(Duration::MAX)
+                < QUEUE_CACHE_TTL
+            {
+                return;
+            }
+        }
+    }
+
+    if is_playback_read_rate_limited(spotify) {
+        return;
+    }
+
+    match fetch_playback_queue(spotify) {
+        Ok(items) => {
+            let mut cache = spotify.queue_cache.lock().unwrap();
+            cache.up_next = dedupe_queue_previews(items);
+            cache.fetched_at = Some(SystemTime::now());
+        }
+        Err(err) => {
+            log::debug!("Spotify queue prefetch skipped: {}", err);
+        }
+    }
+}
+
+const PREV_RESTART_THRESHOLD_MS: u64 = 3000;
+
+pub fn apply_optimistic_skip(spotify: &SpotifyState, direction: &str) -> Option<TrackPreview> {
+    maybe_refresh_queue_cache(spotify, false);
+    let current = read_playback_cache_stale(spotify)?;
+    let preview = match direction {
+        "next" => next_preview_from_cache(spotify, current.item_id.as_deref())?,
+        "prev" => {
+            let progress_ms = current.progress_ms.unwrap_or(0);
+            if progress_ms > PREV_RESTART_THRESHOLD_MS {
+                let mut optimistic = current.clone();
+                optimistic.progress_ms = Some(0);
+                store_playback_cache(spotify, &optimistic);
+                return None;
+            }
+            prev_preview_from_history(spotify, current.item_id.as_deref())?
+        }
+        _ => return None,
+    };
+
+    if direction == "next" {
+        consume_queue_preview(spotify, &preview.item_id);
+    }
+
+    let optimistic = preview_to_playback_summary(&preview, &current);
+    store_playback_cache(spotify, &optimistic);
+    Some(preview)
+}
+
 pub fn get_status(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
     build_status(spotify, false)
 }
@@ -529,6 +867,8 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
             is_current_track_saved: None,
             is_shuffle: false,
             granted_scopes,
+            next_track_preview: None,
+            prev_track_preview: None,
             message: "Save your Spotify Client ID in Settings (desktop app), or set SPOTIFY_CLIENT_ID. Use Open Spotify Developer Dashboard to create an app and copy the Client ID."
                 .to_string(),
         });
@@ -554,9 +894,13 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
             is_current_track_saved: None,
             is_shuffle: false,
             granted_scopes,
+            next_track_preview: None,
+            prev_track_preview: None,
             message: "Spotify is not connected yet.".to_string(),
         });
     }
+
+    maybe_refresh_queue_cache(spotify, fresh_playback);
 
     let playback_result = if fresh_playback {
         refresh_current_playback(spotify)
@@ -565,74 +909,106 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
     };
 
     match playback_result {
-        Ok(playback) => {
-            let mut message = "Spotify is connected.".to_string();
-            let is_current_track_saved = if playback.item_type.as_deref() == Some("track") {
-                if has_scope(spotify, "user-library-read")? {
-                    playback
-                        .item_id
-                        .as_deref()
-                        .map(|track_id| {
-                            resolve_display_saved_state(spotify, track_id, fresh_playback)
-                        })
-                        .unwrap_or(None)
-                } else {
-                    message = "Spotify is connected. Reconnect Spotify to enable saved-track status."
-                        .to_string();
-                    None
-                }
-            } else {
-                None
-            };
-
-            Ok(SpotifyStatus {
-                is_configured: true,
-                is_authenticated: true,
-                has_active_device: true,
-                active_device_name: Some(playback.device_name),
-                current_track_name: playback.item_name,
-                current_artist_name: playback.artist_name,
-                current_cover_art_url: playback.cover_art_url,
-                current_album_name: playback.album_name,
-                progress_ms: playback.progress_ms,
-                duration_ms: playback.duration_ms,
-                playback_state: if playback.is_playing {
-                    "playing".to_string()
-                } else {
-                    "paused".to_string()
-                },
-                is_playing: playback.is_playing,
-                current_volume_percent: Some(playback.volume_percent),
-                current_item_type: playback.item_type,
-                current_item_id: playback.item_id,
-                is_current_track_saved,
-                is_shuffle: playback.shuffle_state,
-                granted_scopes,
-                message,
-            })
-        }
-        Err(err) => Ok(SpotifyStatus {
-            is_configured: true,
-            is_authenticated: true,
-            has_active_device: false,
-            active_device_name: None,
-            current_track_name: None,
-            current_artist_name: None,
-            current_cover_art_url: None,
-            current_album_name: None,
-            progress_ms: None,
-            duration_ms: None,
-            playback_state: "stopped".to_string(),
-            is_playing: false,
-            current_volume_percent: None,
-            current_item_type: None,
-            current_item_id: None,
-            is_current_track_saved: None,
-            is_shuffle: false,
+        Ok(playback) => build_spotify_status_from_playback(
+            spotify,
+            &playback,
             granted_scopes,
-            message: err,
-        }),
+            "Spotify is connected.".to_string(),
+            fresh_playback,
+        ),
+        Err(err) => {
+            if let Some(playback) = read_playback_cache_stale(spotify) {
+                let message = format!("{err} Showing last known playback.");
+                build_spotify_status_from_playback(
+                    spotify,
+                    &playback,
+                    granted_scopes,
+                    message,
+                    false,
+                )
+            } else {
+                Ok(SpotifyStatus {
+                    is_configured: true,
+                    is_authenticated: true,
+                    has_active_device: false,
+                    active_device_name: None,
+                    current_track_name: None,
+                    current_artist_name: None,
+                    current_cover_art_url: None,
+                    current_album_name: None,
+                    progress_ms: None,
+                    duration_ms: None,
+                    playback_state: "stopped".to_string(),
+                    is_playing: false,
+                    current_volume_percent: None,
+                    current_item_type: None,
+                    current_item_id: None,
+                    is_current_track_saved: None,
+                    is_shuffle: false,
+                    granted_scopes,
+                    next_track_preview: None,
+                    prev_track_preview: None,
+                    message: err,
+                })
+            }
+        }
     }
+}
+
+fn build_spotify_status_from_playback(
+    spotify: &SpotifyState,
+    playback: &PlaybackSummary,
+    granted_scopes: Vec<String>,
+    mut message: String,
+    fresh_playback: bool,
+) -> Result<SpotifyStatus, String> {
+    if is_playback_read_rate_limited(spotify) {
+        message.push_str(" Playback reads are temporarily rate-limited.");
+    }
+
+    let is_current_track_saved = if playback.item_type.as_deref() == Some("track") {
+        if has_scope(spotify, "user-library-read")? {
+            playback
+                .item_id
+                .as_deref()
+                .map(|track_id| resolve_display_saved_state(spotify, track_id, fresh_playback))
+                .unwrap_or(None)
+        } else {
+            message =
+                "Spotify is connected. Reconnect Spotify to enable saved-track status.".to_string();
+            None
+        }
+    } else {
+        None
+    };
+
+    Ok(SpotifyStatus {
+        is_configured: true,
+        is_authenticated: true,
+        has_active_device: true,
+        active_device_name: Some(playback.device_name.clone()),
+        current_track_name: playback.item_name.clone(),
+        current_artist_name: playback.artist_name.clone(),
+        current_cover_art_url: playback.cover_art_url.clone(),
+        current_album_name: playback.album_name.clone(),
+        progress_ms: playback.progress_ms,
+        duration_ms: playback.duration_ms,
+        playback_state: if playback.is_playing {
+            "playing".to_string()
+        } else {
+            "paused".to_string()
+        },
+        is_playing: playback.is_playing,
+        current_volume_percent: Some(playback.volume_percent),
+        current_item_type: playback.item_type.clone(),
+        current_item_id: playback.item_id.clone(),
+        is_current_track_saved,
+        is_shuffle: playback.shuffle_state,
+        granted_scopes,
+        next_track_preview: next_preview_from_cache(spotify, playback.item_id.as_deref()),
+        prev_track_preview: prev_preview_from_history(spotify, playback.item_id.as_deref()),
+        message,
+    })
 }
 
 pub fn disconnect(spotify: &SpotifyState) -> Result<(), String> {
@@ -791,7 +1167,7 @@ pub fn complete_auth_via_callback(spotify: &SpotifyState) -> Result<(), String> 
 
 pub fn toggle_current_track_saved(spotify: &SpotifyState) -> Result<bool, String> {
     ensure_scope(spotify, "user-library-modify")?;
-    let playback = get_current_playback(spotify)?;
+    let playback = get_playback_for_mutation(spotify)?;
     let item_id = playback
         .item_id
         .ok_or_else(|| "Spotify has no current item to save".to_string())?;
@@ -818,7 +1194,7 @@ pub fn set_current_track_saved(
     let (item_id, item_type) = match cached_playback_item_id(spotify) {
         Some(item_id) => (item_id, "track".to_string()),
         None => {
-            let playback = get_current_playback(spotify)?;
+            let playback = get_playback_for_mutation(spotify)?;
             let item_id = playback
                 .item_id
                 .ok_or_else(|| "Spotify has no current item to save".to_string())?;
@@ -857,7 +1233,7 @@ fn apply_track_saved_state(
     match update_track_saved_state(spotify, &client, &access_token, item_id, &item_uri, should_save) {
         Ok(()) => {
             set_saved_track_cache(spotify, item_id, should_save);
-            clear_api_rate_limit(spotify);
+            clear_scope_rate_limit(spotify, RateLimitScope::Library);
             log::info!(
                 "Spotify: current track is now {} the library",
                 if should_save {
@@ -917,7 +1293,7 @@ fn update_track_saved_state(
     track_uri: &str,
     should_save: bool,
 ) -> Result<(), String> {
-    wait_for_api_rate_limit(spotify, Some(SPOTIFY_MAX_RETRY_WAIT));
+    wait_for_scope_rate_limit(spotify, RateLimitScope::Library, Some(SPOTIFY_MAX_RETRY_WAIT));
 
     let response = send_library_update_once(client, access_token, track_uri, should_save)?;
     if response.status().is_success() {
@@ -926,13 +1302,13 @@ fn update_track_saved_state(
 
     let status_code = response.status().as_u16();
     if status_code == 429 {
-        apply_api_rate_limit_from_response(spotify, &response);
+        apply_scope_rate_limit_from_response(spotify, RateLimitScope::Library, &response);
         let _body = response.text().unwrap_or_default();
         log::info!(
             "Spotify library update rate-limited; retrying once after Retry-After for track_id='{}'",
             track_id
         );
-        wait_for_api_rate_limit(spotify, Some(SPOTIFY_MAX_RETRY_WAIT));
+        wait_for_scope_rate_limit(spotify, RateLimitScope::Library, Some(SPOTIFY_MAX_RETRY_WAIT));
 
         let retry = send_library_update_once(client, access_token, track_uri, should_save)?;
         if retry.status().is_success() {
@@ -940,7 +1316,7 @@ fn update_track_saved_state(
         }
         let retry_status = retry.status().as_u16();
         if retry_status == 429 {
-            apply_api_rate_limit_from_response(spotify, &retry);
+            apply_scope_rate_limit_from_response(spotify, RateLimitScope::Library, &retry);
         }
         let retry_body = retry.text().unwrap_or_default();
         return Err(library_update_error(
@@ -1051,7 +1427,7 @@ fn resolve_display_saved_state(
         }
     }
 
-    if !allow_network_fetch || is_api_rate_limited(spotify) {
+    if !allow_network_fetch || is_library_rate_limited(spotify) {
         return stale_cached_saved_track_state(spotify, track_id);
     }
 
@@ -1089,7 +1465,7 @@ fn cached_saved_track_state(
                 < SAVED_TRACK_CACHE_TTL
         })
         .unwrap_or(false);
-    if fresh || is_api_rate_limited(spotify) {
+    if fresh || is_library_rate_limited(spotify) {
         Some(saved)
     } else {
         None
@@ -1118,14 +1494,14 @@ pub fn get_track_saved_state(
         if let Some(saved) = cached_saved_track_state(spotify, &cache, track_id) {
             return Ok(Some(saved));
         }
-        if is_api_rate_limited(spotify) {
+        if is_library_rate_limited(spotify) {
             return Ok(cache
                 .track_id
                 .as_deref()
                 .filter(|id| *id == track_id)
                 .and_then(|_| cache.saved));
         }
-    } else if is_api_rate_limited(spotify) {
+    } else if is_library_rate_limited(spotify) {
         return Ok(stale_cached_saved_track_state(spotify, track_id));
     }
 
@@ -1146,7 +1522,7 @@ pub fn get_track_saved_state(
 }
 
 fn fetch_track_saved_state(spotify: &SpotifyState, track_id: &str) -> Result<Option<bool>, String> {
-    ensure_api_available_for_background(spotify)?;
+    ensure_library_read_available(spotify)?;
 
     let access_token = get_access_token(spotify)?;
     let track_uri = library_track_uri(track_id);
@@ -1164,7 +1540,7 @@ fn fetch_track_saved_state(spotify: &SpotifyState, track_id: &str) -> Result<Opt
     }
 
     let status = response.status();
-    apply_api_rate_limit_from_response(spotify, &response);
+    apply_scope_rate_limit_from_response(spotify, RateLimitScope::Library, &response);
     let body = response.text().unwrap_or_default();
     Err(format!(
         "Spotify saved-track check failed for track_id='{}' track_uri='{}': {} {}",
@@ -1173,7 +1549,7 @@ fn fetch_track_saved_state(spotify: &SpotifyState, track_id: &str) -> Result<Opt
 }
 
 pub fn adjust_volume(spotify: &SpotifyState, delta: i32) -> Result<u8, String> {
-    let playback = get_current_playback(spotify)?;
+    let playback = get_playback_for_mutation(spotify)?;
     let device_id = playback.device_id;
     let current = playback.volume_percent as i32;
     let next_volume = (current + delta).clamp(0, 100) as u8;
@@ -1183,11 +1559,11 @@ pub fn adjust_volume(spotify: &SpotifyState, delta: i32) -> Result<u8, String> {
 pub fn set_volume(spotify: &SpotifyState, volume_percent: u8, device_id: Option<String>) -> Result<u8, String> {
     let device_id = match device_id {
         Some(id) => id,
-        None => get_current_playback(spotify)?.device_id,
+        None => get_playback_for_mutation(spotify)?.device_id,
     };
     let access_token = get_access_token(spotify)?;
 
-    let client = Client::new();
+    let client = spotify_http_client()?;
     let response = client
         .put(SPOTIFY_SET_VOLUME_URL)
         .bearer_auth(access_token)
@@ -1212,9 +1588,9 @@ pub fn set_volume(spotify: &SpotifyState, volume_percent: u8, device_id: Option<
 }
 
 pub fn seek(spotify: &SpotifyState, position_ms: u64) -> Result<(), String> {
-    let playback = get_current_playback(spotify)?;
+    let playback = get_playback_for_mutation(spotify)?;
     let access_token = get_access_token(spotify)?;
-    let client = Client::new();
+    let client = spotify_http_client()?;
     let response = client
         .put(SPOTIFY_SEEK_URL)
         .bearer_auth(access_token)
@@ -1254,17 +1630,34 @@ fn get_current_playback_with_refresh(
         if let Some(cached) = read_playback_cache(spotify, PLAYBACK_CACHE_TTL) {
             return Ok(cached);
         }
-    } else if is_api_rate_limited(spotify) {
-        if let Some(cached) = read_playback_cache(spotify, Duration::from_secs(300)) {
-            return Ok(cached);
+    }
+
+    if !is_playback_read_rate_limited(spotify) {
+        match fetch_current_playback(spotify) {
+            Ok(summary) => return Ok(summary),
+            Err(err) => {
+                if let Some(cached) = read_playback_cache_stale(spotify) {
+                    return Ok(cached);
+                }
+                return Err(err);
+            }
         }
     }
 
-    fetch_current_playback(spotify)
+    read_playback_cache_stale(spotify).ok_or_else(|| {
+        let seconds = scope_rate_limit_wait_remaining(spotify, RateLimitScope::PlaybackRead)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        format!(
+            "{} Retry again in ~{} seconds.",
+            scope_rate_limited_error(RateLimitScope::PlaybackRead),
+            seconds
+        )
+    })
 }
 
 fn fetch_current_playback(spotify: &SpotifyState) -> Result<PlaybackSummary, String> {
-    ensure_api_available_for_background(spotify)?;
+    ensure_playback_read_available(spotify)?;
     let access_token = get_access_token(spotify)?;
     let client = spotify_http_client()?;
     let response = client
@@ -1279,10 +1672,12 @@ fn fetch_current_playback(spotify: &SpotifyState) -> Result<PlaybackSummary, Str
 
     if !response.status().is_success() {
         let status = response.status();
-        apply_api_rate_limit_from_response(spotify, &response);
+        apply_scope_rate_limit_from_response(spotify, RateLimitScope::PlaybackRead, &response);
         let body = response.text().unwrap_or_default();
         return Err(format!("Spotify playback query failed: {} {}", status, body));
     }
+
+    clear_scope_rate_limit(spotify, RateLimitScope::PlaybackRead);
 
     let playback: PlaybackResponse = response.json().map_err(|e| e.to_string())?;
     let device_id = playback
@@ -1319,10 +1714,10 @@ fn fetch_current_playback(spotify: &SpotifyState) -> Result<PlaybackSummary, Str
 }
 
 pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
-    let playback = get_current_playback(spotify)?;
+    let playback = get_playback_for_mutation(spotify)?;
     let next_state = !playback.shuffle_state;
     let access_token = get_access_token(spotify)?;
-    let client = Client::new();
+    let client = spotify_http_client()?;
     let response = client
         .put(SPOTIFY_SHUFFLE_URL)
         .bearer_auth(access_token)
@@ -1338,6 +1733,8 @@ pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
         update_playback_cache_fields(spotify, |summary| {
             summary.shuffle_state = next_state;
         });
+        invalidate_queue_cache(spotify);
+        maybe_refresh_queue_cache(spotify, true);
         Ok(next_state)
     } else {
         let status = response.status();

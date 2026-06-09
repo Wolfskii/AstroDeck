@@ -188,6 +188,14 @@ fn get_spotify_status(
 }
 
 #[tauri::command]
+fn peek_spotify_skip_track(
+    direction: String,
+    state: tauri::State<AppState>,
+) -> Option<spotify::TrackPreview> {
+    spotify::apply_optimistic_skip(&state.spotify, &direction)
+}
+
+#[tauri::command]
 fn set_spotify_volume(
     volume_percent: u8,
     state: tauri::State<AppState>,
@@ -278,6 +286,7 @@ pub fn run() {
             set_active_scene,
             log_to_bus,
             get_spotify_status,
+            peek_spotify_skip_track,
             set_spotify_volume,
             start_spotify_auth,
             disconnect_spotify,

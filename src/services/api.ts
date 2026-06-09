@@ -43,6 +43,16 @@ export async function setActiveScene(sceneId: string): Promise<void> {
   return invoke("set_active_scene", { sceneId });
 }
 
+export interface SpotifyTrackPreview {
+  itemId: string;
+  itemType: string;
+  trackName: string;
+  artistName?: string | null;
+  albumName?: string | null;
+  coverArtUrl?: string | null;
+  durationMs?: number | null;
+}
+
 export interface SpotifyStatus {
   isConfigured: boolean;
   isAuthenticated: boolean;
@@ -62,7 +72,17 @@ export interface SpotifyStatus {
   isCurrentTrackSaved?: boolean | null;
   isShuffle?: boolean;
   grantedScopes?: string[];
+  nextTrackPreview?: SpotifyTrackPreview | null;
+  prevTrackPreview?: SpotifyTrackPreview | null;
   message: string;
+}
+
+export async function peekSpotifySkipTrack(
+  direction: "next" | "prev"
+): Promise<SpotifyTrackPreview | null> {
+  return invoke<SpotifyTrackPreview | null>("peek_spotify_skip_track", {
+    direction,
+  });
 }
 
 export async function getSpotifyStatus(options?: {

@@ -14,9 +14,11 @@
     getPlugins,
     getSpotifyClientConfig,
     getSpotifyStatus,
+    peekSpotifySkipTrack,
     setActiveScene,
     setSpotifyClientId,
   } from "./services/api";
+  import type { SpotifyTrackPreview } from "./services/api";
   import type { SceneState, LayoutConfig, PluginConfig, DeckButtonConfig } from "./types";
   import {
     getBuiltinLayout,
@@ -56,9 +58,14 @@
   let optimisticSpotifyPlaying = $state<boolean | null>(null);
   let spotifyVolumeTarget = $state<number | null>(null);
   let spotifyStatusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let spotifyTransportRefreshTimers: ReturnType<typeof setTimeout>[] = [];
+  let spotifyQueueRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let spotifyQueueRefreshPending = $state(false);
   let spotifyStatusLastRefresh = 0;
   const SPOTIFY_STATUS_MIN_INTERVAL_MS = 5000;
   const SPOTIFY_STATUS_POLL_MS = 30000;
+  /** Spotify restarts the current track on prev when playback is past this point. */
+  const SPOTIFY_PREV_RESTART_THRESHOLD_MS = 3000;
   const SPOTIFY_LOW_PRIORITY_REFRESH_ACTIONS = new Set([
     "spotify.togglePlay",
     "spotify.nextTrack",
@@ -363,6 +370,69 @@
     }
     spotifyBusy = true;
     logBusSocket.send(JSON.stringify({ type: "spotifyDisconnect" }));
+  }
+
+  function clearSpotifyTransportRefreshTimers() {
+    for (const timer of spotifyTransportRefreshTimers) {
+      clearTimeout(timer);
+    }
+    spotifyTransportRefreshTimers = [];
+  }
+
+  function scheduleSpotifyTransportRefresh() {
+    clearSpotifyTransportRefreshTimers();
+    const refresh = () => {
+      if (isTauri) {
+        void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
+      } else {
+        requestSpotifyStatus();
+      }
+    };
+    refresh();
+    for (const delayMs of [1500, 4000]) {
+      spotifyTransportRefreshTimers.push(setTimeout(refresh, delayMs));
+    }
+  }
+
+  function scheduleSpotifyQueueRefresh() {
+    if (spotifyQueueRefreshTimer) clearTimeout(spotifyQueueRefreshTimer);
+    const refresh = () => {
+      if (isTauri) {
+        void refreshSpotifyStatusForDesktop({ immediate: true });
+      } else {
+        requestSpotifyStatus();
+      }
+    };
+    refresh();
+    spotifyQueueRefreshTimer = setTimeout(() => {
+      spotifyQueueRefreshTimer = null;
+      refresh();
+    }, 1500);
+  }
+
+  async function waitForSpotifyQueueRefresh(maxMs = 2500) {
+    const start = Date.now();
+    while (spotifyQueueRefreshPending && Date.now() - start < maxMs) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  function applySpotifyTrackPreview(preview: SpotifyTrackPreview) {
+    optimisticSpotifySaved = null;
+    spotifySeekTargetMs = null;
+    if (!spotifyStatus) return;
+    spotifyStatus = {
+      ...spotifyStatus,
+      currentItemId: preview.itemId,
+      currentItemType: preview.itemType,
+      currentTrackName: preview.trackName,
+      currentArtistName: preview.artistName ?? null,
+      currentAlbumName: preview.albumName ?? null,
+      currentCoverArtUrl: preview.coverArtUrl ?? null,
+      durationMs: preview.durationMs ?? null,
+      progressMs: 0,
+      isCurrentTrackSaved: null,
+    };
   }
 
   async function refreshSpotifyStatusForDesktop(options?: {
@@ -704,7 +774,15 @@
       const detail = (ev as CustomEvent<{ action: string }>).detail;
       if (!detail?.action) return;
       if (detail.action.startsWith("spotify.")) {
-        if (isTauri) {
+        if (detail.action === "spotify.toggleShuffle") {
+          spotifyQueueRefreshPending = false;
+          scheduleSpotifyQueueRefresh();
+        } else if (
+          detail.action === "spotify.nextTrack" ||
+          detail.action === "spotify.prevTrack"
+        ) {
+          scheduleSpotifyTransportRefresh();
+        } else if (isTauri) {
           if (!SPOTIFY_LOW_PRIORITY_REFRESH_ACTIONS.has(detail.action)) {
             void refreshSpotifyStatusForDesktop();
           }
@@ -727,14 +805,87 @@
       if (detail.action === "spotify.toggleShuffle") {
         const nextShuffle = !effectiveSpotifyShuffle;
         optimisticSpotifyShuffle = nextShuffle;
+        spotifyQueueRefreshPending = true;
         if (spotifyStatus) {
-          spotifyStatus = { ...spotifyStatus, isShuffle: nextShuffle };
+          spotifyStatus = {
+            ...spotifyStatus,
+            isShuffle: nextShuffle,
+            nextTrackPreview: null,
+          };
         }
       }
       if (detail.action === "spotify.togglePlay") {
         const playing =
           optimisticSpotifyPlaying ?? spotifyStatus?.isPlaying ?? false;
         optimisticSpotifyPlaying = !playing;
+      }
+      if (detail.action === "spotify.nextTrack") {
+        if (isTauri) {
+          void (async () => {
+            if (spotifyQueueRefreshPending) {
+              await waitForSpotifyQueueRefresh();
+            }
+            const cachedPreview = spotifyStatus?.nextTrackPreview;
+            if (cachedPreview) {
+              applySpotifyTrackPreview(cachedPreview);
+            }
+            try {
+              const preview = await peekSpotifySkipTrack("next");
+              if (preview) {
+                applySpotifyTrackPreview(preview);
+              } else if (!cachedPreview && spotifyStatus) {
+                spotifyStatus = { ...spotifyStatus, progressMs: 0 };
+              }
+            } catch {
+              if (!cachedPreview && spotifyStatus) {
+                spotifyStatus = { ...spotifyStatus, progressMs: 0 };
+              }
+            }
+          })();
+        } else {
+          const cachedPreview = spotifyStatus?.nextTrackPreview;
+          if (cachedPreview) {
+            applySpotifyTrackPreview(cachedPreview);
+          } else if (spotifyStatus) {
+            spotifyStatus = { ...spotifyStatus, progressMs: 0 };
+          }
+        }
+      }
+      if (detail.action === "spotify.prevTrack") {
+        const progressMs =
+          spotifySeekTargetMs ?? spotifyStatus?.progressMs ?? 0;
+        const willSkipToPrevious =
+          progressMs <= SPOTIFY_PREV_RESTART_THRESHOLD_MS;
+
+        if (willSkipToPrevious) {
+          const cachedPreview = spotifyStatus?.prevTrackPreview;
+          if (cachedPreview) {
+            applySpotifyTrackPreview(cachedPreview);
+          }
+          if (isTauri) {
+            void (async () => {
+              try {
+                const preview = await peekSpotifySkipTrack("prev");
+                if (preview) {
+                  applySpotifyTrackPreview(preview);
+                } else if (!cachedPreview && spotifyStatus) {
+                  spotifyStatus = { ...spotifyStatus, progressMs: 0 };
+                }
+              } catch {
+                if (!cachedPreview && spotifyStatus) {
+                  spotifyStatus = { ...spotifyStatus, progressMs: 0 };
+                }
+              }
+            })();
+          } else if (!cachedPreview && spotifyStatus) {
+            spotifyStatus = { ...spotifyStatus, progressMs: 0 };
+          }
+        } else {
+          spotifySeekTargetMs = 0;
+          if (spotifyStatus) {
+            spotifyStatus = { ...spotifyStatus, progressMs: 0 };
+          }
+        }
       }
     };
 
@@ -746,6 +897,7 @@
       }
       if (detail.action === "spotify.toggleShuffle") {
         optimisticSpotifyShuffle = null;
+        spotifyQueueRefreshPending = false;
       }
       if (detail.action === "spotify.togglePlay") {
         optimisticSpotifyPlaying = null;
@@ -840,6 +992,7 @@
       connectLogBus();
 
       return () => {
+        clearSpotifyTransportRefreshTimers();
         if (retryTimer !== null) clearTimeout(retryTimer);
         logBusSocket?.close();
         logBusSocket = null;
@@ -897,6 +1050,7 @@
       });
 
       return () => {
+        clearSpotifyTransportRefreshTimers();
         window.removeEventListener("resize", syncDeckFullscreenState);
         window.removeEventListener("keydown", onEscapeFullscreen, true);
         window.removeEventListener("focus", onWindowFocus);

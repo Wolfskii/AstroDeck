@@ -74,7 +74,10 @@
   let progressHovering = $state(false);
   let progressTrackEl = $state<HTMLElement | null>(null);
   let faderTrackEl = $state<HTMLElement | null>(null);
+  let faderSlotEl = $state<HTMLElement | null>(null);
   let faderDragging = $state(false);
+  const FADER_THUMB_HEIGHT_PX = 78;
+  const FADER_THUMB_HALF_PX = FADER_THUMB_HEIGHT_PX / 2;
   let seekHoldMs = $state<number | null>(null);
   let carBodyBg = $state(DEFAULT_CAR_BACKGROUNDS.body);
   let carFooterBg = $state(DEFAULT_CAR_BACKGROUNDS.footer);
@@ -93,6 +96,9 @@
   const progressAriaValue = $derived(progressInteracting ? scrubMs : playbackDisplayMs);
   const showProgressPreview = $derived(progressInteracting && scrubRatio > playbackRatio);
   const progressPreviewWidth = $derived(Math.max(0, (scrubRatio - playbackRatio) * 100));
+  const faderThumbTop = $derived(
+    `calc(${FADER_THUMB_HALF_PX}px + ${(100 - localVolume) / 100} * (100% - ${FADER_THUMB_HEIGHT_PX}px))`
+  );
 
   $effect(() => {
     if (faderDragging || volumeBusy) return;
@@ -136,9 +142,11 @@
   }
 
   function volumeFromClientY(clientY: number): number {
-    if (!faderTrackEl) return localVolume;
-    const rect = faderTrackEl.getBoundingClientRect();
-    const ratio = 1 - Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+    if (!faderSlotEl) return localVolume;
+    const rect = faderSlotEl.getBoundingClientRect();
+    const travel = Math.max(1, rect.height - FADER_THUMB_HEIGHT_PX);
+    const y = clientY - rect.top - FADER_THUMB_HALF_PX;
+    const ratio = 1 - Math.min(1, Math.max(0, y / travel));
     return Math.round(ratio * 100);
   }
 
@@ -440,11 +448,16 @@
   {#if volumeAction}
     <aside class="car-fader" aria-label="Volume">
       <div class="car-volume-display" aria-hidden="true">
-        <span class="car-volume-led">{localVolume}</span>
+        <span
+          class="car-volume-led"
+          class:car-volume-led-triple={localVolume >= 100}
+        >{localVolume}</span>
       </div>
       <div
         class="car-fader-track"
-        class:car-fader-disabled={volumeBusy || !volumeEnabled}
+        class:car-fader-locked={volumeBusy}
+        class:car-fader-disabled={!volumeEnabled}
+        class:car-fader-dragging={faderDragging}
         bind:this={faderTrackEl}
         role="slider"
         tabindex="0"
@@ -468,16 +481,16 @@
           {/each}
         </div>
         <div class="car-fader-rail">
-          <div class="car-fader-cap car-fader-cap-top"></div>
-          <div class="car-fader-slot">
+          <div class="car-fader-slot" bind:this={faderSlotEl}>
+            <div class="car-fader-track-line" aria-hidden="true"></div>
             <div
               class="car-fader-thumb"
-              style={`top: ${100 - localVolume}%`}
+              style={`top: ${faderThumbTop}`}
+              aria-hidden="true"
             >
               <span class="car-fader-thumb-line"></span>
             </div>
           </div>
-          <div class="car-fader-cap car-fader-cap-bottom"></div>
         </div>
         <div class="car-fader-scale car-fader-scale-right">
           {#each Array(21) as _, i}
@@ -743,7 +756,7 @@
   }
 
   .car-controls {
-    grid-column: 1;
+    grid-column: 1 / -1;
     grid-row: 3;
     flex-shrink: 0;
     padding: 12px 24px max(20px, env(safe-area-inset-bottom, 0px));
@@ -826,9 +839,10 @@
 
   .car-volume-display {
     flex-shrink: 0;
-    width: calc(100% - 12px);
-    padding: 16px 18px 18px;
-    margin: 4px 6px 20px;
+    width: calc(100% - 8px);
+    padding: 12px 6px 14px;
+    margin: 4px 4px 28px;
+    overflow: hidden;
     background: linear-gradient(180deg, #050505 0%, #0a0a0a 100%);
     border: 2px solid #1a1a1a;
     border-radius: 4px;
@@ -843,35 +857,53 @@
 
   .car-volume-led {
     font-family: "DSEG7 Classic", "Courier New", monospace;
-    font-size: 2.35rem;
+    font-size: 1.22rem;
     font-weight: 400;
-    line-height: 1;
-    letter-spacing: 0.08em;
+    line-height: 1.2;
     color: #ff1a1a;
     text-shadow:
       0 0 4px rgba(255, 30, 30, 0.95),
       0 0 12px rgba(255, 20, 20, 0.75),
       0 0 24px rgba(255, 0, 0, 0.45);
+    display: block;
+    width: 100%;
+    text-align: center;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .car-volume-led-triple {
+    letter-spacing: -0.03em;
+    transform: translateX(-0.2em);
   }
 
   .car-fader-track {
+    --fader-thumb-half: 39px;
     flex: 1 1 auto;
     width: 100%;
     min-height: 0;
     max-height: none;
+    margin: 8px 0 32px;
     display: grid;
     grid-template-columns: 14px 1fr 14px;
     gap: 6px;
     align-items: stretch;
-    cursor: ns-resize;
+    cursor: pointer;
     touch-action: none;
     user-select: none;
   }
 
+  .car-fader-track.car-fader-disabled,
+  .car-fader-track.car-fader-locked {
+    pointer-events: none;
+  }
+
   .car-fader-track.car-fader-disabled {
     opacity: 0.45;
-    pointer-events: none;
+  }
+
+  .car-fader-track.car-fader-locked {
+    cursor: default;
   }
 
   .car-fader-scale {
@@ -879,7 +911,10 @@
     flex-direction: column;
     justify-content: space-between;
     align-items: flex-end;
-    padding: 2px 0;
+    height: 100%;
+    box-sizing: border-box;
+    padding-top: var(--fader-thumb-half);
+    padding-bottom: var(--fader-thumb-half);
   }
 
   .car-fader-scale-right {
@@ -888,45 +923,48 @@
 
   .car-fader-tick {
     display: block;
-    width: 6px;
+    width: 5px;
     height: 1px;
-    background: #555;
+    background: rgba(255, 255, 255, 0.14);
   }
 
   .car-fader-tick-mid {
-    width: 10px;
-    background: #777;
+    width: 8px;
+    background: rgba(255, 255, 255, 0.22);
   }
 
   .car-fader-tick-long {
-    width: 14px;
-    background: #999;
+    width: 11px;
+    background: rgba(255, 255, 255, 0.3);
   }
 
   .car-fader-rail {
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: stretch;
     min-height: 0;
-  }
-
-  .car-fader-cap {
-    width: 42px;
-    height: 10px;
-    background: linear-gradient(180deg, #2a2a2a, #1a1a1a);
-    border: 1px solid #333;
-    border-radius: 2px;
-    flex-shrink: 0;
+    height: 100%;
   }
 
   .car-fader-slot {
     position: relative;
     flex: 1;
-    width: 42px;
+    width: 51px;
     min-height: 120px;
-    background: linear-gradient(180deg, #111 0%, #0a0a0a 50%, #111 100%);
-    border-left: 1px solid #222;
-    border-right: 1px solid #222;
+    background: transparent;
+  }
+
+  .car-fader-track-line {
+    position: absolute;
+    top: var(--fader-thumb-half);
+    bottom: var(--fader-thumb-half);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 20px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.16);
+    pointer-events: none;
   }
 
   .car-fader-thumb {
@@ -935,24 +973,29 @@
     width: 51px;
     height: 78px;
     transform: translate(-50%, -50%);
-    background: linear-gradient(180deg, #3a3a3a 0%, #252525 45%, #1a1a1a 100%);
-    border: 1px solid #444;
-    border-radius: 4px;
-    box-shadow:
-      0 2px 6px rgba(0, 0, 0, 0.55),
-      inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    background: #424242;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.38);
     display: flex;
     align-items: center;
     justify-content: center;
     pointer-events: none;
+    transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.12s ease;
   }
 
   .car-fader-thumb-line {
     display: block;
-    width: 80%;
+    width: 72%;
     height: 2px;
     background: #fff;
     border-radius: 1px;
-    box-shadow: 0 0 4px rgba(255, 255, 255, 0.35);
+    opacity: 0.92;
+  }
+
+  .car-fader-track.car-fader-dragging .car-fader-thumb {
+    background: #4a4a4a;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.42);
+    transform: translate(-50%, -50%) scale(1.02);
   }
 </style>
