@@ -2,7 +2,7 @@
  * WebSocket client stub for future mobile companion support.
  *
  * When implemented, this module will:
- * - Connect to the TapTapDeck backend WS server
+ * - Connect to the AstroDeck backend WS server
  * - Receive scene state updates
  * - Forward button actions from remote clients
  */

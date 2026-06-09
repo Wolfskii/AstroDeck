@@ -1877,7 +1877,7 @@ fn random_string(length: usize) -> String {
 
 fn write_html_response(stream: &mut std::net::TcpStream, success: bool, message: &str) -> Result<(), String> {
     let body = format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>TapTapDeck Spotify</title></head><body style=\"font-family: sans-serif; background:#0b1020; color:#f8fafc; padding:32px;\"><h1>{}</h1><p>{}</p></body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>AstroDeck Spotify</title></head><body style=\"font-family: sans-serif; background:#0b1020; color:#f8fafc; padding:32px;\"><h1>{}</h1><p>{}</p></body></html>",
         if success { "Spotify Connected" } else { "Spotify Authorization Error" },
         message
     );

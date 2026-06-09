@@ -8,7 +8,7 @@
 
 <div class="mode-container">
   <header class="mode-header">
-    <h2>TapTapDeck</h2>
+    <h2>AstroDeck</h2>
     <span class="mode-badge">Default</span>
   </header>
   <DeckGrid grid={layout.grid} buttons={layout.buttons} />

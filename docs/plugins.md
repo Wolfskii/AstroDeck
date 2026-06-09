@@ -4,10 +4,10 @@ Plugins define scenes, triggers, buttons, optional scene templates, and executab
 
 ## Plugin Locations
 
-TapTapDeck loads plugins from two places at startup:
+AstroDeck loads plugins from two places at startup:
 
 - Built-in plugins from the repo `plugins/` folder in dev and the bundled `plugins/` resources in packaged builds.
-- User plugins from `~/TapTapDeck/plugins/`.
+- User plugins from `~/AstroDeck/plugins/`.
 
 If a user plugin has the same `id` as a built-in plugin, the user plugin overrides the built-in one.
 
@@ -116,11 +116,11 @@ See [layouts.md](layouts.md) for details.
 
 ## Creating A Plugin
 
-1. Create a folder under either built-in `plugins/` or external `~/TapTapDeck/plugins/`.
+1. Create a folder under either built-in `plugins/` or external `~/AstroDeck/plugins/`.
 2. Add `plugin.json`.
 3. Add optional local images in the same folder.
 4. Define triggers and either legacy `action` strings or declarative `actionSpec`.
-5. Restart TapTapDeck.
+5. Restart AstroDeck.
 
 ## Notes
 

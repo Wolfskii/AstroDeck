@@ -1,5 +1,6 @@
 <script lang="ts">
   import "@fontsource/dseg7-classic/400.css";
+  import appIconUrl from "../assets/app-icon.png";
   import type { DeckButtonConfig } from "../types";
   import { executeAction, executeActionValue } from "../services/api";
   import { logError } from "../services/logger";
@@ -250,7 +251,7 @@
   async function runTransportAction(action: string, label: string, value?: unknown) {
     try {
       window.dispatchEvent(
-        new CustomEvent("taptapdeck-action-started", { detail: { action, label } })
+        new CustomEvent("astrodeck-action-started", { detail: { action, label } })
       );
       if (value !== undefined) {
         await executeActionValue(action, value);
@@ -258,11 +259,11 @@
         await executeAction(action);
       }
       window.dispatchEvent(
-        new CustomEvent("taptapdeck-action-executed", { detail: { action, label } })
+        new CustomEvent("astrodeck-action-executed", { detail: { action, label } })
       );
     } catch (e) {
       window.dispatchEvent(
-        new CustomEvent("taptapdeck-action-failed", {
+        new CustomEvent("astrodeck-action-failed", {
           detail: { action, label, error: String(e) },
         })
       );
@@ -286,15 +287,15 @@
     class="car-thing-body"
     class:car-thing-body--fs={showFullscreenToggle && onToggleFullscreen && !presentationFullscreen}
   >
-    {#if showFullscreenToggle && onToggleFullscreen && !presentationFullscreen}
+    {#if showFullscreenToggle && onToggleFullscreen}
       <button
         type="button"
         class="car-fullscreen-btn"
-        title="Fullscreen on this display (Esc to exit)"
-        aria-label="Enter fullscreen"
+        title={presentationFullscreen ? "Exit fullscreen (F11, Esc)" : "Fullscreen on this display (F11)"}
+        aria-label={presentationFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
         onclick={() => onToggleFullscreen()}
       >
-        ⛶
+        <img class="car-app-icon" src={appIconUrl} alt="" aria-hidden="true" />
       </button>
     {/if}
 
@@ -545,17 +546,24 @@
     top: 8px;
     left: 12px;
     z-index: 2;
-    padding: 6px;
+    padding: 4px;
     border: none;
+    border-radius: 12px;
     background: transparent;
-    font-size: 3.3rem;
-    line-height: 1;
-    color: rgba(255, 255, 255, 0.75);
+    line-height: 0;
     cursor: pointer;
   }
 
   .car-fullscreen-btn:hover {
-    color: rgba(255, 255, 255, 0.95);
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .car-app-icon {
+    display: block;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    object-fit: cover;
   }
 
   .car-now-playing {

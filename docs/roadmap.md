@@ -1,4 +1,4 @@
-# TapTapDeck Roadmap
+# AstroDeck Roadmap
 
 ## Phase 1: Local Deck Foundation (Current)
 

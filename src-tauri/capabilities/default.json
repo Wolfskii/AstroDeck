@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/templates/tauri_capabilities_schema.json",
   "identifier": "default",
-  "description": "Default capability set for TapTapDeck",
+  "description": "Default capability set for AstroDeck",
   "windows": ["main"],
   "permissions": [
     "core:tray:default",

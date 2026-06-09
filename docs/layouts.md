@@ -1,6 +1,6 @@
 # Layouts
 
-TapTapDeck now supports both generic grid layouts and template-driven scene layouts.
+AstroDeck now supports both generic grid layouts and template-driven scene layouts.
 
 ## Grid Layout
 

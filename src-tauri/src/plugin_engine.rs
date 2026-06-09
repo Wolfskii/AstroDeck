@@ -154,7 +154,7 @@ fn builtin_plugins_dir(app_handle: &tauri::AppHandle) -> PathBuf {
 
 fn external_plugins_dir(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
     let home_dir = app_handle.path().home_dir().ok()?;
-    let dir = home_dir.join("TapTapDeck").join("plugins");
+    let dir = home_dir.join("AstroDeck").join("plugins");
     if let Err(err) = fs::create_dir_all(&dir) {
         log::warn!("Could not create external plugins directory {:?}: {}", dir, err);
         return None;

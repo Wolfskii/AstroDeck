@@ -1,12 +1,12 @@
 ## Learned User Preferences
-- Prefers TapTapDeck to run as a tray-first desktop app on Windows, starting hidden with a system tray icon and keeping the main window out of the browser.
-- Wants the TapTapDeck control window to use native OS window chrome for normal use (not a custom draggable frame); closing hides to the tray instead of exiting. Optional in-app fullscreen hides the native titlebar on the active display; Esc exits fullscreen.
+- Prefers AstroDeck to run as a tray-first desktop app on Windows, starting hidden with a system tray icon and keeping the main window out of the browser.
+- Wants the AstroDeck control window to use native OS window chrome for normal use (not a custom draggable frame); closing hides to the tray instead of exiting. Optional in-app fullscreen hides the native titlebar on the active display; Esc exits fullscreen.
 - Expects tray interactions to be intuitive: left-click should show the main window if hidden, and right-click should expose only minimal app controls.
 - Prefers `http://localhost:1420/` for browser-side debugging with live logs from the running app, with primary settings in the main window (deck/settings toggle and tray) rather than a second Tauri settings webview (that path was unstable: blank window / hung app).
 - Uses `task dev` and Taskfile-based commands to run and manage the project locally.
 
 ## Learned Workspace Facts
-- TapTapDeck is implemented as a Tauri 2 + Rust backend with a Svelte 5 + TypeScript + Vite frontend in this repository.
+- AstroDeck is implemented as a Tauri 2 + Rust backend with a Svelte 5 + TypeScript + Vite frontend in this repository.
 - The project uses a JSON-based plugin system in the `plugins/` directory (e.g., Teams, Spotify, VS Code, default) to define scenes, triggers, layouts, and actions.
 - The app uses a detection pipeline (sysinfo-based detectors → mode/scene engine → layout engine → plugin configs → Svelte UI) to pick the active scene at runtime.
 - The browser at `http://localhost:1420/` attaches to the shared live log bus and carries browser-side debug controls; the main desktop window hosts the deck UI and in-app settings.

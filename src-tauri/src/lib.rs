@@ -256,7 +256,7 @@ fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     // Use the same app URL as the main window; in dev this is mapped to the Vite dev server
     // via `build.devUrl` in `tauri.conf.json`.
     tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App("index.html".into()))
-    .title("TapTapDeck Settings")
+    .title("AstroDeck Settings")
     .inner_size(900.0, 700.0)
     .resizable(true)
     .build()
@@ -323,5 +323,5 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error running TapTapDeck");
+        .expect("error running AstroDeck");
 }

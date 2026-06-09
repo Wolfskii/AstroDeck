@@ -9,7 +9,7 @@ tasks:
       - npm install
 
   dev:
-    desc: Run TapTapDeck in development mode (Vite + Tauri)
+    desc: Run AstroDeck in development mode (Vite + Tauri)
     cmds:
       - npx tauri dev
 

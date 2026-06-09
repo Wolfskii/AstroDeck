@@ -8,7 +8,7 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 const tauriDir = path.join(rootDir, "src-tauri");
 const artifactsRoot = path.join(rootDir, ".artifacts");
-const dockerLinuxImage = "taptapdeck-linux-builder:latest";
+const dockerLinuxImage = "astrodeck-linux-builder:latest";
 
 const hostPlatformMap = {
   win32: "windows",
@@ -122,7 +122,7 @@ function copyArtifacts(sourceDir, platform, target) {
 }
 
 function ensureDependenciesInstalled() {
-  const inDocker = process.env.TAPTAPDECK_IN_DOCKER === "1";
+  const inDocker = process.env.ASTRODECK_IN_DOCKER === "1";
   const nodeModulesDir = path.join(rootDir, "node_modules");
   const viteExists = existsSync(path.join(nodeModulesDir, ".bin", "vite"));
 
@@ -182,11 +182,11 @@ function buildLinuxViaDocker(platform, target) {
     "-v",
     `${rootDir}:/workspace`,
     "-v",
-    "taptapdeck-node-modules:/workspace/node_modules",
+    "astrodeck-node-modules:/workspace/node_modules",
     "-w",
     "/workspace",
     "-e",
-    "TAPTAPDECK_IN_DOCKER=1",
+    "ASTRODECK_IN_DOCKER=1",
     dockerLinuxImage,
     "node",
     "scripts/package-app.mjs",
@@ -221,7 +221,7 @@ function main() {
   if (
     platform === "linux" &&
     hostPlatform !== "linux" &&
-    process.env.TAPTAPDECK_IN_DOCKER !== "1"
+    process.env.ASTRODECK_IN_DOCKER !== "1"
   ) {
     buildLinuxViaDocker(platform, resolvedTarget);
     return;

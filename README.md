@@ -1,4 +1,8 @@
-# TapTapDeck
+<p align="center">
+  <img src="app-icon.png" alt="AstroDeck" width="128" />
+</p>
+
+# AstroDeck
 
 A context-aware control deck for touchscreen monitors. Dynamically changes its UI depending on which applications are running.
 
@@ -27,7 +31,7 @@ A context-aware control deck for touchscreen monitors. Dynamically changes its U
 
 ```bash
 git clone <repository-url>
-cd Tap-Tap-Deck
+cd AstroDeck
 npm install
 cp .env.example .env
 npx tauri dev
@@ -41,7 +45,7 @@ task install && task dev
 
 ## Packaging
 
-TapTapDeck can now build native production packages through the Taskfile or npm scripts.
+AstroDeck can now build native production packages through the Taskfile or npm scripts.
 
 ### Default Host Build
 
@@ -95,7 +99,7 @@ npm run package:linux
 ## Project Structure
 
 ```
-Tap-Tap-Deck/
+AstroDeck/
 ├── src/              # Svelte frontend (modes, layouts, components)
 ├── src-tauri/        # Rust backend (detectors, actions, layout engine)
 ├── plugins/          # Built-in plugin folders and manifests

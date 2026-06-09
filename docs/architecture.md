@@ -1,8 +1,8 @@
-# TapTapDeck Architecture
+# AstroDeck Architecture
 
 ## Overview
 
-TapTapDeck is a context-aware control deck: a cross-platform desktop app that dynamically changes its UI based on which applications are running. Built with **Tauri 2** (Rust backend) and **Svelte 5** (TypeScript frontend).
+AstroDeck is a context-aware control deck: a cross-platform desktop app that dynamically changes its UI based on which applications are running. Built with **Tauri 2** (Rust backend) and **Svelte 5** (TypeScript frontend).
 
 ## High-Level System Architecture
 
@@ -47,7 +47,7 @@ flowchart LR
 | `src/` | Frontend: Svelte 5, Vite, TypeScript |
 | `src-tauri/` | Backend: Rust, Tauri 2 |
 | `plugins/` | Built-in plugin folders and legacy flat manifests |
-| `~/TapTapDeck/plugins/` | External user plugin folders loaded at runtime |
+| `~/AstroDeck/plugins/` | External user plugin folders loaded at runtime |
 
 ## Frontend Stack
 

@@ -1,4 +1,4 @@
-# TapTapDeck - AI Skills Reference
+# AstroDeck - AI Skills Reference
 
 ## Extending Subsystems
 

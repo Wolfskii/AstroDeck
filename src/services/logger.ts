@@ -42,9 +42,9 @@ function push(level: LogLevel, message: string, source: string) {
 
   const prefix = `[${source}]`;
   if (level === "error") {
-    console.error("[TapTapDeck]", prefix, message);
+    console.error("[AstroDeck]", prefix, message);
   } else {
-    console.log("[TapTapDeck]", prefix, message);
+    console.log("[AstroDeck]", prefix, message);
   }
 }
 

@@ -17,13 +17,13 @@
     pressed = true;
     try {
       window.dispatchEvent(
-        new CustomEvent("taptapdeck-action-started", {
+        new CustomEvent("astrodeck-action-started", {
           detail: { action, label },
         })
       );
       if (action.startsWith("core.")) {
         window.dispatchEvent(
-          new CustomEvent("taptapdeck-core-action", {
+          new CustomEvent("astrodeck-core-action", {
             detail: { action, label },
           })
         );
@@ -31,13 +31,13 @@
       logInfo(`Clicked ${label} (${action})`, source);
       await executeAction(action);
       window.dispatchEvent(
-        new CustomEvent("taptapdeck-action-executed", {
+        new CustomEvent("astrodeck-action-executed", {
           detail: { action, label },
         })
       );
     } catch (e) {
       window.dispatchEvent(
-        new CustomEvent("taptapdeck-action-failed", {
+        new CustomEvent("astrodeck-action-failed", {
           detail: { action, label, error: String(e) },
         })
       );

@@ -1,8 +1,8 @@
 [package]
-name = "taptapdeck"
+name = "astrodeck"
 version = "0.1.0"
 description = "Context-aware control deck for touchscreen monitors"
-authors = ["TapTapDeck Contributors"]
+authors = ["AstroDeck Contributors"]
 edition = "2021"
 
 [lib]

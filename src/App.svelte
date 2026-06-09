@@ -8,6 +8,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import DeckGrid from "./components/DeckGrid.svelte";
   import MediaPlayerView from "./components/MediaPlayerView.svelte";
+  import appIconUrl from "./assets/app-icon.png";
   import {
     executeActionValue,
     getActiveScene,
@@ -252,13 +253,13 @@
       icon = "🔴";
       text = "disconnected";
     }
-    document.title = `TapTapDeck - Debug panel ${icon} ${text}`;
+    document.title = `AstroDeck - Debug panel ${icon} ${text}`;
   }
 
   function loadSeenScenes() {
     if (typeof window === "undefined") return;
     try {
-      const raw = window.localStorage.getItem("taptapdeck:seenScenes");
+      const raw = window.localStorage.getItem("astrodeck:seenScenes");
       if (!raw) return;
       const parsed = JSON.parse(raw) as string[];
       if (Array.isArray(parsed)) {
@@ -272,7 +273,7 @@
   function persistSeenScenes() {
     if (typeof window === "undefined") return;
     try {
-      window.localStorage.setItem("taptapdeck:seenScenes", JSON.stringify(seenScenes));
+      window.localStorage.setItem("astrodeck:seenScenes", JSON.stringify(seenScenes));
     } catch {
       // ignore storage errors
     }
@@ -603,22 +604,22 @@
         items: [
           {
             id: "toggle",
-            text: "Show TapTapDeck",
+            text: "Show AstroDeck",
             action: async () => {
               const visible = await win.isVisible();
               if (visible) {
                 await win.hide();
-                logInfo("Hid TapTapDeck window from tray menu", "Tray");
+                logInfo("Hid AstroDeck window from tray menu", "Tray");
                 const item = await trayMenu?.get("toggle");
-                if (item) await item.setText("Show TapTapDeck");
+                if (item) await item.setText("Show AstroDeck");
               } else {
                 viewMode = "deck";
                 await win.show();
                 await win.unminimize();
                 await win.setFocus();
-                logInfo("Showed TapTapDeck window from tray menu", "Tray");
+                logInfo("Showed AstroDeck window from tray menu", "Tray");
                 const item = await trayMenu?.get("toggle");
-                if (item) await item.setText("Hide TapTapDeck");
+                if (item) await item.setText("Hide AstroDeck");
               }
             },
           },
@@ -632,13 +633,13 @@
               await win.unminimize();
               await win.setFocus();
               const item = await trayMenu?.get("toggle");
-              if (item) await item.setText("Hide TapTapDeck");
+              if (item) await item.setText("Hide AstroDeck");
             },
           },
           { item: "Separator" },
           {
             id: "quit",
-            text: "Quit TapTapDeck",
+            text: "Quit AstroDeck",
             action: async () => {
               logInfo("Quit requested from tray menu", "Tray");
               await invoke("quit_app");
@@ -663,7 +664,7 @@
               await win.setFocus();
               logInfo("Tray icon clicked: showing window", "Tray");
               const item = await trayMenu?.get("toggle");
-              if (item) await item.setText("Hide TapTapDeck");
+              if (item) await item.setText("Hide AstroDeck");
             }
           }
         },
@@ -904,10 +905,10 @@
       }
     };
 
-    window.addEventListener("taptapdeck-core-action", handleCoreAction as EventListener);
-    window.addEventListener("taptapdeck-action-started", handleActionStarted as EventListener);
-    window.addEventListener("taptapdeck-action-executed", handleActionExecuted as EventListener);
-    window.addEventListener("taptapdeck-action-failed", handleActionFailed as EventListener);
+    window.addEventListener("astrodeck-core-action", handleCoreAction as EventListener);
+    window.addEventListener("astrodeck-action-started", handleActionStarted as EventListener);
+    window.addEventListener("astrodeck-action-executed", handleActionExecuted as EventListener);
+    window.addEventListener("astrodeck-action-failed", handleActionFailed as EventListener);
 
     if (!isTauri) {
       // Browser debug mode: start with a static default layout and settings view.
@@ -933,7 +934,7 @@
         logBusSocket.onopen = () => {
           logStatus = "connected";
           updateDebugTitle();
-          logInfo("Connected to TapTapDeck log bus", "Browser");
+          logInfo("Connected to AstroDeck log bus", "Browser");
           spotifyBusy = false;
           requestPlugins();
           requestSpotifyStatus();
@@ -996,10 +997,10 @@
         if (retryTimer !== null) clearTimeout(retryTimer);
         logBusSocket?.close();
         logBusSocket = null;
-        window.removeEventListener("taptapdeck-core-action", handleCoreAction as EventListener);
-        window.removeEventListener("taptapdeck-action-started", handleActionStarted as EventListener);
-        window.removeEventListener("taptapdeck-action-executed", handleActionExecuted as EventListener);
-        window.removeEventListener("taptapdeck-action-failed", handleActionFailed as EventListener);
+        window.removeEventListener("astrodeck-core-action", handleCoreAction as EventListener);
+        window.removeEventListener("astrodeck-action-started", handleActionStarted as EventListener);
+        window.removeEventListener("astrodeck-action-executed", handleActionExecuted as EventListener);
+        window.removeEventListener("astrodeck-action-failed", handleActionFailed as EventListener);
       };
     }
 
@@ -1012,7 +1013,12 @@
       void syncDeckFullscreenState();
       window.addEventListener("resize", syncDeckFullscreenState);
 
-      const onEscapeFullscreen = (ev: KeyboardEvent) => {
+      const onDeckPresentationKeydown = (ev: KeyboardEvent) => {
+        if (ev.key === "F11") {
+          ev.preventDefault();
+          void toggleDeckPresentationFullscreen();
+          return;
+        }
         if (ev.key !== "Escape") return;
         void (async () => {
           try {
@@ -1024,7 +1030,7 @@
           }
         })();
       };
-      window.addEventListener("keydown", onEscapeFullscreen, true);
+      window.addEventListener("keydown", onDeckPresentationKeydown, true);
 
       refreshScene();
       refreshPluginsForDesktop();
@@ -1052,13 +1058,13 @@
       return () => {
         clearSpotifyTransportRefreshTimers();
         window.removeEventListener("resize", syncDeckFullscreenState);
-        window.removeEventListener("keydown", onEscapeFullscreen, true);
+        window.removeEventListener("keydown", onDeckPresentationKeydown, true);
         window.removeEventListener("focus", onWindowFocus);
         unlisten.then((fn) => fn());
-        window.removeEventListener("taptapdeck-core-action", handleCoreAction as EventListener);
-        window.removeEventListener("taptapdeck-action-started", handleActionStarted as EventListener);
-        window.removeEventListener("taptapdeck-action-executed", handleActionExecuted as EventListener);
-        window.removeEventListener("taptapdeck-action-failed", handleActionFailed as EventListener);
+        window.removeEventListener("astrodeck-core-action", handleCoreAction as EventListener);
+        window.removeEventListener("astrodeck-action-started", handleActionStarted as EventListener);
+        window.removeEventListener("astrodeck-action-executed", handleActionExecuted as EventListener);
+        window.removeEventListener("astrodeck-action-failed", handleActionFailed as EventListener);
       };
     }
   });
@@ -1068,7 +1074,7 @@
   {#if !isMediaDeckView}
     <header class="app-header">
       <div class="app-header-left">
-        <h1 class="app-title">TapTapDeck</h1>
+        <h1 class="app-title">AstroDeck</h1>
         {#if isTauri && viewMode === "settings"}
           <button type="button" class="back-to-deck" onclick={() => (viewMode = "deck")}>
             ← Back to deck
@@ -1081,11 +1087,11 @@
         <button
           type="button"
           class="header-fullscreen-btn"
-          title={deckPresentationFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen on this display"}
+          title={deckPresentationFullscreen ? "Exit fullscreen (F11, Esc)" : "Fullscreen on this display (F11)"}
           aria-label={deckPresentationFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
           onclick={() => toggleDeckPresentationFullscreen()}
         >
-          {deckPresentationFullscreen ? "⤡" : "⛶ Fullscreen"}
+          <img class="header-app-icon" src={appIconUrl} alt="" aria-hidden="true" />
         </button>
       {/if}
     </header>
@@ -1095,7 +1101,7 @@
     {#if isSettingsWindow}
       <div class="settings-root">
         <section class="settings-section">
-          <h2>TapTapDeck Settings</h2>
+          <h2>AstroDeck Settings</h2>
           <div class="settings-block spotify-block">
             <div class="spotify-header">
               <div>
@@ -1361,9 +1367,9 @@
             currentMediaView.seekAction
               ? commitSceneSeek(currentMediaView.seekAction, positionMs)
               : Promise.resolve()}
-          showFullscreenToggle={isTauri && !deckPresentationFullscreen}
+          showFullscreenToggle={isTauri}
           presentationFullscreen={deckPresentationFullscreen}
-          onToggleFullscreen={enterDeckPresentationFullscreen}
+          onToggleFullscreen={toggleDeckPresentationFullscreen}
         />
       {:else if displayedLayout}
         <DeckGrid
@@ -1458,32 +1464,24 @@
 
   .header-fullscreen-btn {
     flex-shrink: 0;
-    padding: 8px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font-size: 0.85rem;
-    font-weight: 600;
+    padding: 4px;
+    border-radius: 10px;
+    border: none;
+    background: transparent;
     cursor: pointer;
+    line-height: 0;
   }
 
   .header-fullscreen-btn:hover {
-    background: var(--bg-secondary);
+    background: rgba(255, 255, 255, 0.08);
   }
 
-  .header-fullscreen-btn-icon {
-    padding: 4px;
-    border: none;
-    background: transparent;
-    font-size: 1.65rem;
-    line-height: 1;
-    color: rgba(255, 255, 255, 0.75);
-  }
-
-  .header-fullscreen-btn-icon:hover {
-    background: transparent;
-    color: rgba(255, 255, 255, 0.95);
+  .header-app-icon {
+    display: block;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    object-fit: cover;
   }
 
   .app-title {
