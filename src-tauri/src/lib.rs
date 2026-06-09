@@ -4,6 +4,7 @@ mod layout_engine;
 mod mode_engine;
 mod plugin_engine;
 mod spotify;
+mod updater;
 mod websocket;
 
 use std::collections::HashMap;
@@ -294,6 +295,9 @@ pub fn run() {
             set_spotify_client_id,
             open_settings_window,
             quit_app,
+            updater::get_app_version,
+            updater::check_for_app_update,
+            updater::download_and_install_update,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

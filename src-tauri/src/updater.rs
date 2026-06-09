@@ -1,0 +1,350 @@
+use serde::Serialize;
+use std::path::{Path, PathBuf};
+
+const GITHUB_REPO: &str = "Wolfskii/AstroDeck";
+const USER_AGENT: &str = "AstroDeck-Updater";
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateInfo {
+    pub available: bool,
+    pub current_version: String,
+    pub latest_version: Option<String>,
+    pub release_name: Option<String>,
+    pub release_notes: Option<String>,
+    pub release_url: Option<String>,
+    pub download_url: Option<String>,
+    pub installer_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    name: String,
+    body: Option<String>,
+    html_url: String,
+    prerelease: bool,
+    draft: bool,
+    assets: Vec<GitHubReleaseAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubReleaseAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+use serde::Deserialize;
+
+pub fn current_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
+pub fn get_app_version() -> String {
+    current_app_version()
+}
+
+fn empty_update_info() -> AppUpdateInfo {
+    AppUpdateInfo {
+        available: false,
+        current_version: current_app_version(),
+        latest_version: None,
+        release_name: None,
+        release_notes: None,
+        release_url: None,
+        download_url: None,
+        installer_name: None,
+    }
+}
+
+#[tauri::command]
+pub fn check_for_app_update() -> Result<AppUpdateInfo, String> {
+    if cfg!(debug_assertions) {
+        return Ok(empty_update_info());
+    }
+
+    let current = current_app_version();
+    let client = http_client()?;
+    let releases = fetch_recent_releases(&client)?;
+    let candidate = pick_release_candidate(&releases, &current);
+
+    let Some(release) = candidate else {
+        return Ok(AppUpdateInfo {
+            available: false,
+            current_version: current,
+            latest_version: None,
+            release_name: None,
+            release_notes: None,
+            release_url: None,
+            download_url: None,
+            installer_name: None,
+        });
+    };
+
+    let (installer_name, download_url) = match pick_installer_asset(&release.assets) {
+        Some(asset) => (Some(asset.name.clone()), Some(asset.browser_download_url.clone())),
+        None => (None, None),
+    };
+
+    Ok(AppUpdateInfo {
+        available: download_url.is_some(),
+        current_version: current,
+        latest_version: Some(normalize_tag_version(&release.tag_name)),
+        release_name: Some(release.name.clone()),
+        release_notes: release.body.clone(),
+        release_url: Some(release.html_url.clone()),
+        download_url,
+        installer_name,
+    })
+}
+
+#[tauri::command]
+pub fn download_and_install_update(download_url: String, app: tauri::AppHandle) -> Result<(), String> {
+    let client = http_client()?;
+    let installer_path = download_installer(&client, &download_url)?;
+    launch_installer(&installer_path)?;
+    app.exit(0);
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
+fn http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn fetch_recent_releases(client: &reqwest::blocking::Client) -> Result<Vec<GitHubRelease>, String> {
+    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=12");
+    let response = client.get(url).send().map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub releases request failed with status {}",
+            response.status()
+        ));
+    }
+    response.json::<Vec<GitHubRelease>>().map_err(|e| e.to_string())
+}
+
+fn pick_release_candidate<'a>(
+    releases: &'a [GitHubRelease],
+    current_version: &str,
+) -> Option<&'a GitHubRelease> {
+    let mut stable: Option<&GitHubRelease> = None;
+    let mut prerelease: Option<&GitHubRelease> = None;
+
+    for release in releases.iter().filter(|r| !r.draft) {
+        let release_version = normalize_tag_version(&release.tag_name);
+        if !is_version_newer(&release_version, current_version) {
+            continue;
+        }
+        if !release.prerelease {
+            stable = Some(release);
+            break;
+        }
+        if prerelease.is_none() {
+            prerelease = Some(release);
+        }
+    }
+
+    stable.or(prerelease)
+}
+
+fn pick_installer_asset(assets: &[GitHubReleaseAsset]) -> Option<&GitHubReleaseAsset> {
+    let ranked = installer_asset_rank();
+    for pattern in ranked {
+        if let Some(asset) = assets.iter().find(|asset| pattern(&asset.name)) {
+            return Some(asset);
+        }
+    }
+    None
+}
+
+fn installer_asset_rank() -> Vec<fn(&str) -> bool> {
+    #[cfg(target_os = "windows")]
+    {
+        vec![
+            |name| {
+                let lower = name.to_ascii_lowercase();
+                lower.starts_with("installer-") && lower.ends_with("-setup.exe")
+            },
+            |name| {
+                let lower = name.to_ascii_lowercase();
+                lower.starts_with("installer-") && lower.ends_with(".msi")
+            },
+        ]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        vec![
+            |name| {
+                let lower = name.to_ascii_lowercase();
+                lower.starts_with("installer-") && lower.ends_with(".deb")
+            },
+            |name| {
+                let lower = name.to_ascii_lowercase();
+                lower.starts_with("portable-") && lower.ends_with(".appimage")
+            },
+        ]
+    }
+    #[cfg(target_os = "macos")]
+    {
+        vec![|name| {
+            let lower = name.to_ascii_lowercase();
+            lower.starts_with("installer-") && lower.ends_with(".dmg")
+        }]
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        vec![]
+    }
+}
+
+fn normalize_tag_version(tag: &str) -> String {
+    tag.trim_start_matches('v').trim_end_matches("-dev").to_string()
+}
+
+fn parse_version_parts(version: &str) -> Option<(u32, u32, u32)> {
+    let main = version.split('-').next()?.trim();
+    let mut parts = main.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((major, minor, patch))
+}
+
+fn is_version_newer(candidate: &str, current: &str) -> bool {
+    match (parse_version_parts(candidate), parse_version_parts(current)) {
+        (Some(c), Some(cur)) => c > cur,
+        _ => false,
+    }
+}
+
+fn download_installer(
+    client: &reqwest::blocking::Client,
+    download_url: &str,
+) -> Result<PathBuf, String> {
+    let response = client
+        .get(download_url)
+        .send()
+        .map_err(|e| format!("Download failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Download failed with status {}",
+            response.status()
+        ));
+    }
+
+    let file_name = response
+        .url()
+        .path_segments()
+        .and_then(|segments| segments.last())
+        .map(str::to_string)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "AstroDeck-update.bin".to_string());
+
+    let target_dir = std::env::temp_dir().join("AstroDeck-update");
+    std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+    let target_path = target_dir.join(file_name);
+
+    let bytes = response.bytes().map_err(|e| format!("Failed to read installer: {e}"))?;
+    std::fs::write(&target_path, bytes).map_err(|e| format!("Failed to save installer: {e}"))?;
+
+    Ok(target_path)
+}
+
+fn launch_installer(path: &Path) -> Result<(), String> {
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| "Installer path is not valid UTF-8".to_string())?;
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        if extension == "msi" {
+            std::process::Command::new("msiexec")
+                .args(["/i", path_str, "/passive", "/norestart"])
+                .creation_flags(DETACHED_PROCESS)
+                .spawn()
+                .map_err(|e| format!("Failed to launch MSI installer: {e}"))?;
+            return Ok(());
+        }
+
+        std::process::Command::new(path_str)
+            .args(["/P", "/UPDATE"])
+            .creation_flags(DETACHED_PROCESS)
+            .spawn()
+            .map_err(|e| format!("Failed to launch installer: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let lower = path_str.to_ascii_lowercase();
+        if lower.ends_with(".deb") {
+            std::process::Command::new("pkexec")
+                .args(["dpkg", "-i", path_str])
+                .spawn()
+                .map_err(|e| format!("Failed to launch package installer: {e}"))?;
+            return Ok(());
+        }
+        if lower.ends_with(".appimage") {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+            std::process::Command::new(path_str)
+                .spawn()
+                .map_err(|e| format!("Failed to launch AppImage: {e}"))?;
+            return Ok(());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path_str)
+            .spawn()
+            .map_err(|e| format!("Failed to open installer: {e}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return Err("No supported Linux installer type found in the release asset".to_string());
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        let _ = path_str;
+        Err("Automatic updates are not supported on this platform".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compares_semver_versions() {
+        assert!(is_version_newer("0.1.2", "0.1.1"));
+        assert!(!is_version_newer("0.1.1", "0.1.2"));
+        assert!(is_version_newer("0.2.0", "0.1.9"));
+    }
+
+    #[test]
+    fn normalizes_release_tags() {
+        assert_eq!(normalize_tag_version("v0.1.2-dev"), "0.1.2");
+        assert_eq!(normalize_tag_version("v1.0.0"), "1.0.0");
+    }
+}

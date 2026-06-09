@@ -27,12 +27,19 @@
     getBuiltinSceneMeta,
   } from "./layouts/layouts";
   import { logs, logInfo, logError, pushExternal, type LogEntry } from "./services/logger";
+  import {
+    checkForAppUpdate,
+    downloadAndInstallUpdate,
+    type AppUpdateInfo,
+  } from "./services/updater";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
 
   const isTauri = !!(window as any).__TAURI_INTERNALS__ as boolean;
 
   let trayInitialized = false;
+  let appUpdate = $state<AppUpdateInfo | null>(null);
+  let appUpdateBusy = $state(false);
   let trayMenu: Menu | null = null;
   let windowLabel = $state("main");
   let seenScenes = $state<string[]>([]);
@@ -693,6 +700,42 @@
     )
   );
 
+  async function refreshAppUpdateCheck() {
+    if (!isTauri) return;
+    try {
+      appUpdate = await checkForAppUpdate();
+      if (appUpdate.available && appUpdate.latestVersion) {
+        logInfo(
+          `Update available: ${appUpdate.latestVersion} (current ${appUpdate.currentVersion})`,
+          "Updater"
+        );
+      }
+    } catch (e) {
+      logError(`Update check failed: ${String(e)}`, "Updater");
+    }
+  }
+
+  async function promptAndInstallUpdate() {
+    if (!appUpdate?.available || !appUpdate.downloadUrl || !appUpdate.latestVersion) return;
+    if (appUpdateBusy) return;
+
+    const releaseLabel = appUpdate.releaseName ?? `AstroDeck ${appUpdate.latestVersion}`;
+    const confirmed = window.confirm(
+      `${releaseLabel} is available.\n\nYou are on ${appUpdate.currentVersion}. Install the update now? AstroDeck will close and run the installer.`
+    );
+    if (!confirmed) return;
+
+    appUpdateBusy = true;
+    try {
+      logInfo(`Downloading update from ${appUpdate.installerName ?? "release asset"}`, "Updater");
+      await downloadAndInstallUpdate(appUpdate.downloadUrl);
+    } catch (e) {
+      appUpdateBusy = false;
+      window.alert(`Update failed: ${String(e)}`);
+      logError(`Update install failed: ${String(e)}`, "Updater");
+    }
+  }
+
   function selectScene(id: string) {
     if (!id) return;
     markSceneSeen(id);
@@ -1033,6 +1076,7 @@
       window.addEventListener("keydown", onDeckPresentationKeydown, true);
 
       refreshScene();
+      void refreshAppUpdateCheck();
       refreshPluginsForDesktop();
       if (sceneId === "spotify") {
         void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
@@ -1084,17 +1128,64 @@
         {/if}
       </div>
       {#if isTauri}
-        <button
-          type="button"
-          class="header-fullscreen-btn"
-          title={deckPresentationFullscreen ? "Exit fullscreen (F11, Esc)" : "Fullscreen on this display (F11)"}
-          aria-label={deckPresentationFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-          onclick={() => toggleDeckPresentationFullscreen()}
-        >
-          <img class="header-app-icon" src={appIconUrl} alt="" aria-hidden="true" />
-        </button>
+        <div class="app-header-actions">
+          {#if appUpdate?.available}
+            <button
+              type="button"
+              class="header-update-btn"
+              title={appUpdate.latestVersion
+                ? `Update to ${appUpdate.latestVersion}`
+                : "Update available"}
+              aria-label={appUpdate.latestVersion
+                ? `Update to ${appUpdate.latestVersion}`
+                : "Update available"}
+              disabled={appUpdateBusy}
+              onclick={() => void promptAndInstallUpdate()}
+            >
+              <svg class="header-update-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M12 4a1 1 0 0 1 1 1v5.59l1.3-1.3a1 1 0 1 1 1.4 1.42l-3 3a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.42l1.3 1.3V5a1 1 0 0 1 1-1zm-7 9a1 1 0 0 1 1 1 7 7 0 0 0 14 0 1 1 0 1 1 2 0 9 9 0 1 1-18 0 1 1 0 0 1 1-1z"
+                />
+              </svg>
+              {#if appUpdate.latestVersion}
+                <span class="header-update-label">{appUpdate.latestVersion}</span>
+              {/if}
+            </button>
+          {/if}
+          <button
+            type="button"
+            class="header-fullscreen-btn"
+            title={deckPresentationFullscreen ? "Exit fullscreen (F11, Esc)" : "Fullscreen on this display (F11)"}
+            aria-label={deckPresentationFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+            onclick={() => toggleDeckPresentationFullscreen()}
+          >
+            <img class="header-app-icon" src={appIconUrl} alt="" aria-hidden="true" />
+          </button>
+        </div>
       {/if}
     </header>
+  {/if}
+
+  {#if isTauri && isMediaDeckView && appUpdate?.available}
+    <button
+      type="button"
+      class="update-fab"
+      title={appUpdate.latestVersion ? `Update to ${appUpdate.latestVersion}` : "Update available"}
+      aria-label={appUpdate.latestVersion ? `Update to ${appUpdate.latestVersion}` : "Update available"}
+      disabled={appUpdateBusy}
+      onclick={() => void promptAndInstallUpdate()}
+    >
+      <svg class="update-fab-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M12 4a1 1 0 0 1 1 1v5.59l1.3-1.3a1 1 0 1 1 1.4 1.42l-3 3a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.42l1.3 1.3V5a1 1 0 0 1 1-1zm-7 9a1 1 0 0 1 1 1 7 7 0 0 0 14 0 1 1 0 1 1 2 0 9 9 0 1 1-18 0 1 1 0 0 1 1-1z"
+        />
+      </svg>
+      {#if appUpdate.latestVersion}
+        <span class="update-fab-label">{appUpdate.latestVersion}</span>
+      {/if}
+    </button>
   {/if}
 
   <main class="app-main">
@@ -1460,6 +1551,70 @@
     align-items: center;
     gap: 12px;
     min-width: 0;
+  }
+
+  .app-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .header-update-btn,
+  .update-fab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid rgba(29, 185, 84, 0.45);
+    background: rgba(29, 185, 84, 0.14);
+    color: #1ed760;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+
+  .header-update-btn {
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .header-update-btn:hover:not(:disabled),
+  .update-fab:hover:not(:disabled) {
+    background: rgba(29, 185, 84, 0.24);
+    border-color: rgba(29, 185, 84, 0.7);
+  }
+
+  .header-update-btn:disabled,
+  .update-fab:disabled {
+    opacity: 0.6;
+    cursor: wait;
+  }
+
+  .header-update-icon,
+  .update-fab-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
+
+  .header-update-label,
+  .update-fab-label {
+    white-space: nowrap;
+  }
+
+  .update-fab {
+    position: fixed;
+    top: 12px;
+    right: 148px;
+    z-index: 5;
+    padding: 8px 12px;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   }
 
   .header-fullscreen-btn {
