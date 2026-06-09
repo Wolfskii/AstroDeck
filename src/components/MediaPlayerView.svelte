@@ -681,7 +681,7 @@
     grid-column: 1;
     grid-row: 2;
     flex-shrink: 0;
-    padding: 12px 0 10px;
+    padding: 0 0 10px;
     cursor: pointer;
     touch-action: none;
     user-select: none;
@@ -857,7 +857,6 @@
     gap: 0;
     padding: 20px 20px max(20px, env(safe-area-inset-bottom, 0px));
     background: var(--car-footer-bg, #0c0808);
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
     min-height: 0;
     transition: background 0.45s ease;
   }
