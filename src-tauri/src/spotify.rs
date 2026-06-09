@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 use url::Url;
 
+
 const SPOTIFY_AUTHORIZE_URL: &str = "https://accounts.spotify.com/authorize";
 const SPOTIFY_TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 const SPOTIFY_CURRENT_PLAYBACK_URL: &str = "https://api.spotify.com/v1/me/player";
@@ -530,12 +531,45 @@ fn env_client_id() -> String {
         .to_string()
 }
 
+fn migrate_legacy_spotify_files(app: &tauri::AppHandle, new_base: &PathBuf) {
+    let Ok(home) = app.path().home_dir() else {
+        return;
+    };
+
+    let old_base = if cfg!(windows) {
+        home.join("AppData").join("Roaming").join("com.taptapdeck.app")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library")
+            .join("Application Support")
+            .join("com.taptapdeck.app")
+    } else {
+        home.join(".local").join("share").join("com.taptapdeck.app")
+    };
+
+    if old_base == *new_base {
+        return;
+    }
+
+    for file in ["spotify_tokens.json", "spotify_client.json"] {
+        let old_file = old_base.join(file);
+        let new_file = new_base.join(file);
+        if !old_file.exists() || new_file.exists() {
+            continue;
+        }
+        match fs::copy(&old_file, &new_file) {
+            Ok(_) => log::info!("Migrated {} from legacy TapTapDeck app data", file),
+            Err(err) => log::warn!("Failed to migrate {}: {}", file, err),
+        }
+    }
+}
+
 pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String> {
     let base = app
         .path()
         .app_local_data_dir()
         .map_err(|e| e.to_string())?;
     fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    migrate_legacy_spotify_files(app, &base);
 
     let client_store_path = base.join("spotify_client.json");
     let token_path = base.join("spotify_tokens.json");

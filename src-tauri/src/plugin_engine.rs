@@ -142,13 +142,29 @@ fn builtin_plugins_dir(app_handle: &tauri::AppHandle) -> PathBuf {
         return from_manifest;
     }
 
+    // Packaged builds bundle `../plugins` as `$RESOURCE/_up_/plugins` (see tauri.conf.json).
+    if let Ok(resolved) = app_handle.path().resolve(
+        "../plugins",
+        tauri::path::BaseDirectory::Resource,
+    ) {
+        if resolved.exists() {
+            return resolved;
+        }
+        log::warn!("Resolved plugins path missing: {:?}", resolved);
+    }
+
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
-        let from_resource = resource_dir.join("plugins");
-        if from_resource.exists() {
-            return from_resource;
+        for candidate in [
+            resource_dir.join("_up_").join("plugins"),
+            resource_dir.join("plugins"),
+        ] {
+            if candidate.exists() {
+                return candidate;
+            }
         }
     }
 
+    log::error!("Built-in plugins directory not found; scene layouts will be unavailable");
     PathBuf::from("plugins")
 }
 

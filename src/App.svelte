@@ -1480,8 +1480,7 @@
     display: block;
     width: 32px;
     height: 32px;
-    border-radius: 8px;
-    object-fit: cover;
+    object-fit: contain;
   }
 
   .app-title {

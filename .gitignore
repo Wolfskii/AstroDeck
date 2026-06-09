@@ -8,7 +8,6 @@ src-tauri/target/
 release-artifacts/
 version-manifest.json
 release-notes.md
-app-icon-square.png
 
 # Environment
 .env

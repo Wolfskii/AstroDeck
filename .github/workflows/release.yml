@@ -140,11 +140,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download version files
-        uses: actions/download-artifact@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          name: version-files
-          path: .
+          node-version: 20
+
+      - name: Apply resolved version to workspace
+        run: |
+          echo "${{ needs.version.outputs.version }}" > VERSION
+          node scripts/sync-version.mjs
+          node <<'NODE'
+          const fs = require("node:fs");
+          const manifest = {
+            version: "${{ needs.version.outputs.version }}",
+            tag: "${{ needs.version.outputs.tag }}",
+            prerelease: ${{ needs.version.outputs.prerelease == 'true' }},
+            channel: "${{ needs.version.outputs.channel }}",
+          };
+          fs.writeFileSync("version-manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
 
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
@@ -179,15 +193,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Rust for lockfile sync
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Commit version bump
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          cd src-tauri && cargo check --quiet && cd ..
-          git add VERSION package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
+          git add VERSION package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
           if git diff --staged --quiet; then
             echo "No version file changes to commit"
             exit 0
