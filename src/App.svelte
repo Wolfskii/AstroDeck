@@ -33,6 +33,8 @@
     downloadAndInstallUpdate,
     type AppUpdateInfo,
   } from "./services/updater";
+  import { isAutostartEnabled, setAutostartEnabled } from "./services/autostart";
+  import { persistMainWindowState, revealMainWindow } from "./services/windowState";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
 
@@ -62,6 +64,9 @@
   let spotifyClientIdDraft = $state("");
   let spotifyClientLockedByEnv = $state(false);
   let spotifySavingClientId = $state(false);
+  let startOnBoot = $state(false);
+  let startOnBootBusy = $state(false);
+  let startOnBootError = $state<string | null>(null);
   let optimisticSpotifySaved = $state<boolean | null>(null);
   let optimisticSpotifyShuffle = $state<boolean | null>(null);
   let optimisticSpotifyPlaying = $state<boolean | null>(null);
@@ -171,6 +176,18 @@
     })();
   });
 
+  $effect(() => {
+    if (!isTauri || viewMode !== "settings") return;
+    void (async () => {
+      try {
+        startOnBoot = await isAutostartEnabled();
+        startOnBootError = null;
+      } catch (e) {
+        startOnBootError = String(e);
+      }
+    })();
+  });
+
   async function openExternalUrl(url: string, label = "External link") {
     try {
       if (isTauri) {
@@ -217,6 +234,7 @@
       }
     }
     await syncDeckFullscreenState();
+    await persistMainWindowState();
   }
 
   async function exitDeckPresentationFullscreen() {
@@ -229,6 +247,7 @@
       logError(String(e), "Window");
     }
     await syncDeckFullscreenState();
+    await persistMainWindowState();
   }
 
   async function toggleDeckPresentationFullscreen() {
@@ -242,6 +261,28 @@
     } catch (e) {
       logError(String(e), "Window");
       await syncDeckFullscreenState();
+    }
+  }
+
+  async function onStartOnBootChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const checked = input.checked;
+    startOnBootBusy = true;
+    startOnBootError = null;
+    try {
+      await setAutostartEnabled(checked);
+      startOnBoot = checked;
+      logInfo(
+        checked ? "Enabled start on computer sign-in" : "Disabled start on computer sign-in",
+        "Settings"
+      );
+    } catch (e) {
+      startOnBoot = !checked;
+      input.checked = !checked;
+      startOnBootError = String(e);
+      logError(`Failed to update start on boot: ${String(e)}`, "Settings");
+    } finally {
+      startOnBootBusy = false;
     }
   }
 
@@ -627,15 +668,14 @@
             action: async () => {
               const visible = await win.isVisible();
               if (visible) {
+                await persistMainWindowState();
                 await win.hide();
                 logInfo("Hid AstroDeck window from tray menu", "Tray");
                 const item = await trayMenu?.get("toggle");
                 if (item) await item.setText("Show AstroDeck");
               } else {
                 viewMode = "deck";
-                await win.show();
-                await win.unminimize();
-                await win.setFocus();
+                await revealMainWindow();
                 logInfo("Showed AstroDeck window from tray menu", "Tray");
                 const item = await trayMenu?.get("toggle");
                 if (item) await item.setText("Hide AstroDeck");
@@ -648,9 +688,7 @@
             action: async () => {
               logInfo("Settings requested from tray menu", "Tray");
               viewMode = "settings";
-              await win.show();
-              await win.unminimize();
-              await win.setFocus();
+              await revealMainWindow();
               const item = await trayMenu?.get("toggle");
               if (item) await item.setText("Hide AstroDeck");
             },
@@ -678,9 +716,7 @@
             (event as any).button === "Left"
           ) {
             if (!(await win.isVisible())) {
-              await win.show();
-              await win.unminimize();
-              await win.setFocus();
+              await revealMainWindow();
               logInfo("Tray icon clicked: showing window", "Tray");
               const item = await trayMenu?.get("toggle");
               if (item) await item.setText("Hide AstroDeck");
@@ -808,9 +844,7 @@
           viewMode = "settings";
           const win = getCurrentWindow();
           if (!(await win.isVisible())) {
-            await win.show();
-            await win.unminimize();
-            await win.setFocus();
+            await revealMainWindow();
           }
         }
         // In browser debug mode we're already in the settings/debug window.
@@ -1205,6 +1239,29 @@
       <div class="settings-root">
         <section class="settings-section">
           <h2>AstroDeck Settings</h2>
+          {#if isTauri}
+            <div class="settings-block">
+              <h3>Startup</h3>
+              <p class="settings-help">
+                Launch AstroDeck in the system tray when you sign in. The window returns to its last
+                display, position, size, and maximized or fullscreen state when you open it.
+              </p>
+              <label class="settings-switch" for="start-on-boot">
+                <input
+                  id="start-on-boot"
+                  type="checkbox"
+                  checked={startOnBoot}
+                  disabled={startOnBootBusy}
+                  onchange={onStartOnBootChange}
+                />
+                <span class="settings-switch-ui" aria-hidden="true"></span>
+                <span class="settings-switch-label">Start AstroDeck when this computer starts</span>
+              </label>
+              {#if startOnBootError}
+                <p class="settings-error">{startOnBootError}</p>
+              {/if}
+            </div>
+          {/if}
           <div class="settings-block spotify-block">
             <div class="spotify-header">
               <div>
@@ -1752,6 +1809,80 @@
     border-radius: 18px;
     background: rgba(255, 255, 255, 0.03);
     padding: 16px;
+  }
+
+  .settings-switch {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+    max-width: 40rem;
+  }
+
+  .settings-switch input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    pointer-events: none;
+  }
+
+  .settings-switch-ui {
+    position: relative;
+    flex: 0 0 auto;
+    width: 42px;
+    height: 24px;
+    border-radius: 999px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+
+  .settings-switch-ui::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+    transition: transform 0.15s ease, background 0.15s ease;
+  }
+
+  .settings-switch input:checked + .settings-switch-ui {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .settings-switch input:checked + .settings-switch-ui::after {
+    transform: translateX(18px);
+    background: white;
+  }
+
+  .settings-switch input:disabled + .settings-switch-ui {
+    opacity: 0.55;
+  }
+
+  .settings-switch:has(input:focus-visible) .settings-switch-ui {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .settings-switch:has(input:disabled) {
+    cursor: default;
+  }
+
+  .settings-switch-label {
+    font-size: 0.98rem;
+    font-weight: 600;
+  }
+
+  .settings-error {
+    margin: 10px 0 0;
+    color: #fca5a5;
+    font-size: 0.9rem;
   }
 
   .spotify-header {

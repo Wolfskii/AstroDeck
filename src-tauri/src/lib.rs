@@ -6,6 +6,7 @@ mod plugin_engine;
 mod spotify;
 mod updater;
 mod websocket;
+mod window_prefs;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -271,7 +272,22 @@ fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn persist_window_state(app: tauri::AppHandle) -> Result<(), String> {
+    window_prefs::persist(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn restore_window_show_state(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window_prefs::restore_show_state(&window);
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
+    window_prefs::persist(&app);
     app.exit(0);
 }
 
@@ -282,6 +298,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(window_prefs::plugin())
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             get_active_scene,
@@ -298,6 +316,8 @@ pub fn run() {
             get_spotify_client_config,
             set_spotify_client_id,
             open_settings_window,
+            persist_window_state,
+            restore_window_show_state,
             quit_app,
             updater::get_app_version,
             updater::check_for_app_update,
@@ -307,10 +327,15 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                window_prefs::persist(&window.app_handle());
             }
         })
         .setup(|app| {
             let app_handle = app.handle().clone();
+
+            if let Some(window) = app.get_webview_window("main") {
+                window_prefs::restore_hidden_geometry(&window);
+            }
 
             plugin_engine::load_plugins(&app_handle);
             detectors::start_detection_loop(app_handle.clone());

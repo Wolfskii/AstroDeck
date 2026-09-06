@@ -32,6 +32,7 @@
 
     "core:default",
     "opener:default",
+    "autostart:default",
     "core:event:default",
     "core:event:allow-emit",
     "core:event:allow-listen"
