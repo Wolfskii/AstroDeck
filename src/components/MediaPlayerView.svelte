@@ -266,6 +266,58 @@
     };
   });
 
+  let artShown = $state<string | null>(artworkUrl ?? null);
+  let artIncoming = $state<string | null>(null);
+  let artIncomingReady = $state(false);
+
+  $effect(() => {
+    const next = artworkUrl ?? null;
+    if (next === artShown) {
+      if (artIncoming) {
+        artIncoming = null;
+        artIncomingReady = false;
+      }
+      return;
+    }
+    if (!next) {
+      artShown = null;
+      artIncoming = null;
+      artIncomingReady = false;
+      return;
+    }
+    if (!artShown) {
+      artShown = next;
+      return;
+    }
+    if (next === artIncoming) return;
+
+    let cancelled = false;
+    artIncoming = next;
+    artIncomingReady = false;
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled || artIncoming !== next) return;
+      artIncomingReady = true;
+    };
+    img.onerror = () => {
+      if (cancelled || artIncoming !== next) return;
+      artShown = next;
+      artIncoming = null;
+      artIncomingReady = false;
+    };
+    img.src = next;
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  function settleIncomingArtwork() {
+    if (!artIncoming || !artIncomingReady) return;
+    artShown = artIncoming;
+    artIncoming = null;
+    artIncomingReady = false;
+  }
+
   async function runTransportAction(action: string, label: string, value?: unknown) {
     try {
       window.dispatchEvent(
@@ -341,10 +393,20 @@
                 placement="artwork"
               />
             {/if}
-            {#if artworkUrl}
-              <img class="car-artwork" src={artworkUrl} alt={title ?? "Album art"} />
+            {#if artShown}
+              <img class="car-artwork" src={artShown} alt={title ?? "Album art"} />
             {:else}
               <div class="car-artwork car-artwork-placeholder" aria-hidden="true">♪</div>
+            {/if}
+            {#if artIncoming}
+              <img
+                class="car-artwork car-artwork-incoming"
+                class:car-artwork-incoming--in={artIncomingReady}
+                src={artIncoming}
+                alt=""
+                aria-hidden="true"
+                ontransitionend={settleIncomingArtwork}
+              />
             {/if}
           </div>
         </div>
@@ -562,7 +624,7 @@
     grid-template-rows: minmax(0, 1fr) auto auto;
     background: var(--car-body-bg, #0a0a0a);
     color: #f5f5f5;
-    transition: background 0.45s ease;
+    transition: background 0.7s ease;
   }
 
   .car-thing--shader {
@@ -593,7 +655,7 @@
     position: relative;
     overflow: hidden;
     background: var(--car-body-bg, #0a0a0a);
-    transition: background 0.45s ease;
+    transition: background 0.7s ease;
     z-index: 1;
   }
 
@@ -707,6 +769,19 @@
     background: #1a1a1a;
   }
 
+  .car-artwork-incoming {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 0.55s ease;
+    pointer-events: none;
+  }
+
+  .car-artwork-incoming--in {
+    opacity: 1;
+  }
+
   .car-thing-body--has-icon .car-artwork {
     height: 100%;
   }
@@ -775,7 +850,7 @@
     position: relative;
     z-index: 1;
     background: var(--car-footer-bg, #0c0808);
-    transition: background 0.45s ease;
+    transition: background 0.7s ease;
   }
 
   .car-thing--controls-backdrop .car-progress-wrap {
@@ -882,7 +957,7 @@
     position: relative;
     z-index: 1;
     background: var(--car-footer-bg, #0c0808);
-    transition: background 0.45s ease;
+    transition: background 0.7s ease;
   }
 
   .car-thing--controls-backdrop .car-controls {
@@ -959,7 +1034,7 @@
     z-index: 1;
     background: var(--car-footer-bg, #0c0808);
     min-height: 0;
-    transition: background 0.45s ease;
+    transition: background 0.7s ease;
   }
 
   .car-thing--controls-backdrop .car-fader {

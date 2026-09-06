@@ -91,6 +91,8 @@
   let optimisticSpotifySaved = $state<boolean | null>(null);
   let optimisticSpotifyShuffle = $state<boolean | null>(null);
   let optimisticSpotifyPlaying = $state<boolean | null>(null);
+  let pinnedSpotifyItemId: string | null = null;
+  let pinnedSpotifyUntil = 0;
   let spotifyVolumeTarget = $state<number | null>(null);
   let spotifyStatusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let spotifyTransportRefreshTimers: ReturnType<typeof setTimeout>[] = [];
@@ -590,9 +592,20 @@
     }
   }
 
+  function pinSpotifyItem(itemId: string) {
+    pinnedSpotifyItemId = itemId;
+    pinnedSpotifyUntil = Date.now() + 5000;
+  }
+
+  function clearPinnedSpotifyItem() {
+    pinnedSpotifyItemId = null;
+    pinnedSpotifyUntil = 0;
+  }
+
   function applySpotifyTrackPreview(preview: SpotifyTrackPreview) {
     optimisticSpotifySaved = null;
     spotifySeekTargetMs = null;
+    pinSpotifyItem(preview.itemId);
     if (!spotifyStatus) return;
     spotifyStatus = {
       ...spotifyStatus,
@@ -644,6 +657,27 @@
   }
 
   function mergeSpotifyStatusFromServer(next: SpotifyStatus): SpotifyStatus {
+    const pinActive =
+      pinnedSpotifyItemId != null && Date.now() < pinnedSpotifyUntil;
+    if (pinActive && next.currentItemId === pinnedSpotifyItemId) {
+      clearPinnedSpotifyItem();
+    } else if (pinActive && spotifyStatus) {
+      next = {
+        ...next,
+        currentItemId: spotifyStatus.currentItemId,
+        currentItemType: spotifyStatus.currentItemType,
+        currentTrackName: spotifyStatus.currentTrackName,
+        currentArtistName: spotifyStatus.currentArtistName,
+        currentAlbumName: spotifyStatus.currentAlbumName,
+        currentCoverArtUrl: spotifyStatus.currentCoverArtUrl,
+        durationMs: spotifyStatus.durationMs,
+        progressMs: spotifyStatus.progressMs,
+        isCurrentTrackSaved: spotifyStatus.isCurrentTrackSaved,
+      };
+    } else if (!pinActive) {
+      clearPinnedSpotifyItem();
+    }
+
     const sameTrack =
       next.currentItemId != null &&
       next.currentItemId === spotifyStatus?.currentItemId;
@@ -1137,6 +1171,17 @@
       }
       if (detail.action === "spotify.togglePlay") {
         optimisticSpotifyPlaying = null;
+      }
+      if (
+        detail.action === "spotify.nextTrack" ||
+        detail.action === "spotify.prevTrack"
+      ) {
+        clearPinnedSpotifyItem();
+        if (isTauri) {
+          void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
+        } else {
+          requestSpotifyStatus();
+        }
       }
     };
 

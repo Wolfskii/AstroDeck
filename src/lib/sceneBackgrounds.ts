@@ -1,7 +1,6 @@
 export const SCENE_BACKGROUND_IDS = [
   "off",
   "mesh-gradient",
-  "static-radial",
   "dithering",
   "neuro-noise",
   "grain-gradient",
@@ -31,11 +30,6 @@ export const SCENE_BACKGROUND_OPTIONS: {
     id: "mesh-gradient",
     label: "Mesh Gradient",
     description: "Flowing color spots from the cover art.",
-  },
-  {
-    id: "static-radial",
-    label: "Static Radial Gradient",
-    description: "Still radial wash based on the cover colors.",
   },
   {
     id: "dithering",

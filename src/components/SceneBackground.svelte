@@ -1,7 +1,14 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { ShaderMount, emptyPixel } from "@paper-design/shaders";
+  import { mixHexPalette } from "../lib/color";
   import { usesCoverImage, type SceneBackgroundId } from "../lib/sceneBackgrounds";
-  import { fragmentForStyle, uniformsForStyle } from "../lib/shaderBackground";
+  import {
+    fragmentForStyle,
+    lerpPaletteUniforms,
+    paletteUniformsForStyle,
+    uniformsForStyle,
+  } from "../lib/shaderBackground";
 
   let {
     style,
@@ -14,6 +21,8 @@
     imageUrl?: string | null;
     placement?: "full" | "artwork";
   } = $props();
+
+  const PALETTE_FADE_MS = 700;
 
   let host = $state<HTMLDivElement | null>(null);
 
@@ -37,26 +46,104 @@
     });
   }
 
+  function easeInOut(t: number): number {
+    return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  }
+
+  function palettesEqual(a: string[], b: string[]): boolean {
+    if (a.length !== b.length) return false;
+    return a.every((color, index) => color === b[index]);
+  }
+
+  type LiveShader = {
+    style: SceneBackgroundId;
+    applyPalette: (palette: string[]) => void;
+    applyImage: (image: HTMLImageElement) => void;
+  };
+
+  let live: LiveShader | null = null;
+  let pendingPalette = [...colors];
+
+  $effect(() => {
+    pendingPalette = [...colors];
+    live?.applyPalette(pendingPalette);
+  });
+
+  $effect(() => {
+    const currentStyle = style;
+    const url = imageUrl;
+    if (!usesCoverImage(currentStyle)) return;
+    let cancelled = false;
+    void loadImage(url || emptyPixel)
+      .catch(() => loadImage(emptyPixel))
+      .then((image) => {
+        if (cancelled) return;
+        live?.applyImage(image);
+      })
+      .catch(() => {
+        // keep the current texture
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
   $effect(() => {
     const el = host;
     const currentStyle = style;
-    const palette = colors;
-    const url = imageUrl;
     if (!el) return;
 
     const fragment = fragmentForStyle(currentStyle);
     if (!fragment || currentStyle === "off") {
       el.replaceChildren();
+      live = null;
       return;
     }
 
     let disposed = false;
     let mount: ShaderMount | null = null;
     let raf = 0;
+    let lerpRaf = 0;
+    let image: HTMLImageElement | undefined;
+    let displayed = untrack(() => [...pendingPalette]);
+    let lerpFrom = displayed;
+    let lerpTo = displayed;
+    let lerpStarted = 0;
+
+    function tickLerp(now: number) {
+      if (disposed || !mount) return;
+      const t = Math.min(1, (now - lerpStarted) / PALETTE_FADE_MS);
+      const eased = easeInOut(t);
+      displayed = mixHexPalette(lerpFrom, lerpTo, eased);
+      mount.setUniforms(
+        lerpPaletteUniforms(
+          paletteUniformsForStyle(currentStyle, lerpFrom, image),
+          paletteUniformsForStyle(currentStyle, lerpTo, image),
+          eased
+        )
+      );
+      if (t < 1) lerpRaf = requestAnimationFrame(tickLerp);
+    }
+
+    function applyPalette(next: string[]) {
+      if (!mount) return;
+      if (palettesEqual(next, lerpTo) && palettesEqual(displayed, next)) return;
+      lerpFrom = displayed;
+      lerpTo = [...next];
+      lerpStarted = performance.now();
+      cancelAnimationFrame(lerpRaf);
+      lerpRaf = requestAnimationFrame(tickLerp);
+    }
+
+    function applyImage(nextImage: HTMLImageElement) {
+      image = nextImage;
+      if (!mount) return;
+      mount.setUniforms({ u_image: nextImage });
+    }
 
     void (async () => {
-      let image: HTMLImageElement | undefined;
       if (usesCoverImage(currentStyle)) {
+        const url = untrack(() => imageUrl);
         try {
           image = await loadImage(url || emptyPixel);
         } catch {
@@ -68,8 +155,10 @@
         }
       }
       if (disposed || !el.isConnected) return;
-      el.replaceChildren();
-      const { uniforms, speed } = uniformsForStyle(currentStyle, palette, image);
+      displayed = untrack(() => [...pendingPalette]);
+      lerpFrom = displayed;
+      lerpTo = displayed;
+      const { uniforms, speed } = uniformsForStyle(currentStyle, displayed, image);
       const textures = Object.values(uniforms).filter(
         (value): value is HTMLImageElement => value instanceof HTMLImageElement
       );
@@ -94,6 +183,16 @@
         return;
       }
 
+      live = {
+        style: currentStyle,
+        applyPalette,
+        applyImage,
+      };
+      const latest = untrack(() => pendingPalette);
+      if (!palettesEqual(latest, displayed)) {
+        applyPalette(latest);
+      }
+
       if (currentStyle === "fluted-glass") {
         const started = performance.now();
         const tick = (now: number) => {
@@ -111,7 +210,9 @@
 
     return () => {
       disposed = true;
+      if (live?.style === currentStyle) live = null;
       cancelAnimationFrame(raf);
+      cancelAnimationFrame(lerpRaf);
       mount?.dispose();
       mount = null;
     };

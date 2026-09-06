@@ -93,7 +93,6 @@ struct ControlsBackdropState {
 const SCENE_BACKGROUNDS: &[&str] = &[
     "off",
     "mesh-gradient",
-    "static-radial",
     "dithering",
     "neuro-noise",
     "grain-gradient",

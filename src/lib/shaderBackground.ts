@@ -15,12 +15,12 @@ import {
   metaballsFragmentShader,
   neuroNoiseFragmentShader,
   pulsingBorderFragmentShader,
-  staticRadialGradientFragmentShader,
   waterFragmentShader,
   type ShaderMountUniforms,
 } from "@paper-design/shaders";
 import { DEFAULT_SHADER_COLORS } from "./albumArtColor";
 import { auroraFragmentShader } from "./auroraShader";
+import { hexToHsv, hsvToHex } from "./color";
 import { liquidGradientFragmentShader } from "./liquidGradientShader";
 import type { SceneBackgroundId } from "./sceneBackgrounds";
 
@@ -95,19 +95,67 @@ function vividRgb(color: string, targetLuma = 0.58, minChroma = 0.38): [number, 
   );
 }
 
-function pickVivid(colors: string[], index = 0): string {
-  const ranked = [...colors].sort((a, b) => chromaOf(b) - chromaOf(a));
-  return ranked[index] ?? ranked[0] ?? colors[0] ?? DEFAULT_SHADER_COLORS[0];
+function hueOf(color: string): number {
+  return hexToHsv(color).h;
 }
 
-function pickVividAccent(colors: string[], base: string): string {
-  const ranked = [...colors].sort((a, b) => chromaOf(b) - chromaOf(a));
-  const [br, bg, bb] = rgb3(base);
-  const distinct = ranked.find((color) => {
-    const [r, g, b] = rgb3(color);
-    return Math.abs(r - br) + Math.abs(g - bg) + Math.abs(b - bb) > 0.22;
+function lumaOf(color: string): number {
+  const [r, g, b] = rgb3(color);
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+function hueDelta(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return Math.min(d, 360 - d);
+}
+
+function hash01(colors: string[]): number {
+  let hash = 2166136261;
+  for (const color of colors) {
+    for (let i = 0; i < color.length; i += 1) {
+      hash ^= color.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+  }
+  return (hash >>> 0) / 4294967296;
+}
+
+function shiftHue(color: string, degrees: number): string {
+  const hsv = hexToHsv(color);
+  return hsvToHex({
+    h: (hsv.h + degrees + 360) % 360,
+    s: Math.max(hsv.s, 0.48),
+    v: Math.max(hsv.v, 0.52),
   });
-  return distinct ?? ranked[1] ?? ranked[0] ?? base;
+}
+
+function pickAuroraPair(colors: string[]): { base: string; high: string; rng: number } {
+  const rng = hash01(colors);
+  const ranked = [...colors].sort((a, b) => chromaOf(b) - chromaOf(a));
+  const start = Math.min(ranked.length - 1, Math.floor(rng * Math.min(3, ranked.length)));
+  let base = ranked[start] ?? ranked[0] ?? DEFAULT_SHADER_COLORS[0];
+  let high = ranked[0] ?? base;
+  let best = -1;
+  for (const color of ranked) {
+    if (color === base) continue;
+    const score =
+      (hueDelta(hueOf(color), hueOf(base)) / 180) * 1.7 +
+      chromaOf(color) * 0.85 +
+      Math.abs(lumaOf(color) - lumaOf(base)) * 0.9;
+    if (score > best) {
+      best = score;
+      high = color;
+    }
+  }
+  if (hueDelta(hueOf(base), hueOf(high)) < 42) {
+    high = shiftHue(high, 72 + rng * 108);
+  }
+  if (lumaOf(base) > lumaOf(high)) {
+    const swap = base;
+    base = high;
+    high = swap;
+  }
+  return { base, high, rng };
 }
 
 function colorsToVec4(colors: string[]) {
@@ -126,8 +174,6 @@ export function fragmentForStyle(style: SceneBackgroundId): string | null {
   switch (style) {
     case "mesh-gradient":
       return meshGradientFragmentShader;
-    case "static-radial":
-      return staticRadialGradientFragmentShader;
     case "dithering":
       return ditheringFragmentShader;
     case "neuro-noise":
@@ -175,26 +221,6 @@ export function uniformsForStyle(
           u_swirl: 0.22,
           u_grainMixer: 0.08,
           u_grainOverlay: 0.06,
-        },
-      };
-    case "static-radial":
-      return {
-        speed: 0,
-        uniforms: {
-          ...sizing("cover"),
-          u_colorBack: back,
-          u_colors: vecs,
-          u_colorsCount: vecs.length,
-          u_radius: 1.15,
-          u_focalDistance: 0.18,
-          u_focalAngle: 40,
-          u_falloff: 0.15,
-          u_mixing: 0.85,
-          u_distortion: 0.12,
-          u_distortionShift: 0,
-          u_distortionFreq: 4,
-          u_grainMixer: 0.1,
-          u_grainOverlay: 0.08,
         },
       };
     case "dithering":
@@ -354,11 +380,9 @@ export function uniformsForStyle(
       };
     }
     case "aurora": {
-      const base = pickVivid(colors, 0);
-      const high = pickVividAccent(colors, base);
+      const { base, high, rng } = pickAuroraPair(colors);
       const back = colors[colors.length - 1] ?? DEFAULT_SHADER_COLORS[3];
-      const star = pickVivid(colors, 0);
-      const [br, bg] = rgb3(base);
+      const star = high;
       const nightHorizon: [number, number, number] = [0.012, 0.047, 0.11];
       const nightZenith: [number, number, number] = [0.027, 0.059, 0.114];
       return {
@@ -366,21 +390,77 @@ export function uniformsForStyle(
         uniforms: {
           ...sizing("cover"),
           u_dithering: 0.0228,
-          u_speed: 0.65,
-          u_seed: 14 + br * 18 + bg * 8,
-          u_colorBase: vividRgb(base, 0.62, 0.42),
-          u_colorHigh: vividRgb(high, 0.7, 0.48),
-          u_skyDark: mixRgb3(nightHorizon, scaleRgb(back, 0.35), 0.22),
-          u_skyDeep: mixRgb3(nightZenith, scaleRgb(back, 0.45), 0.22),
+          u_speed: 0.48 + rng * 0.42,
+          u_seed: 2 + rng * 94,
+          u_colorBase: vividRgb(base, 0.4 + rng * 0.1, 0.52),
+          u_colorHigh: vividRgb(high, 0.72 + rng * 0.14, 0.58),
+          u_skyDark: mixRgb3(nightHorizon, scaleRgb(back, 0.35), 0.18),
+          u_skyDeep: mixRgb3(nightZenith, scaleRgb(back, 0.45), 0.18),
           u_starDensity: 0.073,
           u_starSize: 0.92,
           u_starBlinkRate: 6.26,
           u_starIntensity: 0.52,
-          u_starColor: vividRgb(star, 0.78, 0.35),
+          u_starColor: vividRgb(star, 0.82, 0.4),
         },
       };
     }
     default:
       return { speed: 0, uniforms: {} };
   }
+}
+
+const PALETTE_UNIFORM_KEY = /^(u_color|u_colors|u_sky)/;
+
+export function paletteUniformsForStyle(
+  style: SceneBackgroundId,
+  palette: string[],
+  image?: HTMLImageElement
+): ShaderMountUniforms {
+  const { uniforms } = uniformsForStyle(style, palette, image);
+  const next: ShaderMountUniforms = {};
+  for (const [key, value] of Object.entries(uniforms)) {
+    if (
+      !(PALETTE_UNIFORM_KEY.test(key) || key === "u_seed" || key === "u_speed") ||
+      value instanceof HTMLImageElement
+    ) {
+      continue;
+    }
+    next[key] = value;
+  }
+  return next;
+}
+
+function lerpUniformValue(from: unknown, to: unknown, amount: number): unknown {
+  if (typeof from === "number" && typeof to === "number") {
+    return from + (to - from) * amount;
+  }
+  if (Array.isArray(from) && Array.isArray(to)) {
+    const count = Math.max(from.length, to.length);
+    return Array.from({ length: count }, (_, index) =>
+      lerpUniformValue(
+        from[index] ?? from[from.length - 1],
+        to[index] ?? to[to.length - 1],
+        amount
+      )
+    );
+  }
+  return amount >= 1 ? to : from;
+}
+
+export function lerpPaletteUniforms(
+  from: ShaderMountUniforms,
+  to: ShaderMountUniforms,
+  amount: number
+): ShaderMountUniforms {
+  const t = Math.min(1, Math.max(0, amount));
+  const next: ShaderMountUniforms = {};
+  const keys = new Set([...Object.keys(from), ...Object.keys(to)]);
+  for (const key of keys) {
+    if (key === "u_seed" || key === "u_speed") {
+      next[key] = (to[key] ?? from[key]) as ShaderMountUniforms[string];
+      continue;
+    }
+    next[key] = lerpUniformValue(from[key], to[key], t) as ShaderMountUniforms[string];
+  }
+  return next;
 }

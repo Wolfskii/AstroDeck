@@ -22,7 +22,7 @@ uniform vec3 u_starColor;
 out vec4 fragColor;
 
 const int RAY_ITERATIONS = 56;
-const float LUMINANCE_FACTOR = 0.18;
+const float LUMINANCE_FACTOR = 0.22;
 const float Y_OFFSET_BOTTOM = 50.0;
 const float VOLUME_DEPTH = 75.0;
 const vec3 BOUND_LOW = vec3(-250.0, Y_OFFSET_BOTTOM, -500.0);
@@ -133,8 +133,10 @@ bool checkVolumeHit(vec3 rOrg, vec3 rDir, out float enterDist, out float travelD
   return hitPoints.x > 0.0 && (hitPoints.x < hitPoints.y);
 }
 
-vec3 blendAtmosphereTints(float heightRatio) {
-  return mix(u_colorBase, u_colorHigh, heightRatio);
+vec3 blendAtmosphereTints(float heightRatio, vec3 pos) {
+  float ribbon = 0.5 + 0.5 * sin(pos.x * 0.03 + u_seed * 0.85);
+  float mixAmt = clamp(heightRatio * 0.5 + ribbon * 0.72, 0.0, 1.0);
+  return mix(u_colorBase, u_colorHigh, mixAmt);
 }
 
 vec3 warpSpatialCoords(vec3 rawPos, float timeFlow) {
@@ -176,7 +178,7 @@ vec3 renderAtmosphericLights(vec3 camOrg, vec3 camDir, float noiseShift) {
 
   for (int stepIdx = 0; stepIdx < RAY_ITERATIONS; stepIdx++) {
     float localDens = sampleCloudThickness(currentPos);
-    lightAccum += localDens * blendAtmosphereTints((currentPos.y - BOUND_LOW.y) / (BOUND_HIGH.y - BOUND_LOW.y));
+    lightAccum += localDens * blendAtmosphereTints((currentPos.y - BOUND_LOW.y) / (BOUND_HIGH.y - BOUND_LOW.y), currentPos);
     currentDist += marchStep;
     currentPos = camOrg + camDir * currentDist;
   }

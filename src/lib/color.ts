@@ -95,3 +95,25 @@ export function hexToRgbCss(hex: string): string {
   const { r, g, b } = hexToRgb(hex);
   return `${r}, ${g}, ${b}`;
 }
+
+export function mixHex(from: string, to: string, amount: number): string {
+  const t = Math.min(1, Math.max(0, amount));
+  const a = hexToRgb(from);
+  const b = hexToRgb(to);
+  return rgbToHex(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t);
+}
+
+export function mixHexPalette(from: string[], to: string[], amount: number): string[] {
+  const count = Math.max(from.length, to.length, 1);
+  const mixed: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    mixed.push(
+      mixHex(
+        from[i] ?? from[from.length - 1] ?? "#000000",
+        to[i] ?? to[to.length - 1] ?? "#000000",
+        amount
+      )
+    );
+  }
+  return mixed;
+}

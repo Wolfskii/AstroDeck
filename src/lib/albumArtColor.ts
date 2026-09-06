@@ -1,3 +1,5 @@
+import { rgbToHsv } from "./color";
+
 export type Rgb = { r: number; g: number; b: number };
 
 function loadImage(url: string): Promise<HTMLImageElement> {
@@ -69,7 +71,7 @@ export async function extractAlbumPalette(imageUrl: string): Promise<Rgb[] | nul
     const rankedByCount = [...buckets.entries()].sort((a, b) => b[1].count - a[1].count);
     const rankedByVivid = [...buckets.entries()].sort((a, b) => {
       const score = (entry: { count: number; chroma: number }) =>
-        entry.count * (0.3 + (entry.chroma / 255) * 2.4);
+        Math.pow(entry.chroma / 255, 1.45) * Math.sqrt(entry.count);
       return score(b[1]) - score(a[1]);
     });
     if (rankedByCount.length === 0) return null;
@@ -81,10 +83,32 @@ export async function extractAlbumPalette(imageUrl: string): Promise<Rgb[] | nul
       seen.add(key);
       keys.push(key);
     };
+    const hueOfKey = (key: number) => {
+      const rgb = keyToRgb(key);
+      return rgbToHsv(rgb.r, rgb.g, rgb.b).h;
+    };
+    const hueDelta = (a: number, b: number) => {
+      const d = Math.abs(a - b) % 360;
+      return Math.min(d, 360 - d);
+    };
+
     push(rankedByCount[0][0]);
-    for (const [key] of rankedByVivid) {
-      if (keys.length >= 6) break;
-      push(key);
+    const remaining = rankedByVivid.map(([key]) => key).filter((key) => !seen.has(key));
+    while (keys.length < 6 && remaining.length > 0) {
+      let bestIdx = 0;
+      let bestScore = -1;
+      for (let i = 0; i < remaining.length; i += 1) {
+        const key = remaining[i];
+        const chroma = (buckets.get(key)?.chroma ?? 0) / 255;
+        const h = hueOfKey(key);
+        const minHue = Math.min(...keys.map((picked) => hueDelta(h, hueOfKey(picked))));
+        const score = chroma * 1.15 + (minHue / 180) * 1.55;
+        if (score > bestScore) {
+          bestScore = score;
+          bestIdx = i;
+        }
+      }
+      push(remaining.splice(bestIdx, 1)[0]);
     }
     return keys.map(keyToRgb);
   } catch {

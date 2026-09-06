@@ -73,6 +73,8 @@ pub struct TrackPreview {
 struct PlaybackCache {
     summary: Option<PlaybackSummary>,
     fetched_at: Option<SystemTime>,
+    optimistic_item_id: Option<String>,
+    optimistic_until: Option<SystemTime>,
 }
 
 #[derive(Default)]
@@ -835,6 +837,44 @@ fn maybe_refresh_queue_cache(spotify: &SpotifyState, force: bool) {
 }
 
 const PREV_RESTART_THRESHOLD_MS: u64 = 3000;
+const OPTIMISTIC_SKIP_HOLD: Duration = Duration::from_secs(5);
+
+fn pin_optimistic_item(spotify: &SpotifyState, item_id: &str) {
+    let mut cache = spotify.playback_cache.lock().unwrap();
+    cache.optimistic_item_id = Some(item_id.to_string());
+    cache.optimistic_until = Some(SystemTime::now() + OPTIMISTIC_SKIP_HOLD);
+}
+
+fn store_playback_from_api(spotify: &SpotifyState, summary: &PlaybackSummary) -> PlaybackSummary {
+    {
+        let mut cache = spotify.playback_cache.lock().unwrap();
+        let pin_expired = cache
+            .optimistic_until
+            .map(|until| SystemTime::now() > until)
+            .unwrap_or(true);
+        if pin_expired {
+            cache.optimistic_item_id = None;
+            cache.optimistic_until = None;
+        } else if let Some(pinned) = cache.optimistic_item_id.clone() {
+            if summary.item_id.as_deref() == Some(pinned.as_str()) {
+                cache.optimistic_item_id = None;
+                cache.optimistic_until = None;
+            } else if cache.summary.is_some() {
+                if let Some(current) = cache.summary.as_mut() {
+                    current.is_playing = summary.is_playing;
+                    current.volume_percent = summary.volume_percent;
+                    current.shuffle_state = summary.shuffle_state;
+                    current.device_id = summary.device_id.clone();
+                    current.device_name = summary.device_name.clone();
+                }
+                cache.fetched_at = Some(SystemTime::now());
+                return cache.summary.clone().unwrap();
+            }
+        }
+    }
+    store_playback_cache(spotify, summary);
+    summary.clone()
+}
 
 pub fn apply_optimistic_skip(spotify: &SpotifyState, direction: &str) -> Option<TrackPreview> {
     maybe_refresh_queue_cache(spotify, false);
@@ -860,6 +900,7 @@ pub fn apply_optimistic_skip(spotify: &SpotifyState, direction: &str) -> Option<
 
     let optimistic = preview_to_playback_summary(&preview, &current);
     store_playback_cache(spotify, &optimistic);
+    pin_optimistic_item(spotify, &preview.item_id);
     Some(preview)
 }
 
@@ -1743,8 +1784,7 @@ fn fetch_current_playback(spotify: &SpotifyState) -> Result<PlaybackSummary, Str
             .and_then(|item| item.duration_ms),
         shuffle_state: playback.shuffle_state,
     };
-    store_playback_cache(spotify, &summary);
-    Ok(summary)
+    Ok(store_playback_from_api(spotify, &summary))
 }
 
 pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
