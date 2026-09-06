@@ -45,7 +45,7 @@ export async function extractAlbumPalette(imageUrl: string): Promise<Rgb[] | nul
     if (!ctx) return null;
     ctx.drawImage(img, 0, 0, size, size);
     const data = ctx.getImageData(0, 0, size, size).data;
-    const buckets = new Map<number, number>();
+    const buckets = new Map<number, { count: number; chroma: number }>();
 
     for (let i = 0; i < data.length; i += 4) {
       const r = data[i];
@@ -54,14 +54,39 @@ export async function extractAlbumPalette(imageUrl: string): Promise<Rgb[] | nul
       const a = data[i + 3];
       if (a < 128) continue;
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-      if (lum < 28 || lum > 235) continue;
+      if (lum < 16 || lum > 252) continue;
+      const chroma = Math.max(r, g, b) - Math.min(r, g, b);
       const key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
-      buckets.set(key, (buckets.get(key) ?? 0) + 1);
+      const existing = buckets.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.chroma = Math.max(existing.chroma, chroma);
+      } else {
+        buckets.set(key, { count: 1, chroma });
+      }
     }
 
-    const ranked = [...buckets.entries()].sort((a, b) => b[1] - a[1]);
-    if (ranked.length === 0) return null;
-    return ranked.slice(0, 5).map(([key]) => keyToRgb(key));
+    const rankedByCount = [...buckets.entries()].sort((a, b) => b[1].count - a[1].count);
+    const rankedByVivid = [...buckets.entries()].sort((a, b) => {
+      const score = (entry: { count: number; chroma: number }) =>
+        entry.count * (0.3 + (entry.chroma / 255) * 2.4);
+      return score(b[1]) - score(a[1]);
+    });
+    if (rankedByCount.length === 0) return null;
+
+    const keys: number[] = [];
+    const seen = new Set<number>();
+    const push = (key: number) => {
+      if (seen.has(key)) return;
+      seen.add(key);
+      keys.push(key);
+    };
+    push(rankedByCount[0][0]);
+    for (const [key] of rankedByVivid) {
+      if (keys.length >= 6) break;
+      push(key);
+    }
+    return keys.map(keyToRgb);
   } catch {
     return null;
   }

@@ -19,6 +19,10 @@ pub struct AppPreferences {
     pub controls_backdrop: bool,
     #[serde(default = "default_controls_transparency")]
     pub controls_transparency: u8,
+    #[serde(default = "default_controls_overlay_color")]
+    pub controls_overlay_color: String,
+    #[serde(default)]
+    pub controls_overlay_custom: Option<bool>,
 }
 
 impl Default for AppPreferences {
@@ -31,6 +35,8 @@ impl Default for AppPreferences {
             show_settings_terminal: false,
             controls_backdrop: default_controls_backdrop(),
             controls_transparency: default_controls_transparency(),
+            controls_overlay_color: default_controls_overlay_color(),
+            controls_overlay_custom: None,
         }
     }
 }
@@ -55,8 +61,24 @@ fn default_controls_transparency() -> u8 {
     35
 }
 
+fn default_controls_overlay_color() -> String {
+    "#000000".to_string()
+}
+
 fn parse_transparency(value: u8) -> u8 {
     value.min(100)
+}
+
+fn parse_overlay_color(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() == 7
+        && trimmed.starts_with('#')
+        && trimmed[1..].chars().all(|c| c.is_ascii_hexdigit())
+    {
+        trimmed.to_ascii_lowercase()
+    } else {
+        default_controls_overlay_color()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,6 +86,8 @@ fn parse_transparency(value: u8) -> u8 {
 struct ControlsBackdropState {
     enabled: bool,
     transparency: u8,
+    color: String,
+    custom: bool,
 }
 
 const SCENE_BACKGROUNDS: &[&str] = &[
@@ -196,12 +220,24 @@ pub fn set_show_settings_terminal(app: tauri::AppHandle, enabled: bool) -> Resul
     Ok(())
 }
 
+fn overlay_custom(preferences: &AppPreferences) -> bool {
+    match preferences.controls_overlay_custom {
+        Some(value) => value,
+        None => {
+            parse_overlay_color(&preferences.controls_overlay_color)
+                != default_controls_overlay_color()
+        }
+    }
+}
+
 fn emit_controls_backdrop(app: &tauri::AppHandle, preferences: &AppPreferences) {
     let _ = app.emit(
         "controls-backdrop-changed",
         ControlsBackdropState {
             enabled: preferences.controls_backdrop,
             transparency: parse_transparency(preferences.controls_transparency),
+            color: parse_overlay_color(&preferences.controls_overlay_color),
+            custom: overlay_custom(preferences),
         },
     );
 }
@@ -233,6 +269,40 @@ pub fn set_controls_transparency(app: tauri::AppHandle, value: u8) -> Result<(),
     let path = preferences_path(&app)?;
     let mut preferences = load_preferences(&path)?;
     preferences.controls_transparency = parse_transparency(value);
+    save_preferences(&path, &preferences)?;
+    emit_controls_backdrop(&app, &preferences);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_controls_overlay_color(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(parse_overlay_color(
+        &load_preferences(&preferences_path(&app)?)?.controls_overlay_color,
+    ))
+}
+
+#[tauri::command]
+pub fn set_controls_overlay_color(app: tauri::AppHandle, color: String) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.controls_overlay_color = parse_overlay_color(&color);
+    save_preferences(&path, &preferences)?;
+    emit_controls_backdrop(&app, &preferences);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_controls_overlay_custom(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(overlay_custom(
+        &load_preferences(&preferences_path(&app)?)?,
+    ))
+}
+
+#[tauri::command]
+pub fn set_controls_overlay_custom(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.controls_overlay_custom = Some(enabled);
     save_preferences(&path, &preferences)?;
     emit_controls_backdrop(&app, &preferences);
     Ok(())

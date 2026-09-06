@@ -1,8 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import { DEFAULT_CONTROLS_OVERLAY_COLOR, parseHexColor } from "../lib/color";
 import {
   parseSceneBackgroundId,
   type SceneBackgroundId,
 } from "../lib/sceneBackgrounds";
+
+export { DEFAULT_CONTROLS_OVERLAY_COLOR };
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -133,4 +136,69 @@ export async function setControlsTransparency(value: number): Promise<void> {
     return;
   }
   await invoke("set_controls_transparency", { value: transparency });
+}
+
+const CONTROLS_OVERLAY_COLOR_KEY = "astrodeck:controlsOverlayColor";
+const CONTROLS_OVERLAY_CUSTOM_KEY = "astrodeck:controlsOverlayCustom";
+
+export const DEFAULT_CONTROLS_OVERLAY_CUSTOM = false;
+
+export function parseControlsOverlayColor(value: unknown): string {
+  return parseHexColor(value);
+}
+
+export function parseControlsOverlayCustom(value: unknown, color?: unknown): boolean {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  return parseControlsOverlayColor(color) !== DEFAULT_CONTROLS_OVERLAY_COLOR;
+}
+
+export async function getControlsOverlayColor(): Promise<string> {
+  if (!isTauri) {
+    try {
+      return parseControlsOverlayColor(window.localStorage.getItem(CONTROLS_OVERLAY_COLOR_KEY));
+    } catch {
+      return DEFAULT_CONTROLS_OVERLAY_COLOR;
+    }
+  }
+  return parseControlsOverlayColor(await invoke<string>("get_controls_overlay_color"));
+}
+
+export async function setControlsOverlayColor(color: string): Promise<void> {
+  const next = parseControlsOverlayColor(color);
+  if (!isTauri) {
+    try {
+      window.localStorage.setItem(CONTROLS_OVERLAY_COLOR_KEY, next);
+    } catch {
+      // ignore
+    }
+    return;
+  }
+  await invoke("set_controls_overlay_color", { color: next });
+}
+
+export async function getControlsOverlayCustom(): Promise<boolean> {
+  if (!isTauri) {
+    try {
+      return parseControlsOverlayCustom(
+        window.localStorage.getItem(CONTROLS_OVERLAY_CUSTOM_KEY),
+        window.localStorage.getItem(CONTROLS_OVERLAY_COLOR_KEY)
+      );
+    } catch {
+      return DEFAULT_CONTROLS_OVERLAY_CUSTOM;
+    }
+  }
+  return invoke<boolean>("get_controls_overlay_custom");
+}
+
+export async function setControlsOverlayCustom(enabled: boolean): Promise<void> {
+  if (!isTauri) {
+    try {
+      window.localStorage.setItem(CONTROLS_OVERLAY_CUSTOM_KEY, String(enabled));
+    } catch {
+      // ignore
+    }
+    return;
+  }
+  await invoke("set_controls_overlay_custom", { enabled });
 }

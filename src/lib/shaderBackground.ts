@@ -66,6 +66,50 @@ function liftRgb(color: string, targetLuma = 0.48): [number, number, number] {
   return [Math.min(1, r * boost), Math.min(1, g * boost), Math.min(1, b * boost)];
 }
 
+function chromaOf(color: string): number {
+  const [r, g, b] = rgb3(color);
+  return Math.max(r, g, b) - Math.min(r, g, b);
+}
+
+function vividRgb(color: string, targetLuma = 0.58, minChroma = 0.38): [number, number, number] {
+  let [r, g, b] = liftRgb(color, targetLuma);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const chroma = max - min;
+  if (chroma < minChroma && max > 0.04) {
+    const mid = (r + g + b) / 3;
+    const scale = minChroma / Math.max(chroma, 0.05);
+    r = Math.min(1, Math.max(0, mid + (r - mid) * scale));
+    g = Math.min(1, Math.max(0, mid + (g - mid) * scale));
+    b = Math.min(1, Math.max(0, mid + (b - mid) * scale));
+  }
+  return liftRgb(
+    `#${[r, g, b]
+      .map((n) =>
+        Math.round(n * 255)
+          .toString(16)
+          .padStart(2, "0")
+      )
+      .join("")}`,
+    targetLuma
+  );
+}
+
+function pickVivid(colors: string[], index = 0): string {
+  const ranked = [...colors].sort((a, b) => chromaOf(b) - chromaOf(a));
+  return ranked[index] ?? ranked[0] ?? colors[0] ?? DEFAULT_SHADER_COLORS[0];
+}
+
+function pickVividAccent(colors: string[], base: string): string {
+  const ranked = [...colors].sort((a, b) => chromaOf(b) - chromaOf(a));
+  const [br, bg, bb] = rgb3(base);
+  const distinct = ranked.find((color) => {
+    const [r, g, b] = rgb3(color);
+    return Math.abs(r - br) + Math.abs(g - bg) + Math.abs(b - bb) > 0.22;
+  });
+  return distinct ?? ranked[1] ?? ranked[0] ?? base;
+}
+
 function colorsToVec4(colors: string[]) {
   return colors.map((color) => getShaderColorFromString(color));
 }
@@ -310,10 +354,10 @@ export function uniformsForStyle(
       };
     }
     case "aurora": {
-      const base = colors[0] ?? DEFAULT_SHADER_COLORS[0];
-      const high = colors[1] ?? colors[0] ?? DEFAULT_SHADER_COLORS[2];
+      const base = pickVivid(colors, 0);
+      const high = pickVividAccent(colors, base);
       const back = colors[colors.length - 1] ?? DEFAULT_SHADER_COLORS[3];
-      const star = colors[2] ?? colors[0] ?? DEFAULT_SHADER_COLORS[0];
+      const star = pickVivid(colors, 0);
       const [br, bg] = rgb3(base);
       const nightHorizon: [number, number, number] = [0.012, 0.047, 0.11];
       const nightZenith: [number, number, number] = [0.027, 0.059, 0.114];
@@ -324,15 +368,15 @@ export function uniformsForStyle(
           u_dithering: 0.0228,
           u_speed: 0.65,
           u_seed: 14 + br * 18 + bg * 8,
-          u_colorBase: liftRgb(base),
-          u_colorHigh: liftRgb(high, 0.55),
-          u_skyDark: mixRgb3(nightHorizon, scaleRgb(back, 0.35), 0.28),
-          u_skyDeep: mixRgb3(nightZenith, scaleRgb(back, 0.45), 0.28),
+          u_colorBase: vividRgb(base, 0.62, 0.42),
+          u_colorHigh: vividRgb(high, 0.7, 0.48),
+          u_skyDark: mixRgb3(nightHorizon, scaleRgb(back, 0.35), 0.22),
+          u_skyDeep: mixRgb3(nightZenith, scaleRgb(back, 0.45), 0.22),
           u_starDensity: 0.073,
           u_starSize: 0.92,
           u_starBlinkRate: 6.26,
           u_starIntensity: 0.52,
-          u_starColor: liftRgb(star, 0.7),
+          u_starColor: vividRgb(star, 0.78, 0.35),
         },
       };
     }

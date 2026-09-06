@@ -3,12 +3,18 @@
   import appIconUrl from "../assets/app-icon.png";
   import { getBuiltinSceneMeta } from "../layouts/layouts";
   import { SCENE_BACKGROUND_OPTIONS } from "../lib/sceneBackgrounds";
+  import SpectrumColorPicker from "./SpectrumColorPicker.svelte";
   import {
     controlsBackdropEnabled,
+    controlsOverlayColor,
+    controlsOverlayCustom,
     controlsTransparency,
     persistControlsBackdropEnabled,
+    persistControlsOverlayColor,
+    persistControlsOverlayCustom,
     persistControlsTransparency,
     persistSceneBackground,
+    previewControlsOverlayColor,
     sceneBackgroundId,
   } from "../stores/appearance";
   import type { PluginConfig } from "../types";
@@ -348,7 +354,7 @@
             <span class="md-slider-value">{$controlsTransparency}%</span>
             <div class="md-slider-ui">
               <div class="md-slider-track" aria-hidden="true"></div>
-              <div class="md-slider-fill" style={`width: ${$controlsTransparency}%`} aria-hidden="true"></div>
+              <div class="md-slider-fill" style={`width: ${$controlsTransparency}%; background: ${$controlsOverlayCustom ? $controlsOverlayColor : "#000000"}`} aria-hidden="true"></div>
               <input
                 id="controls-transparency"
                 type="range"
@@ -367,6 +373,33 @@
               />
             </div>
           </div>
+        </div>
+        <div class="setting-row setting-row-slider" class:setting-row-disabled={!$controlsBackdropEnabled}>
+          <label class="setting-colour-toggle" for="controls-overlay-custom">
+            <div class="setting-copy">
+              <span class="setting-title">Control bar colour</span>
+              <span class="setting-desc">
+                Use a custom tint on the playback bar. Off uses a dark overlay.
+              </span>
+            </div>
+            <input
+              id="controls-overlay-custom"
+              type="checkbox"
+              bind:checked={$controlsOverlayCustom}
+              disabled={!$controlsBackdropEnabled}
+              onchange={(event) =>
+                persistControlsOverlayCustom((event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="md-check" aria-hidden="true"></span>
+          </label>
+          {#if $controlsOverlayCustom}
+            <SpectrumColorPicker
+              value={$controlsOverlayColor}
+              disabled={!$controlsBackdropEnabled}
+              onChange={previewControlsOverlayColor}
+              onCommit={persistControlsOverlayColor}
+            />
+          {/if}
         </div>
       </div>
     {:else if activeSection === "updates"}
@@ -825,6 +858,14 @@
   .setting-row-slider.setting-row-disabled {
     opacity: 0.45;
     pointer-events: none;
+  }
+
+  .setting-colour-toggle {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    cursor: pointer;
   }
 
   .md-slider {

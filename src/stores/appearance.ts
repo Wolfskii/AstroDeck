@@ -6,12 +6,20 @@ import {
 } from "../lib/sceneBackgrounds";
 import {
   DEFAULT_CONTROLS_BACKDROP,
+  DEFAULT_CONTROLS_OVERLAY_COLOR,
+  DEFAULT_CONTROLS_OVERLAY_CUSTOM,
   DEFAULT_CONTROLS_TRANSPARENCY,
   getControlsBackdropEnabled,
+  getControlsOverlayColor,
+  getControlsOverlayCustom,
   getControlsTransparency,
   getSceneBackground,
+  parseControlsOverlayColor,
+  parseControlsOverlayCustom,
   parseControlsTransparency,
   setControlsBackdropEnabled,
+  setControlsOverlayColor,
+  setControlsOverlayCustom,
   setControlsTransparency,
   setSceneBackground,
 } from "../services/prefs";
@@ -19,6 +27,8 @@ import {
 const STORAGE_KEY = "astrodeck:sceneBackground";
 const BACKDROP_KEY = "astrodeck:controlsBackdrop";
 const TRANSPARENCY_KEY = "astrodeck:controlsTransparency";
+const OVERLAY_COLOR_KEY = "astrodeck:controlsOverlayColor";
+const OVERLAY_CUSTOM_KEY = "astrodeck:controlsOverlayCustom";
 
 function readStored(): SceneBackgroundId {
   if (typeof window === "undefined") return DEFAULT_SCENE_BACKGROUND;
@@ -49,9 +59,32 @@ function readStoredTransparency(): number {
   }
 }
 
+function readStoredOverlayColor(): string {
+  if (typeof window === "undefined") return DEFAULT_CONTROLS_OVERLAY_COLOR;
+  try {
+    return parseControlsOverlayColor(window.localStorage.getItem(OVERLAY_COLOR_KEY));
+  } catch {
+    return DEFAULT_CONTROLS_OVERLAY_COLOR;
+  }
+}
+
+function readStoredOverlayCustom(): boolean {
+  if (typeof window === "undefined") return DEFAULT_CONTROLS_OVERLAY_CUSTOM;
+  try {
+    return parseControlsOverlayCustom(
+      window.localStorage.getItem(OVERLAY_CUSTOM_KEY),
+      window.localStorage.getItem(OVERLAY_COLOR_KEY)
+    );
+  } catch {
+    return DEFAULT_CONTROLS_OVERLAY_CUSTOM;
+  }
+}
+
 export const sceneBackgroundId = writable<SceneBackgroundId>(readStored());
 export const controlsBackdropEnabled = writable(readStoredBackdrop());
 export const controlsTransparency = writable(readStoredTransparency());
+export const controlsOverlayColor = writable(readStoredOverlayColor());
+export const controlsOverlayCustom = writable(readStoredOverlayCustom());
 
 sceneBackgroundId.subscribe((value) => {
   if (typeof window === "undefined") return;
@@ -80,6 +113,24 @@ controlsTransparency.subscribe((value) => {
   }
 });
 
+controlsOverlayColor.subscribe((value) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(OVERLAY_COLOR_KEY, value);
+  } catch {
+    // ignore
+  }
+});
+
+controlsOverlayCustom.subscribe((value) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(OVERLAY_CUSTOM_KEY, String(value));
+  } catch {
+    // ignore
+  }
+});
+
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key === STORAGE_KEY && event.newValue) {
@@ -91,6 +142,12 @@ if (typeof window !== "undefined") {
     if (event.key === TRANSPARENCY_KEY && event.newValue != null) {
       controlsTransparency.set(parseControlsTransparency(event.newValue));
     }
+    if (event.key === OVERLAY_COLOR_KEY && event.newValue != null) {
+      controlsOverlayColor.set(parseControlsOverlayColor(event.newValue));
+    }
+    if (event.key === OVERLAY_CUSTOM_KEY && event.newValue != null) {
+      controlsOverlayCustom.set(parseControlsOverlayCustom(event.newValue));
+    }
   });
 
   void import("@tauri-apps/api/event")
@@ -99,10 +156,17 @@ if (typeof window !== "undefined") {
         listen<string>("scene-background-changed", (event) => {
           sceneBackgroundId.set(parseSceneBackgroundId(event.payload));
         }),
-        listen<{ enabled: boolean; transparency: number }>("controls-backdrop-changed", (event) => {
-          controlsBackdropEnabled.set(!!event.payload.enabled);
-          controlsTransparency.set(parseControlsTransparency(event.payload.transparency));
-        }),
+        listen<{ enabled: boolean; transparency: number; color: string; custom?: boolean }>(
+          "controls-backdrop-changed",
+          (event) => {
+            controlsBackdropEnabled.set(!!event.payload.enabled);
+            controlsTransparency.set(parseControlsTransparency(event.payload.transparency));
+            controlsOverlayColor.set(parseControlsOverlayColor(event.payload.color));
+            controlsOverlayCustom.set(
+              parseControlsOverlayCustom(event.payload.custom, event.payload.color)
+            );
+          }
+        ),
       ])
     )
     .catch(() => {
@@ -119,6 +183,8 @@ export async function hydrateSceneBackground(): Promise<void> {
   try {
     controlsBackdropEnabled.set(await getControlsBackdropEnabled());
     controlsTransparency.set(await getControlsTransparency());
+    controlsOverlayColor.set(await getControlsOverlayColor());
+    controlsOverlayCustom.set(await getControlsOverlayCustom());
   } catch {
     // keep local value
   }
@@ -138,4 +204,19 @@ export function persistControlsTransparency(value: number): void {
   const next = parseControlsTransparency(value);
   controlsTransparency.set(next);
   void setControlsTransparency(next);
+}
+
+export function persistControlsOverlayColor(color: string): void {
+  const next = parseControlsOverlayColor(color);
+  controlsOverlayColor.set(next);
+  void setControlsOverlayColor(next);
+}
+
+export function persistControlsOverlayCustom(enabled: boolean): void {
+  controlsOverlayCustom.set(enabled);
+  void setControlsOverlayCustom(enabled);
+}
+
+export function previewControlsOverlayColor(color: string): void {
+  controlsOverlayColor.set(parseControlsOverlayColor(color));
 }

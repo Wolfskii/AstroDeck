@@ -22,7 +22,7 @@ uniform vec3 u_starColor;
 out vec4 fragColor;
 
 const int RAY_ITERATIONS = 56;
-const float LUMINANCE_FACTOR = 0.1;
+const float LUMINANCE_FACTOR = 0.18;
 const float Y_OFFSET_BOTTOM = 50.0;
 const float VOLUME_DEPTH = 75.0;
 const vec3 BOUND_LOW = vec3(-250.0, Y_OFFSET_BOTTOM, -500.0);
@@ -155,7 +155,7 @@ float sampleCloudThickness(vec3 localPt) {
   squishedPt.y += 0.48;
   squishedPt.y += 0.015 * calculateLineNoise(1.0 * timeFlow + shiftedPt.z);
   squishedPt.y += 0.015 * calculateLineNoise(-2.0 * timeFlow + shiftedPt.z);
-  float thickness = calculateRadiance(length(squishedPt), 0.55, 12.0);
+  float thickness = calculateRadiance(length(squishedPt), 0.62, 9.0);
   thickness *= cos(0.13 * shiftedPt.x);
   return max(0.0, thickness);
 }
@@ -227,7 +227,7 @@ void main() {
   vec3 sightVec = normalize(vec3(screenPos, -focalLen));
 
   vec3 viewerLoc = vec3(0.0, 10.0, 0.0);
-  vec3 gazePoint = vec3(-0.4, 0.45, -1.0);
+  vec3 gazePoint = vec3(-0.4, 0.58, -1.0);
   gazePoint.x += sin(u_time * 0.1) * 0.1;
   gazePoint.y += cos(u_time * 0.05) * 0.05;
 
@@ -238,7 +238,7 @@ void main() {
   vec3 finalOutput = paintBackdrop(sightVec);
 
   float screenY = fragCoord.y / max(res.y, 1.0);
-  float fadeMask = smoothstep(0.05, 0.4, screenY);
+  float fadeMask = smoothstep(0.02, 0.22, screenY);
 
   vec3 stars = renderStarfield(sightVec, u_time) * u_starIntensity;
   finalOutput += stars * fadeMask;

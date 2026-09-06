@@ -5,7 +5,8 @@
   import { executeAction, executeActionValue } from "../services/api";
   import { logError } from "../services/logger";
   import SceneBackground from "./SceneBackground.svelte";
-  import { sceneBackgroundId, controlsBackdropEnabled, controlsTransparency } from "../stores/appearance";
+  import { sceneBackgroundId, controlsBackdropEnabled, controlsTransparency, controlsOverlayColor, controlsOverlayCustom } from "../stores/appearance";
+  import { DEFAULT_CONTROLS_OVERLAY_COLOR, hexToRgbCss } from "../lib/color";
   import { usesCoverImage, usesFullViewBackground } from "../lib/sceneBackgrounds";
   import {
     DEFAULT_CAR_BACKGROUNDS,
@@ -92,6 +93,9 @@
   const showControlsBackdrop = $derived(showFullViewShader && $controlsBackdropEnabled);
   const controlsOverlayAlpha = $derived(
     showControlsBackdrop ? (100 - $controlsTransparency) / 100 : 1
+  );
+  const controlsOverlayRgb = $derived(
+    hexToRgbCss($controlsOverlayCustom ? $controlsOverlayColor : DEFAULT_CONTROLS_OVERLAY_COLOR)
   );
 
   const isPlaying = $derived(playbackState === "playing");
@@ -297,7 +301,7 @@
   class="car-thing"
   class:car-thing--shader={showFullViewShader}
   class:car-thing--controls-backdrop={showControlsBackdrop}
-  style={`--car-body-bg: ${carBodyBg}; --car-footer-bg: ${carFooterBg}; --controls-overlay-alpha: ${controlsOverlayAlpha};`}
+  style={`--car-body-bg: ${carBodyBg}; --car-footer-bg: ${carFooterBg}; --controls-overlay-alpha: ${controlsOverlayAlpha}; --controls-overlay-rgb: ${controlsOverlayRgb};`}
 >
   {#if showFullViewShader}
     <SceneBackground
@@ -775,7 +779,7 @@
   }
 
   .car-thing--controls-backdrop .car-progress-wrap {
-    background: rgba(0, 0, 0, var(--controls-overlay-alpha, 0.65));
+    background: rgba(var(--controls-overlay-rgb, 0, 0, 0), var(--controls-overlay-alpha, 0.65));
   }
 
   .car-progress-wrap.car-progress-disabled {
@@ -882,7 +886,7 @@
   }
 
   .car-thing--controls-backdrop .car-controls {
-    background: rgba(0, 0, 0, var(--controls-overlay-alpha, 0.65));
+    background: rgba(var(--controls-overlay-rgb, 0, 0, 0), var(--controls-overlay-alpha, 0.65));
   }
 
   .car-controls-row {
@@ -959,7 +963,7 @@
   }
 
   .car-thing--controls-backdrop .car-fader {
-    background: rgba(0, 0, 0, var(--controls-overlay-alpha, 0.65));
+    background: rgba(var(--controls-overlay-rgb, 0, 0, 0), var(--controls-overlay-alpha, 0.65));
   }
 
   .car-volume-display {
