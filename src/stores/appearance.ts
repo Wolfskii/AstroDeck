@@ -14,6 +14,8 @@ import {
   getControlsOverlayCustom,
   getControlsTransparency,
   getSceneBackground,
+  getAudioVisualizerEnabled,
+  getAudioVisualizerStatus,
   parseControlsOverlayColor,
   parseControlsOverlayCustom,
   parseControlsTransparency,
@@ -22,13 +24,17 @@ import {
   setControlsOverlayCustom,
   setControlsTransparency,
   setSceneBackground,
+  setAudioVisualizerEnabled,
+  DEFAULT_AUDIO_VISUALIZER,
 } from "../services/prefs";
+import { ensureOsAudioListener, type OsAudioFrame } from "../lib/osAudioViz";
 
 const STORAGE_KEY = "astrodeck:sceneBackground";
 const BACKDROP_KEY = "astrodeck:controlsBackdrop";
 const TRANSPARENCY_KEY = "astrodeck:controlsTransparency";
 const OVERLAY_COLOR_KEY = "astrodeck:controlsOverlayColor";
 const OVERLAY_CUSTOM_KEY = "astrodeck:controlsOverlayCustom";
+const AUDIO_VISUALIZER_KEY = "astrodeck:audioVisualizer";
 
 function readStored(): SceneBackgroundId {
   if (typeof window === "undefined") return DEFAULT_SCENE_BACKGROUND;
@@ -80,11 +86,25 @@ function readStoredOverlayCustom(): boolean {
   }
 }
 
+function readStoredAudioVisualizer(): boolean {
+  if (typeof window === "undefined") return DEFAULT_AUDIO_VISUALIZER;
+  try {
+    const stored = window.localStorage.getItem(AUDIO_VISUALIZER_KEY);
+    if (stored == null) return DEFAULT_AUDIO_VISUALIZER;
+    return stored === "true";
+  } catch {
+    return DEFAULT_AUDIO_VISUALIZER;
+  }
+}
+
 export const sceneBackgroundId = writable<SceneBackgroundId>(readStored());
 export const controlsBackdropEnabled = writable(readStoredBackdrop());
 export const controlsTransparency = writable(readStoredTransparency());
 export const controlsOverlayColor = writable(readStoredOverlayColor());
 export const controlsOverlayCustom = writable(readStoredOverlayCustom());
+export const audioVisualizerEnabled = writable(readStoredAudioVisualizer());
+export const audioVisualizerSupported = writable(false);
+export const audioVisualizerError = writable<string | null>(null);
 
 sceneBackgroundId.subscribe((value) => {
   if (typeof window === "undefined") return;
@@ -131,6 +151,15 @@ controlsOverlayCustom.subscribe((value) => {
   }
 });
 
+audioVisualizerEnabled.subscribe((value) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(AUDIO_VISUALIZER_KEY, String(value));
+  } catch {
+    // ignore
+  }
+});
+
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key === STORAGE_KEY && event.newValue) {
@@ -147,6 +176,9 @@ if (typeof window !== "undefined") {
     }
     if (event.key === OVERLAY_CUSTOM_KEY && event.newValue != null) {
       controlsOverlayCustom.set(parseControlsOverlayCustom(event.newValue));
+    }
+    if (event.key === AUDIO_VISUALIZER_KEY && event.newValue != null) {
+      audioVisualizerEnabled.set(event.newValue === "true");
     }
   });
 
@@ -167,8 +199,17 @@ if (typeof window !== "undefined") {
             );
           }
         ),
+        listen<boolean>("audio-visualizer-changed", (event) => {
+          audioVisualizerEnabled.set(!!event.payload);
+        }),
+        listen<OsAudioFrame>("os-audio-viz", (event) => {
+          audioVisualizerError.set(event.payload.error ?? null);
+        }),
       ])
     )
+    .then(() => {
+      ensureOsAudioListener();
+    })
     .catch(() => {
       // browser / unavailable
     });
@@ -187,6 +228,19 @@ export async function hydrateSceneBackground(): Promise<void> {
     controlsOverlayCustom.set(await getControlsOverlayCustom());
   } catch {
     // keep local value
+  }
+  try {
+    const status = await getAudioVisualizerStatus();
+    audioVisualizerSupported.set(status.supported);
+    audioVisualizerEnabled.set(status.enabled);
+    audioVisualizerError.set(status.error);
+    if (status.enabled) ensureOsAudioListener();
+  } catch {
+    try {
+      audioVisualizerEnabled.set(await getAudioVisualizerEnabled());
+    } catch {
+      // keep local value
+    }
   }
 }
 
@@ -215,6 +269,23 @@ export function persistControlsOverlayColor(color: string): void {
 export function persistControlsOverlayCustom(enabled: boolean): void {
   controlsOverlayCustom.set(enabled);
   void setControlsOverlayCustom(enabled);
+}
+
+export function persistAudioVisualizerEnabled(enabled: boolean): void {
+  audioVisualizerEnabled.set(enabled);
+  if (enabled) {
+    audioVisualizerError.set(null);
+    ensureOsAudioListener();
+  }
+  void setAudioVisualizerEnabled(enabled).then(async () => {
+    try {
+      const status = await getAudioVisualizerStatus();
+      audioVisualizerSupported.set(status.supported);
+      if (status.error) audioVisualizerError.set(status.error);
+    } catch {
+      // keep current status
+    }
+  });
 }
 
 export function previewControlsOverlayColor(color: string): void {

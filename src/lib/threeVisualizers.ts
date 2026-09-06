@@ -1,11 +1,13 @@
 import * as THREE from "three";
+import { sampleBand } from "./osAudioViz";
 
 export type VisualizerTick = (
   dt: number,
   elapsed: number,
   colors: THREE.Color[],
   beat: number,
-  playing: boolean
+  playing: boolean,
+  bands: number[] | null
 ) => void;
 
 export type VisualizerCtx = {
@@ -45,7 +47,7 @@ export function setupSpectrum(ctx: VisualizerCtx): VisualizerTick {
   scene.add(core);
   disposables.push(core.geometry, core.material);
 
-  return (_dt, elapsed, colors, beat, playing) => {
+  return (_dt, elapsed, colors, beat, playing, bands) => {
     const spin = playing ? elapsed * 0.22 : elapsed * 0.04;
     for (let i = 0; i < count; i += 1) {
       const angle = (i / count) * Math.PI * 2 + spin * 0.15;
@@ -53,13 +55,15 @@ export function setupSpectrum(ctx: VisualizerCtx): VisualizerTick {
         0.35 * Math.abs(Math.sin(elapsed * 2.1 + i * 0.41)) +
         0.25 * Math.abs(Math.sin(elapsed * 3.4 + i * 0.17)) +
         0.2 * Math.abs(Math.sin(elapsed * 5.2 + i * 0.09));
-      const height = 0.45 + (0.55 + beat * 2.4) * wave;
+      const live = sampleBand(bands, i, count);
+      const level = live == null ? wave : live * 0.88 + wave * 0.12;
+      const height = 0.45 + (0.55 + beat * 2.4) * level;
       dummy.position.set(Math.cos(angle) * radius, height * 0.5, Math.sin(angle) * radius);
       dummy.scale.set(1, height, 1);
       dummy.rotation.set(0, -angle, 0);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
-      tint.copy(colors[i % 3]).multiplyScalar(0.45 + beat * 0.85 + wave * 0.35);
+      tint.copy(colors[i % 3]).multiplyScalar(0.45 + beat * 0.85 + level * 0.35);
       mesh.setColorAt(i, tint);
     }
     mesh.instanceMatrix.needsUpdate = true;

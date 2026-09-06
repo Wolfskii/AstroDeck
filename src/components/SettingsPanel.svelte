@@ -14,8 +14,12 @@
     persistControlsOverlayCustom,
     persistControlsTransparency,
     persistSceneBackground,
+    persistAudioVisualizerEnabled,
     previewControlsOverlayColor,
     sceneBackgroundId,
+    audioVisualizerEnabled,
+    audioVisualizerSupported,
+    audioVisualizerError,
   } from "../stores/appearance";
   import type { PluginConfig } from "../types";
   import type { AppUpdateInfo } from "../services/updater";
@@ -333,8 +337,8 @@
       <div class="scene-group">
         <h3 class="scene-group-title">Visualizers</h3>
         <p class="scene-group-hint">
-          Beat-driven looks that ease off when playback is paused. The pulse is timed, not read
-          from Spotify audio.
+          Beat-driven looks that ease off when playback is paused. Turn on system audio below to
+          follow the speakers; otherwise they use a timed pulse.
         </p>
         <div class="scene-grid">
           {#each SCENE_BACKGROUND_OPTIONS.filter((option) => option.group === "visualizer") as option (option.id)}
@@ -355,6 +359,34 @@
             </button>
           {/each}
         </div>
+      </div>
+      <div class="settings-card">
+        <label class="setting-row" class:setting-row-disabled={!$audioVisualizerSupported} for="audio-visualizer">
+          <div class="setting-copy">
+            <span class="setting-title">React to system audio</span>
+            <span class="setting-desc">
+              Drive scenes and visualizers from this computer's speaker output. Off uses a timed
+              pulse. Nothing is recorded or sent.
+            </span>
+          </div>
+          <input
+            id="audio-visualizer"
+            type="checkbox"
+            checked={$audioVisualizerEnabled}
+            disabled={!$audioVisualizerSupported}
+            onchange={(event) =>
+              persistAudioVisualizerEnabled((event.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="md-check" aria-hidden="true"></span>
+        </label>
+        {#if !$audioVisualizerSupported}
+          <p class="settings-note">
+            Speaker capture is available in the Windows desktop app. The browser preview cannot
+            tap the system audio mix.
+          </p>
+        {:else if $audioVisualizerError}
+          <p class="settings-error">{$audioVisualizerError}</p>
+        {/if}
       </div>
       <div class="settings-card">
         <label class="setting-row" for="controls-backdrop">
@@ -889,6 +921,10 @@
     pointer-events: none;
   }
 
+  .setting-row.setting-row-disabled {
+    opacity: 0.55;
+  }
+
   .setting-colour-toggle {
     display: flex;
     align-items: center;
@@ -1194,6 +1230,18 @@
     margin: 10px 0 0;
     color: #b91c1c;
     font-size: 0.88rem;
+  }
+
+  .settings-note {
+    margin: 0;
+    padding: 0 18px 16px;
+    color: var(--md-muted);
+    font-size: 0.88rem;
+  }
+
+  .settings-card .settings-error {
+    margin: 0;
+    padding: 0 18px 16px;
   }
 
   .settings-hint.ok {

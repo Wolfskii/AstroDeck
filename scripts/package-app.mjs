@@ -314,6 +314,7 @@ function main() {
     run("node", ["scripts/sync-version.mjs", "--bump-dev"]);
   }
 
+  run("npm", ["run", "icons:sync"]);
   run("npm", ["run", "build"]);
 
   const tauriArgs = ["tauri", "build"];

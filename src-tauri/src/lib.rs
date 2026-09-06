@@ -1,4 +1,5 @@
 mod actions;
+mod audio_viz;
 mod detectors;
 mod layout_engine;
 mod mode_engine;
@@ -342,6 +343,9 @@ pub fn run() {
             prefs::set_controls_overlay_color,
             prefs::get_controls_overlay_custom,
             prefs::set_controls_overlay_custom,
+            prefs::get_audio_visualizer_enabled,
+            prefs::set_audio_visualizer_enabled,
+            prefs::get_audio_visualizer_status,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -364,6 +368,7 @@ pub fn run() {
             plugin_engine::load_plugins(&app_handle);
             detectors::start_detection_loop(app_handle.clone());
             os_media::start(app_handle.clone());
+            crate::audio_viz::sync(&app_handle, prefs::audio_visualizer_enabled(&app_handle));
             spotify::init(&app_handle, &app.state::<AppState>().spotify)?;
 
             // Start WebSocket log bus so browser clients see live logs

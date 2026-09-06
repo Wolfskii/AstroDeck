@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { SceneBackgroundId } from "./sceneBackgrounds";
-import { synthBeat } from "./visualizerBeat";
+import { resolveBeat, resolvePlaying } from "./visualizerBeat";
+import { getOsAudioFrame } from "./osAudioViz";
 import {
   setupBokeh,
   setupHelix,
@@ -81,7 +82,14 @@ export function createThreeBackground(
 
   const disposables: { dispose: () => void }[] = [glow];
   const tickers: Array<
-    (dt: number, elapsed: number, colors: THREE.Color[], beat: number, playing: boolean) => void
+    (
+      dt: number,
+      elapsed: number,
+      colors: THREE.Color[],
+      beat: number,
+      playing: boolean,
+      bands: number[] | null
+    ) => void
   > = [];
 
   function resize() {
@@ -532,8 +540,10 @@ export function createThreeBackground(
         scene.fog.color.copy(fogScratch);
       }
     }
-    const beat = synthBeat(elapsed, playing);
-    for (const tick of tickers) tick(dt, elapsed, colors, beat, playing);
+    const beat = resolveBeat(elapsed, playing);
+    const motion = resolvePlaying(playing);
+    const bands = getOsAudioFrame()?.bands ?? null;
+    for (const tick of tickers) tick(dt, elapsed, colors, beat, motion, bands);
     renderer.render(scene, camera);
     raf = requestAnimationFrame(frame);
   }

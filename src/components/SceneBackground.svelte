@@ -4,7 +4,8 @@
   import { mixHexPalette } from "../lib/color";
   import { usesCoverImage, usesThreeBackground, usesVisualizerShader, type SceneBackgroundId } from "../lib/sceneBackgrounds";
   import { createThreeBackground, type ThreeBackgroundHandle } from "../lib/threeBackground";
-  import { synthBeat } from "../lib/visualizerBeat";
+  import { resolveBeat, resolvePlaying } from "../lib/visualizerBeat";
+  import { ensureOsAudioListener, getOsAudioFrame } from "../lib/osAudioViz";
   import {
     fragmentForStyle,
     lerpPaletteUniforms,
@@ -102,6 +103,7 @@
     const el = host;
     const currentStyle = style;
     if (!el) return;
+    ensureOsAudioListener();
 
     if (usesThreeBackground(currentStyle)) {
       let three: ThreeBackgroundHandle | null = null;
@@ -248,9 +250,12 @@
         const tick = (now: number) => {
           if (disposed || !mount) return;
           const t = (now - started) / 1000;
+          const audio = getOsAudioFrame();
+          const beat = resolveBeat(t, isPlaying);
+          const motion = resolvePlaying(isPlaying);
           mount.setUniforms({
-            u_beat: synthBeat(t, isPlaying),
-            u_speed: isPlaying ? 0.85 : 0.18,
+            u_beat: beat,
+            u_speed: motion ? 0.55 + (audio?.rms ?? 0) * 0.9 : 0.18,
           });
           raf = requestAnimationFrame(tick);
         };

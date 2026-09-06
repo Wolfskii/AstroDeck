@@ -202,3 +202,34 @@ export async function setControlsOverlayCustom(enabled: boolean): Promise<void> 
   }
   await invoke("set_controls_overlay_custom", { enabled });
 }
+
+export const DEFAULT_AUDIO_VISUALIZER = false;
+
+export type AudioVisualizerStatus = {
+  supported: boolean;
+  enabled: boolean;
+  running: boolean;
+  error: string | null;
+};
+
+export async function getAudioVisualizerEnabled(): Promise<boolean> {
+  if (!isTauri) return DEFAULT_AUDIO_VISUALIZER;
+  return invoke<boolean>("get_audio_visualizer_enabled");
+}
+
+export async function setAudioVisualizerEnabled(enabled: boolean): Promise<void> {
+  if (!isTauri) return;
+  await invoke("set_audio_visualizer_enabled", { enabled });
+}
+
+export async function getAudioVisualizerStatus(): Promise<AudioVisualizerStatus> {
+  if (!isTauri) {
+    return {
+      supported: false,
+      enabled: DEFAULT_AUDIO_VISUALIZER,
+      running: false,
+      error: "System audio capture needs the desktop app.",
+    };
+  }
+  return invoke<AudioVisualizerStatus>("get_audio_visualizer_status");
+}

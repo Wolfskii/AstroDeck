@@ -66,13 +66,55 @@ async function renderAt(size, mascotSource) {
   return pipeline.png().toBuffer();
 }
 
+function encodeBmpIcon(rgba, width, height) {
+  const xorStride = width * 4;
+  const andStride = ((width + 31) >> 5) << 2;
+  const xorSize = xorStride * height;
+  const andSize = andStride * height;
+  const headerSize = 40;
+  const buf = Buffer.alloc(headerSize + xorSize + andSize);
+
+  buf.writeUInt32LE(headerSize, 0);
+  buf.writeInt32LE(width, 4);
+  buf.writeInt32LE(height * 2, 8);
+  buf.writeUInt16LE(1, 12);
+  buf.writeUInt16LE(32, 14);
+  buf.writeUInt32LE(0, 16);
+  buf.writeUInt32LE(xorSize + andSize, 20);
+
+  for (let y = 0; y < height; y += 1) {
+    const srcY = height - 1 - y;
+    for (let x = 0; x < width; x += 1) {
+      const si = (srcY * width + x) * 4;
+      const di = headerSize + y * xorStride + x * 4;
+      buf[di] = rgba[si + 2];
+      buf[di + 1] = rgba[si + 1];
+      buf[di + 2] = rgba[si];
+      buf[di + 3] = rgba[si + 3];
+    }
+  }
+
+  const andOffset = headerSize + xorSize;
+  for (let y = 0; y < height; y += 1) {
+    const srcY = height - 1 - y;
+    for (let x = 0; x < width; x += 1) {
+      if (rgba[(srcY * width + x) * 4 + 3] >= 128) continue;
+      const byteIndex = andOffset + y * andStride + (x >> 3);
+      buf[byteIndex] |= 0x80 >> (x & 7);
+    }
+  }
+
+  return buf;
+}
+
 function encodeIco(images) {
   const count = images.length;
   const headerBytes = 6 + 16 * count;
   let offset = headerBytes;
   const entries = images.map((image) => {
-    const entry = { ...image, offset, bytes: image.png.length };
-    offset += image.png.length;
+    const bytes = image.payload.length;
+    const entry = { ...image, offset, bytes };
+    offset += bytes;
     return entry;
   });
   const buf = Buffer.alloc(offset);
@@ -90,21 +132,34 @@ function encodeIco(images) {
     buf.writeUInt32LE(entry.bytes, cursor + 8);
     buf.writeUInt32LE(entry.offset, cursor + 12);
     cursor += 16;
-    entry.png.copy(buf, entry.offset);
+    entry.payload.copy(buf, entry.offset);
   }
   return buf;
 }
 
 async function writeWindowsIcons(mascotSource) {
+  /** 32 BMP first: Win32 LoadIcon / the taskbar prefer a classic DIB, not PNG-in-ICO. */
+  const icoOrder = [32, 24, 16, 20, 30, 36, 40, 48, 64, 256];
   const rendered = [];
   for (const size of WINDOWS_ICO_SIZES) {
-    rendered.push({ size, png: await renderAt(size, mascotSource) });
+    const png = await renderAt(size, mascotSource);
+    if (size >= 256) {
+      rendered.push({ size, png, payload: png });
+      continue;
+    }
+    const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    rendered.push({
+      size,
+      png,
+      payload: encodeBmpIcon(data, info.width ?? size, info.height ?? size),
+    });
   }
+  rendered.sort((a, b) => icoOrder.indexOf(a.size) - icoOrder.indexOf(b.size));
 
   const icoPath = path.join(tauriIconsDir, "icon.ico");
   fs.writeFileSync(icoPath, encodeIco(rendered));
   console.log(
-    `[icons] Wrote Windows ICO (${WINDOWS_ICO_SIZES.join(", ")}) at ${icoPath}`
+    `[icons] Wrote Windows ICO (BMP <256, PNG 256; ${icoOrder.join(", ")}) at ${icoPath}`
   );
 
   const bySize = new Map(rendered.map((image) => [image.size, image.png]));

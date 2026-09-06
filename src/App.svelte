@@ -886,6 +886,13 @@
       logInfo("Initializing system tray", "Tray");
       const icon = await defaultWindowIcon();
       const win = getCurrentWindow();
+      if (icon) {
+        try {
+          await win.setIcon(icon);
+        } catch (error) {
+          logError(`Failed to set window icon: ${String(error)}`, "Tray");
+        }
+      }
       const initiallyVisible = await win.isVisible();
 
       trayMenu = await Menu.new({

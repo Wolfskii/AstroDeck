@@ -23,6 +23,8 @@ pub struct AppPreferences {
     pub controls_overlay_color: String,
     #[serde(default)]
     pub controls_overlay_custom: Option<bool>,
+    #[serde(default)]
+    pub audio_visualizer: bool,
 }
 
 impl Default for AppPreferences {
@@ -37,6 +39,7 @@ impl Default for AppPreferences {
             controls_transparency: default_controls_transparency(),
             controls_overlay_color: default_controls_overlay_color(),
             controls_overlay_custom: None,
+            audio_visualizer: false,
         }
     }
 }
@@ -315,4 +318,34 @@ pub fn set_controls_overlay_custom(app: tauri::AppHandle, enabled: bool) -> Resu
     save_preferences(&path, &preferences)?;
     emit_controls_backdrop(&app, &preferences);
     Ok(())
+}
+
+pub fn audio_visualizer_enabled(app: &tauri::AppHandle) -> bool {
+    preferences_path(app)
+        .and_then(|path| load_preferences(&path))
+        .map(|preferences| preferences.audio_visualizer)
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn get_audio_visualizer_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(audio_visualizer_enabled(&app))
+}
+
+#[tauri::command]
+pub fn set_audio_visualizer_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.audio_visualizer = enabled;
+    save_preferences(&path, &preferences)?;
+    crate::audio_viz::sync(&app, enabled);
+    let _ = app.emit("audio-visualizer-changed", enabled);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_audio_visualizer_status(
+    app: tauri::AppHandle,
+) -> Result<crate::audio_viz::AudioVisualizerStatus, String> {
+    Ok(crate::audio_viz::status(audio_visualizer_enabled(&app)))
 }
