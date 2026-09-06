@@ -676,7 +676,6 @@
     width: 36px;
     height: 36px;
     object-fit: contain;
-    border-radius: 10px;
   }
 
   .settings-brand strong {
