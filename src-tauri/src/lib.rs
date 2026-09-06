@@ -333,6 +333,10 @@ pub fn run() {
             prefs::set_scene_background,
             prefs::get_show_settings_terminal,
             prefs::set_show_settings_terminal,
+            prefs::get_controls_backdrop_enabled,
+            prefs::set_controls_backdrop_enabled,
+            prefs::get_controls_transparency,
+            prefs::set_controls_transparency,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

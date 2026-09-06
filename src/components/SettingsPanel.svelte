@@ -3,7 +3,14 @@
   import appIconUrl from "../assets/app-icon.png";
   import { getBuiltinSceneMeta } from "../layouts/layouts";
   import { SCENE_BACKGROUND_OPTIONS } from "../lib/sceneBackgrounds";
-  import { persistSceneBackground, sceneBackgroundId } from "../stores/appearance";
+  import {
+    controlsBackdropEnabled,
+    controlsTransparency,
+    persistControlsBackdropEnabled,
+    persistControlsTransparency,
+    persistSceneBackground,
+    sceneBackgroundId,
+  } from "../stores/appearance";
   import type { PluginConfig } from "../types";
   import type { AppUpdateInfo } from "../services/updater";
   import type { SpotifyStatus } from "../services/api";
@@ -312,6 +319,55 @@
             <p class="scene-description">{option.description}</p>
           </button>
         {/each}
+      </div>
+      <div class="settings-card">
+        <label class="setting-row" for="controls-backdrop">
+          <div class="setting-copy">
+            <span class="setting-title">Background behind controls</span>
+            <span class="setting-desc">
+              Continue the scene background through the playback bar, with a dark overlay.
+            </span>
+          </div>
+          <input
+            id="controls-backdrop"
+            type="checkbox"
+            bind:checked={$controlsBackdropEnabled}
+            onchange={(event) =>
+              persistControlsBackdropEnabled((event.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="md-check" aria-hidden="true"></span>
+        </label>
+        <div class="setting-row setting-row-slider" class:setting-row-disabled={!$controlsBackdropEnabled}>
+          <div class="setting-copy">
+            <span class="setting-title">Control bar transparency</span>
+            <span class="setting-desc">
+              Higher values let more of the background show through the playback controls.
+            </span>
+          </div>
+          <div class="md-slider">
+            <span class="md-slider-value">{$controlsTransparency}%</span>
+            <div class="md-slider-ui">
+              <div class="md-slider-track" aria-hidden="true"></div>
+              <div class="md-slider-fill" style={`width: ${$controlsTransparency}%`} aria-hidden="true"></div>
+              <input
+                id="controls-transparency"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                bind:value={$controlsTransparency}
+                disabled={!$controlsBackdropEnabled}
+                aria-label="Control bar transparency"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={$controlsTransparency}
+                aria-valuetext={`${$controlsTransparency} percent`}
+                oninput={(event) =>
+                  persistControlsTransparency(Number((event.currentTarget as HTMLInputElement).value))}
+              />
+            </div>
+          </div>
+        </div>
       </div>
     {:else if activeSection === "updates"}
       <div class="settings-card settings-card-pad">
@@ -758,6 +814,113 @@
     box-shadow: inset 0 1px 0 var(--md-line);
   }
 
+  .setting-row-slider {
+    cursor: default;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+  }
+
+  .setting-row-slider.setting-row-disabled {
+    opacity: 0.45;
+    pointer-events: none;
+  }
+
+  .md-slider {
+    display: grid;
+    grid-template-columns: 4.2rem minmax(0, 1fr);
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+  }
+
+  .md-slider-value {
+    font-size: 0.95rem;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    color: var(--md-ink);
+    text-align: right;
+  }
+
+  .md-slider-ui {
+    position: relative;
+    height: 32px;
+    display: flex;
+    align-items: center;
+  }
+
+  .md-slider-track,
+  .md-slider-fill {
+    position: absolute;
+    left: 0;
+    height: 8px;
+    border-radius: 999px;
+    pointer-events: none;
+  }
+
+  .md-slider-track {
+    right: 0;
+    background: #d5d9e1;
+    box-shadow: inset 0 1px 2px rgba(17, 24, 39, 0.12);
+  }
+
+  .md-slider-fill {
+    background: #111827;
+  }
+
+  .md-slider-ui input[type="range"] {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 32px;
+    margin: 0;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .md-slider-ui input[type="range"]:focus-visible {
+    outline: none;
+  }
+
+  .md-slider-ui:has(input[type="range"]:focus-visible) {
+    border-radius: 10px;
+    outline: 2px solid var(--md-blue);
+    outline-offset: 4px;
+  }
+
+  .md-slider-ui input[type="range"]::-webkit-slider-runnable-track {
+    height: 8px;
+    background: transparent;
+  }
+
+  .md-slider-ui input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 22px;
+    height: 22px;
+    margin-top: -7px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #111827;
+    box-shadow: 0 2px 8px rgba(17, 24, 39, 0.22);
+  }
+
+  .md-slider-ui input[type="range"]::-moz-range-track {
+    height: 8px;
+    background: transparent;
+    border: none;
+  }
+
+  .md-slider-ui input[type="range"]::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #111827;
+    box-shadow: 0 2px 8px rgba(17, 24, 39, 0.22);
+  }
+
   .setting-copy {
     flex: 1 1 auto;
     min-width: 0;
@@ -795,7 +958,7 @@
     background: #f3f4f6;
   }
 
-  .setting-row input {
+  .setting-row input[type="checkbox"] {
     position: absolute;
     opacity: 0;
     width: 1px;
@@ -830,7 +993,7 @@
     transition: transform 0.12s ease;
   }
 
-  .setting-row input:checked + .md-check {
+  .setting-row input[type="checkbox"]:checked + .md-check {
     background: var(--md-blue);
     border-color: var(--md-blue);
   }
@@ -840,11 +1003,11 @@
     border-color: #1d4ed8;
   }
 
-  .setting-row input:checked + .md-check::after {
+  .setting-row input[type="checkbox"]:checked + .md-check::after {
     transform: scale(1);
   }
 
-  .setting-row input:disabled + .md-check {
+  .setting-row input[type="checkbox"]:disabled + .md-check {
     opacity: 0.55;
   }
 
@@ -1183,6 +1346,8 @@
     .md-input,
     .md-check,
     .md-check::after,
+    .md-slider-fill,
+    .md-slider-ui input[type="range"]::-webkit-slider-thumb,
     .scene-card,
     .setting-row {
       transition: none;

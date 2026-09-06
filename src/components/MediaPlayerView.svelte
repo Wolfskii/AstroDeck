@@ -5,7 +5,7 @@
   import { executeAction, executeActionValue } from "../services/api";
   import { logError } from "../services/logger";
   import SceneBackground from "./SceneBackground.svelte";
-  import { sceneBackgroundId } from "../stores/appearance";
+  import { sceneBackgroundId, controlsBackdropEnabled, controlsTransparency } from "../stores/appearance";
   import { usesCoverImage, usesFullViewBackground } from "../lib/sceneBackgrounds";
   import {
     DEFAULT_CAR_BACKGROUNDS,
@@ -89,6 +89,10 @@
   const backgroundStyle = $derived($sceneBackgroundId);
   const showFullViewShader = $derived(usesFullViewBackground(backgroundStyle));
   const showArtBorder = $derived(backgroundStyle === "pulsing-border");
+  const showControlsBackdrop = $derived(showFullViewShader && $controlsBackdropEnabled);
+  const controlsOverlayAlpha = $derived(
+    showControlsBackdrop ? (100 - $controlsTransparency) / 100 : 1
+  );
 
   const isPlaying = $derived(playbackState === "playing");
   const hasDuration = $derived((durationMs ?? 0) > 0);
@@ -291,19 +295,23 @@
 
 <div
   class="car-thing"
-  style={`--car-body-bg: ${carBodyBg}; --car-footer-bg: ${carFooterBg};`}
+  class:car-thing--shader={showFullViewShader}
+  class:car-thing--controls-backdrop={showControlsBackdrop}
+  style={`--car-body-bg: ${carBodyBg}; --car-footer-bg: ${carFooterBg}; --controls-overlay-alpha: ${controlsOverlayAlpha};`}
 >
+  {#if showFullViewShader}
+    <SceneBackground
+      style={backgroundStyle}
+      colors={shaderColors}
+      imageUrl={usesCoverImage(backgroundStyle) ? artworkUrl : null}
+    />
+  {/if}
   <div
     class="car-thing-body"
     class:car-thing-body--has-icon={showSettingsButton && onOpenSettings}
     class:car-thing-body--shader={showFullViewShader}
   >
     {#if showFullViewShader}
-      <SceneBackground
-        style={backgroundStyle}
-        colors={shaderColors}
-        imageUrl={usesCoverImage(backgroundStyle) ? artworkUrl : null}
-      />
       <div class="car-shader-scrim" aria-hidden="true"></div>
     {/if}
     {#if showSettingsButton && onOpenSettings}
@@ -539,6 +547,7 @@
 
 <style>
   .car-thing {
+    position: relative;
     display: grid;
     flex: 1;
     min-height: 0;
@@ -550,6 +559,14 @@
     background: var(--car-body-bg, #0a0a0a);
     color: #f5f5f5;
     transition: background 0.45s ease;
+  }
+
+  .car-thing--shader {
+    background: #000;
+  }
+
+  .car-thing > :global(.scene-background) {
+    z-index: 0;
   }
 
   .car-thing:has(.car-fader) {
@@ -573,6 +590,11 @@
     overflow: hidden;
     background: var(--car-body-bg, #0a0a0a);
     transition: background 0.45s ease;
+    z-index: 1;
+  }
+
+  .car-thing-body--shader {
+    background: transparent;
   }
 
   .car-shader-scrim {
@@ -746,8 +768,14 @@
     cursor: pointer;
     touch-action: none;
     user-select: none;
+    position: relative;
+    z-index: 1;
     background: var(--car-footer-bg, #0c0808);
     transition: background 0.45s ease;
+  }
+
+  .car-thing--controls-backdrop .car-progress-wrap {
+    background: rgba(0, 0, 0, var(--controls-overlay-alpha, 0.65));
   }
 
   .car-progress-wrap.car-progress-disabled {
@@ -847,8 +875,14 @@
     flex-shrink: 0;
     padding: 12px 24px max(20px, env(safe-area-inset-bottom, 0px));
     min-height: 148px;
+    position: relative;
+    z-index: 1;
     background: var(--car-footer-bg, #0c0808);
     transition: background 0.45s ease;
+  }
+
+  .car-thing--controls-backdrop .car-controls {
+    background: rgba(0, 0, 0, var(--controls-overlay-alpha, 0.65));
   }
 
   .car-controls-row {
@@ -917,9 +951,15 @@
     justify-content: stretch;
     gap: 0;
     padding: 20px 20px max(20px, env(safe-area-inset-bottom, 0px));
+    position: relative;
+    z-index: 1;
     background: var(--car-footer-bg, #0c0808);
     min-height: 0;
     transition: background 0.45s ease;
+  }
+
+  .car-thing--controls-backdrop .car-fader {
+    background: rgba(0, 0, 0, var(--controls-overlay-alpha, 0.65));
   }
 
   .car-volume-display {

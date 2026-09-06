@@ -72,3 +72,65 @@ export async function setShowSettingsTerminal(enabled: boolean): Promise<void> {
   }
   await invoke("set_show_settings_terminal", { enabled });
 }
+
+const CONTROLS_BACKDROP_KEY = "astrodeck:controlsBackdrop";
+const CONTROLS_TRANSPARENCY_KEY = "astrodeck:controlsTransparency";
+
+export const DEFAULT_CONTROLS_BACKDROP = true;
+export const DEFAULT_CONTROLS_TRANSPARENCY = 35;
+
+export function parseControlsTransparency(value: unknown): number {
+  if (value == null || value === "") return DEFAULT_CONTROLS_TRANSPARENCY;
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return DEFAULT_CONTROLS_TRANSPARENCY;
+  return Math.min(100, Math.max(0, Math.round(n)));
+}
+
+export async function getControlsBackdropEnabled(): Promise<boolean> {
+  if (!isTauri) {
+    try {
+      const stored = window.localStorage.getItem(CONTROLS_BACKDROP_KEY);
+      if (stored == null) return DEFAULT_CONTROLS_BACKDROP;
+      return stored === "true";
+    } catch {
+      return DEFAULT_CONTROLS_BACKDROP;
+    }
+  }
+  return invoke<boolean>("get_controls_backdrop_enabled");
+}
+
+export async function setControlsBackdropEnabled(enabled: boolean): Promise<void> {
+  if (!isTauri) {
+    try {
+      window.localStorage.setItem(CONTROLS_BACKDROP_KEY, String(enabled));
+    } catch {
+      // ignore
+    }
+    return;
+  }
+  await invoke("set_controls_backdrop_enabled", { enabled });
+}
+
+export async function getControlsTransparency(): Promise<number> {
+  if (!isTauri) {
+    try {
+      return parseControlsTransparency(window.localStorage.getItem(CONTROLS_TRANSPARENCY_KEY));
+    } catch {
+      return DEFAULT_CONTROLS_TRANSPARENCY;
+    }
+  }
+  return parseControlsTransparency(await invoke<number>("get_controls_transparency"));
+}
+
+export async function setControlsTransparency(value: number): Promise<void> {
+  const transparency = parseControlsTransparency(value);
+  if (!isTauri) {
+    try {
+      window.localStorage.setItem(CONTROLS_TRANSPARENCY_KEY, String(transparency));
+    } catch {
+      // ignore
+    }
+    return;
+  }
+  await invoke("set_controls_transparency", { value: transparency });
+}

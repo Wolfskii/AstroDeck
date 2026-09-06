@@ -15,6 +15,10 @@ pub struct AppPreferences {
     pub scene_background: String,
     #[serde(default)]
     pub show_settings_terminal: bool,
+    #[serde(default = "default_controls_backdrop")]
+    pub controls_backdrop: bool,
+    #[serde(default = "default_controls_transparency")]
+    pub controls_transparency: u8,
 }
 
 impl Default for AppPreferences {
@@ -25,6 +29,8 @@ impl Default for AppPreferences {
             show_update_popups: default_show_update_popups(),
             scene_background: default_scene_background(),
             show_settings_terminal: false,
+            controls_backdrop: default_controls_backdrop(),
+            controls_transparency: default_controls_transparency(),
         }
     }
 }
@@ -39,6 +45,25 @@ fn default_show_update_popups() -> bool {
 
 fn default_scene_background() -> String {
     "mesh-gradient".to_string()
+}
+
+fn default_controls_backdrop() -> bool {
+    true
+}
+
+fn default_controls_transparency() -> u8 {
+    35
+}
+
+fn parse_transparency(value: u8) -> u8 {
+    value.min(100)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ControlsBackdropState {
+    enabled: bool,
+    transparency: u8,
 }
 
 const SCENE_BACKGROUNDS: &[&str] = &[
@@ -168,5 +193,47 @@ pub fn set_show_settings_terminal(app: tauri::AppHandle, enabled: bool) -> Resul
     preferences.show_settings_terminal = enabled;
     save_preferences(&path, &preferences)?;
     let _ = app.emit("settings-terminal-changed", enabled);
+    Ok(())
+}
+
+fn emit_controls_backdrop(app: &tauri::AppHandle, preferences: &AppPreferences) {
+    let _ = app.emit(
+        "controls-backdrop-changed",
+        ControlsBackdropState {
+            enabled: preferences.controls_backdrop,
+            transparency: parse_transparency(preferences.controls_transparency),
+        },
+    );
+}
+
+#[tauri::command]
+pub fn get_controls_backdrop_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(load_preferences(&preferences_path(&app)?)?.controls_backdrop)
+}
+
+#[tauri::command]
+pub fn set_controls_backdrop_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.controls_backdrop = enabled;
+    save_preferences(&path, &preferences)?;
+    emit_controls_backdrop(&app, &preferences);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_controls_transparency(app: tauri::AppHandle) -> Result<u8, String> {
+    Ok(parse_transparency(
+        load_preferences(&preferences_path(&app)?)?.controls_transparency,
+    ))
+}
+
+#[tauri::command]
+pub fn set_controls_transparency(app: tauri::AppHandle, value: u8) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.controls_transparency = parse_transparency(value);
+    save_preferences(&path, &preferences)?;
+    emit_controls_backdrop(&app, &preferences);
     Ok(())
 }
