@@ -43,6 +43,15 @@ export async function setActiveScene(sceneId: string): Promise<void> {
   return invoke("set_active_scene", { sceneId });
 }
 
+export interface OsNowPlaying {
+  source: string;
+  title?: string | null;
+  artist?: string | null;
+  album?: string | null;
+  coverArtUrl?: string | null;
+  isPlaying: boolean;
+}
+
 export interface SpotifyTrackPreview {
   itemId: string;
   itemType: string;

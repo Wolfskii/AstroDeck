@@ -2,7 +2,8 @@
   import { untrack } from "svelte";
   import { ShaderMount, emptyPixel } from "@paper-design/shaders";
   import { mixHexPalette } from "../lib/color";
-  import { usesCoverImage, type SceneBackgroundId } from "../lib/sceneBackgrounds";
+  import { usesCoverImage, usesThreeBackground, type SceneBackgroundId } from "../lib/sceneBackgrounds";
+  import { createThreeBackground, type ThreeBackgroundHandle } from "../lib/threeBackground";
   import {
     fragmentForStyle,
     lerpPaletteUniforms,
@@ -92,6 +93,25 @@
     const el = host;
     const currentStyle = style;
     if (!el) return;
+
+    if (usesThreeBackground(currentStyle)) {
+      let three: ThreeBackgroundHandle | null = null;
+      try {
+        three = createThreeBackground(el, currentStyle, untrack(() => pendingPalette));
+        live = {
+          style: currentStyle,
+          applyPalette: (palette) => three?.applyPalette(palette),
+          applyImage: () => {},
+        };
+      } catch {
+        el.replaceChildren();
+        live = null;
+      }
+      return () => {
+        if (live?.style === currentStyle) live = null;
+        three?.dispose();
+      };
+    }
 
     const fragment = fragmentForStyle(currentStyle);
     if (!fragment || currentStyle === "off") {
@@ -237,7 +257,7 @@
 
   .scene-background--artwork {
     inset: 0;
-    z-index: 2;
+    z-index: 0;
     overflow: visible;
   }
 

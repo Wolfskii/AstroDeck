@@ -2,6 +2,7 @@ mod actions;
 mod detectors;
 mod layout_engine;
 mod mode_engine;
+mod os_media;
 mod plugin_engine;
 mod prefs;
 mod spotify;
@@ -362,6 +363,7 @@ pub fn run() {
 
             plugin_engine::load_plugins(&app_handle);
             detectors::start_detection_loop(app_handle.clone());
+            os_media::start(app_handle.clone());
             spotify::init(&app_handle, &app.state::<AppState>().spotify)?;
 
             // Start WebSocket log bus so browser clients see live logs

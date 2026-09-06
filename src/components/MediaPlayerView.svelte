@@ -15,6 +15,7 @@
     paletteToCarThingBackgrounds,
     paletteToShaderColors,
   } from "../lib/albumArtColor";
+  import { untrack } from "svelte";
 
   interface Props {
     previous?: DeckButtonConfig | null;
@@ -272,8 +273,11 @@
 
   $effect(() => {
     const next = artworkUrl ?? null;
-    if (next === artShown) {
-      if (artIncoming) {
+    const shown = untrack(() => artShown);
+    const incoming = untrack(() => artIncoming);
+
+    if (next === shown) {
+      if (incoming) {
         artIncoming = null;
         artIncomingReady = false;
       }
@@ -285,29 +289,51 @@
       artIncomingReady = false;
       return;
     }
-    if (!artShown) {
+    if (!shown) {
       artShown = next;
       return;
     }
-    if (next === artIncoming) return;
+    if (next === incoming) return;
 
     let cancelled = false;
+    let settleTimer = 0;
+    let revealed = false;
     artIncoming = next;
     artIncomingReady = false;
+
+    function reveal() {
+      if (cancelled || revealed) return;
+      if (untrack(() => artIncoming) !== next) return;
+      revealed = true;
+      artIncomingReady = true;
+      settleTimer = window.setTimeout(() => {
+        settleIncomingArtwork();
+      }, 700);
+    }
+
     const img = new Image();
     img.onload = () => {
-      if (cancelled || artIncoming !== next) return;
-      artIncomingReady = true;
+      if (cancelled) return;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(reveal);
+      });
     };
     img.onerror = () => {
-      if (cancelled || artIncoming !== next) return;
+      if (cancelled || untrack(() => artIncoming) !== next) return;
       artShown = next;
       artIncoming = null;
       artIncomingReady = false;
     };
     img.src = next;
+    if (img.complete && img.naturalWidth > 0) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(reveal);
+      });
+    }
+
     return () => {
       cancelled = true;
+      if (settleTimer) window.clearTimeout(settleTimer);
     };
   });
 
@@ -393,21 +419,23 @@
                 placement="artwork"
               />
             {/if}
-            {#if artShown}
-              <img class="car-artwork" src={artShown} alt={title ?? "Album art"} />
-            {:else}
-              <div class="car-artwork car-artwork-placeholder" aria-hidden="true">♪</div>
-            {/if}
-            {#if artIncoming}
-              <img
-                class="car-artwork car-artwork-incoming"
-                class:car-artwork-incoming--in={artIncomingReady}
-                src={artIncoming}
-                alt=""
-                aria-hidden="true"
-                ontransitionend={settleIncomingArtwork}
-              />
-            {/if}
+            <div class="car-art-plate">
+              {#if artShown}
+                <img class="car-artwork" src={artShown} alt={title ?? "Album art"} />
+              {:else}
+                <div class="car-artwork car-artwork-placeholder" aria-hidden="true">♪</div>
+              {/if}
+              {#if artIncoming}
+                <img
+                  class="car-artwork car-artwork-incoming"
+                  class:car-artwork-incoming--in={artIncomingReady}
+                  src={artIncoming}
+                  alt=""
+                  aria-hidden="true"
+                  ontransitionend={settleIncomingArtwork}
+                />
+              {/if}
+            </div>
           </div>
         </div>
 
@@ -754,6 +782,20 @@
     isolation: isolate;
   }
 
+  .car-art-plate {
+    position: relative;
+    z-index: 1;
+    height: 100%;
+    width: 100%;
+    max-width: 100%;
+    aspect-ratio: 1 / 1;
+  }
+
+  .car-art-frame--glow .car-art-plate {
+    width: 84%;
+    height: 84%;
+  }
+
   .car-artwork {
     position: relative;
     z-index: 1;
@@ -772,7 +814,7 @@
   .car-artwork-incoming {
     position: absolute;
     inset: 0;
-    z-index: 1;
+    z-index: 2;
     opacity: 0;
     transition: opacity 0.55s ease;
     pointer-events: none;
@@ -949,7 +991,7 @@
   }
 
   .car-controls {
-    grid-column: 1 / -1;
+    grid-column: 1;
     grid-row: 3;
     flex-shrink: 0;
     padding: 12px 24px max(20px, env(safe-area-inset-bottom, 0px));

@@ -1,6 +1,6 @@
 [package]
 name = "astrodeck"
-version = "0.1.5"
+version = "0.1.6-4"
 description = "Context-aware control deck for touchscreen monitors"
 authors = ["AstroDeck Contributors"]
 edition = "2021"
@@ -34,7 +34,14 @@ rand = "0.8"
 url = "2.5"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = ["Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.58", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com",
+    "Foundation",
+    "Foundation_Collections",
+    "Media_Control",
+    "Storage_Streams",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 media-remote = "0.3"

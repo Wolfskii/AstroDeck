@@ -1,7 +1,7 @@
 {
   "name": "astrodeck",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.6-4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -19,13 +19,15 @@
     "@paper-design/shaders": "0.0.80",
     "@tauri-apps/api": "2.11.0",
     "@tauri-apps/plugin-autostart": "^2.5.1",
-    "@tauri-apps/plugin-opener": "^2.5.4"
+    "@tauri-apps/plugin-opener": "^2.5.4",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@fontsource/dseg7-classic": "^5.2.5",
     "@sveltejs/vite-plugin-svelte": "^5",
     "@tauri-apps/cli": "2.11.0",
     "@tsconfig/svelte": "^5",
+    "@types/three": "^0.185.4",
     "sharp": "^0.34.5",
     "svelte": "^5",
     "svelte-check": "^4",

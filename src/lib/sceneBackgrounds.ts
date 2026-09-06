@@ -10,6 +10,10 @@ export const SCENE_BACKGROUND_IDS = [
   "water",
   "liquid-gradient",
   "aurora",
+  "cosmos",
+  "warp",
+  "prism",
+  "horizon",
 ] as const;
 
 export type SceneBackgroundId = (typeof SCENE_BACKGROUND_IDS)[number];
@@ -76,6 +80,26 @@ export const SCENE_BACKGROUND_OPTIONS: {
     label: "Aurora",
     description: "Night sky with curtains of light and stars, tinted by the cover.",
   },
+  {
+    id: "cosmos",
+    label: "Cosmos",
+    description: "A slowly turning galaxy of particles in cover-art colors.",
+  },
+  {
+    id: "warp",
+    label: "Warp",
+    description: "Hyperspace streaks flying toward you, tinted by the cover.",
+  },
+  {
+    id: "prism",
+    label: "Prism",
+    description: "Floating crystals lit by the cover palette.",
+  },
+  {
+    id: "horizon",
+    label: "Horizon",
+    description: "Neon grid and a banded sun, colored from the cover art.",
+  },
 ];
 
 export function isSceneBackgroundId(value: string): value is SceneBackgroundId {
@@ -89,6 +113,10 @@ export function parseSceneBackgroundId(value: string | null | undefined): SceneB
 
 export function usesFullViewBackground(id: SceneBackgroundId): boolean {
   return id !== "off" && id !== "pulsing-border";
+}
+
+export function usesThreeBackground(id: SceneBackgroundId): boolean {
+  return id === "cosmos" || id === "warp" || id === "prism" || id === "horizon";
 }
 
 export function usesCoverImage(id: SceneBackgroundId): boolean {

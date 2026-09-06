@@ -22,7 +22,7 @@
     setActiveScene,
     setSpotifyClientId,
   } from "./services/api";
-  import type { SpotifyTrackPreview } from "./services/api";
+  import type { OsNowPlaying, SpotifyTrackPreview } from "./services/api";
   import type { SceneState, LayoutConfig, PluginConfig, DeckButtonConfig } from "./types";
   import {
     getBuiltinLayout,
@@ -93,6 +93,7 @@
   let optimisticSpotifyPlaying = $state<boolean | null>(null);
   let pinnedSpotifyItemId: string | null = null;
   let pinnedSpotifyUntil = 0;
+  let osNowPlayingHold: { previousItemId: string | null } | null = null;
   let spotifyVolumeTarget = $state<number | null>(null);
   let spotifyStatusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let spotifyTransportRefreshTimers: ReturnType<typeof setTimeout>[] = [];
@@ -100,7 +101,8 @@
   let spotifyQueueRefreshPending = $state(false);
   let spotifyStatusLastRefresh = 0;
   const SPOTIFY_STATUS_MIN_INTERVAL_MS = 5000;
-  const SPOTIFY_STATUS_POLL_MS = 30000;
+  /** Slow fallback only. Track changes come from the OS now-playing session. */
+  const SPOTIFY_STATUS_POLL_MS = 180000;
   /** Spotify restarts the current track on prev when playback is past this point. */
   const SPOTIFY_PREV_RESTART_THRESHOLD_MS = 3000;
   const SPOTIFY_LOW_PRIORITY_REFRESH_ACTIONS = new Set([
@@ -592,6 +594,61 @@
     }
   }
 
+  function normalizeMediaText(value?: string | null) {
+    return (value ?? "").trim().toLowerCase();
+  }
+
+  function isSpotifyOsSource(source: string) {
+    return source.toLowerCase().includes("spotify");
+  }
+
+  function applyOsNowPlaying(payload: OsNowPlaying) {
+    if (!isSpotifyOsSource(payload.source) || !spotifyStatus?.isAuthenticated) return;
+
+    const nextTitle = payload.title?.trim() || null;
+    const titleChanged =
+      nextTitle != null &&
+      normalizeMediaText(nextTitle) !==
+        normalizeMediaText(spotifyStatus.currentTrackName);
+
+    const osCover = payload.coverArtUrl?.trim() || null;
+
+    if (titleChanged) {
+      clearPinnedSpotifyItem();
+      optimisticSpotifySaved = null;
+      osNowPlayingHold = {
+        previousItemId: spotifyStatus.currentItemId ?? null,
+      };
+      spotifyStatus = {
+        ...spotifyStatus,
+        currentTrackName: nextTitle,
+        currentArtistName: payload.artist?.trim() || spotifyStatus.currentArtistName,
+        currentAlbumName: payload.album?.trim() || spotifyStatus.currentAlbumName,
+        currentCoverArtUrl: osCover || spotifyStatus.currentCoverArtUrl,
+        progressMs: 0,
+        isPlaying: payload.isPlaying,
+        playbackState: payload.isPlaying ? "playing" : "paused",
+      };
+    } else {
+      if (osCover && osCover !== spotifyStatus.currentCoverArtUrl) {
+        spotifyStatus = {
+          ...spotifyStatus,
+          currentCoverArtUrl: osCover,
+        };
+      }
+      if (payload.isPlaying !== spotifyStatus.isPlaying) {
+        optimisticSpotifyPlaying = null;
+        spotifyStatus = {
+          ...spotifyStatus,
+          isPlaying: payload.isPlaying,
+          playbackState: payload.isPlaying ? "playing" : "paused",
+        };
+      }
+    }
+
+    scheduleSpotifyTransportRefresh();
+  }
+
   function pinSpotifyItem(itemId: string) {
     pinnedSpotifyItemId = itemId;
     pinnedSpotifyUntil = Date.now() + 5000;
@@ -676,6 +733,30 @@
       };
     } else if (!pinActive) {
       clearPinnedSpotifyItem();
+    }
+
+    if (osNowPlayingHold && spotifyStatus) {
+      const apiId = next.currentItemId ?? null;
+      const previousId = osNowPlayingHold.previousItemId;
+      const apiMovedOn =
+        Boolean(apiId && previousId && apiId !== previousId) ||
+        Boolean(apiId && !previousId);
+      if (apiMovedOn) {
+        osNowPlayingHold = null;
+      } else {
+        next = {
+          ...next,
+          currentItemId: spotifyStatus.currentItemId,
+          currentItemType: spotifyStatus.currentItemType,
+          currentTrackName: spotifyStatus.currentTrackName,
+          currentArtistName: spotifyStatus.currentArtistName,
+          currentAlbumName: spotifyStatus.currentAlbumName,
+          currentCoverArtUrl: spotifyStatus.currentCoverArtUrl,
+          durationMs: spotifyStatus.durationMs,
+          progressMs: spotifyStatus.progressMs,
+          isCurrentTrackSaved: spotifyStatus.isCurrentTrackSaved,
+        };
+      }
     }
 
     const sameTrack =
@@ -782,7 +863,7 @@
   }
 
   $effect(() => {
-    if (!isTauri || sceneId !== "spotify" || !spotifyStatus?.isPlaying) return;
+    if (!isTauri || sceneId !== "spotify") return;
     const id = window.setInterval(() => {
       void refreshSpotifyStatusForDesktop();
     }, SPOTIFY_STATUS_POLL_MS);
@@ -1367,6 +1448,9 @@
       };
       window.addEventListener("focus", onWindowFocus);
 
+      const unlistenOsNowPlaying = listen<OsNowPlaying>("os-now-playing", (event) => {
+        applyOsNowPlaying(event.payload);
+      });
       const unlisten = listen<SceneState>("scene-changed", (event) => {
         sceneId = event.payload.activeSceneId;
         layout = event.payload.layout;
@@ -1388,6 +1472,7 @@
         window.removeEventListener("keydown", onDeckPresentationKeydown, true);
         window.removeEventListener("focus", onWindowFocus);
         unlisten.then((fn) => fn());
+        unlistenOsNowPlaying.then((fn) => fn());
         unlistenTerminal.then((fn) => fn());
         window.removeEventListener("astrodeck-core-action", handleCoreAction as EventListener);
         window.removeEventListener("astrodeck-action-started", handleActionStarted as EventListener);

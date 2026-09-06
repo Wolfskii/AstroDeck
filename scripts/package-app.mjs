@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -92,6 +92,25 @@ function bundleDirForTarget(target) {
     return path.join(tauriDir, "target", target, "release", "bundle");
   }
   return path.join(tauriDir, "target", "release", "bundle");
+}
+
+function currentPackageVersion() {
+  return readFileSync(path.join(rootDir, "VERSION"), "utf8").trim();
+}
+
+function cleanBundleOutput(bundleDir) {
+  if (!existsSync(bundleDir)) return;
+  rmSync(bundleDir, { recursive: true, force: true });
+  console.log(`[package] Cleared previous bundle output at ${bundleDir}`);
+}
+
+function pruneStaleInstallers(destinationDir, version) {
+  for (const filePath of collectInstallers(destinationDir)) {
+    const name = path.basename(filePath);
+    if (name.endsWith(".app")) continue;
+    if (name.includes(version)) continue;
+    rmSync(filePath, { recursive: true, force: true });
+  }
 }
 
 function copyArtifacts(sourceDir, platform, target) {
@@ -301,10 +320,13 @@ function main() {
   if (resolvedTarget) {
     tauriArgs.push("--target", resolvedTarget);
   }
-  run("npx", tauriArgs);
 
   const sourceDir = bundleDirForTarget(resolvedTarget);
+  cleanBundleOutput(sourceDir);
+  run("npx", tauriArgs);
+
   const destinationDir = copyArtifacts(sourceDir, platform, resolvedTarget);
+  pruneStaleInstallers(destinationDir, currentPackageVersion());
 
   console.log(`[package] bundled artifacts copied to ${destinationDir}`);
   console.log(`[package] native installers/bundles remain in ${sourceDir}`);

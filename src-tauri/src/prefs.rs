@@ -102,6 +102,10 @@ const SCENE_BACKGROUNDS: &[&str] = &[
     "water",
     "liquid-gradient",
     "aurora",
+    "cosmos",
+    "warp",
+    "prism",
+    "horizon",
 ];
 
 fn parse_scene_background(value: &str) -> String {

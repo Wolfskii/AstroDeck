@@ -11,7 +11,8 @@
     "moduleDetection": "force",
     "baseUrl": ".",
     "paths": {
-      "$lib/*": ["src/*"]
+      "$lib/*": ["src/*"],
+      "three": ["./node_modules/@types/three/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.svelte"],
