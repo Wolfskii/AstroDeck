@@ -10,6 +10,7 @@ export const SCENE_BACKGROUND_IDS = [
   "fluted-glass",
   "water",
   "liquid-gradient",
+  "aurora",
 ] as const;
 
 export type SceneBackgroundId = (typeof SCENE_BACKGROUND_IDS)[number];
@@ -75,6 +76,11 @@ export const SCENE_BACKGROUND_OPTIONS: {
     id: "liquid-gradient",
     label: "Liquid Gradient",
     description: "Flowing liquid color fields from the cover palette.",
+  },
+  {
+    id: "aurora",
+    label: "Aurora",
+    description: "Night sky with curtains of light and stars, tinted by the cover.",
   },
 ];
 

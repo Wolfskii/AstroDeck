@@ -20,6 +20,7 @@ import {
   type ShaderMountUniforms,
 } from "@paper-design/shaders";
 import { DEFAULT_SHADER_COLORS } from "./albumArtColor";
+import { auroraFragmentShader } from "./auroraShader";
 import { liquidGradientFragmentShader } from "./liquidGradientShader";
 import type { SceneBackgroundId } from "./sceneBackgrounds";
 
@@ -38,6 +39,31 @@ const sizing = (fit: keyof typeof ShaderFitOptions = "cover") => ({
 function rgb3(color: string): [number, number, number] {
   const [r, g, b] = getShaderColorFromString(color);
   return [r, g, b];
+}
+
+function scaleRgb(color: string, amount: number): [number, number, number] {
+  const [r, g, b] = rgb3(color);
+  return [r * amount, g * amount, b * amount];
+}
+
+function mixRgb3(
+  a: [number, number, number],
+  b: [number, number, number],
+  amount: number
+): [number, number, number] {
+  return [
+    a[0] * (1 - amount) + b[0] * amount,
+    a[1] * (1 - amount) + b[1] * amount,
+    a[2] * (1 - amount) + b[2] * amount,
+  ];
+}
+
+function liftRgb(color: string, targetLuma = 0.48): [number, number, number] {
+  const [r, g, b] = rgb3(color);
+  const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+  if (luma >= targetLuma) return [r, g, b];
+  const boost = targetLuma / Math.max(luma, 0.04);
+  return [Math.min(1, r * boost), Math.min(1, g * boost), Math.min(1, b * boost)];
 }
 
 function colorsToVec4(colors: string[]) {
@@ -66,6 +92,8 @@ export function fragmentForStyle(style: SceneBackgroundId): string | null {
       return waterFragmentShader;
     case "liquid-gradient":
       return liquidGradientFragmentShader;
+    case "aurora":
+      return auroraFragmentShader;
     default:
       return null;
   }
@@ -270,6 +298,33 @@ export function uniformsForStyle(
           u_gradientCount: 12,
           u_color1Weight: 0.5,
           u_color2Weight: 1.8,
+        },
+      };
+    }
+    case "aurora": {
+      const base = colors[0] ?? DEFAULT_SHADER_COLORS[0];
+      const high = colors[1] ?? colors[0] ?? DEFAULT_SHADER_COLORS[2];
+      const back = colors[colors.length - 1] ?? DEFAULT_SHADER_COLORS[3];
+      const star = colors[2] ?? colors[0] ?? DEFAULT_SHADER_COLORS[0];
+      const [br, bg] = rgb3(base);
+      const nightHorizon: [number, number, number] = [0.012, 0.047, 0.11];
+      const nightZenith: [number, number, number] = [0.027, 0.059, 0.114];
+      return {
+        speed: 1,
+        uniforms: {
+          ...sizing("cover"),
+          u_dithering: 0.0228,
+          u_speed: 0.65,
+          u_seed: 14 + br * 18 + bg * 8,
+          u_colorBase: liftRgb(base),
+          u_colorHigh: liftRgb(high, 0.55),
+          u_skyDark: mixRgb3(nightHorizon, scaleRgb(back, 0.35), 0.28),
+          u_skyDeep: mixRgb3(nightZenith, scaleRgb(back, 0.45), 0.28),
+          u_starDensity: 0.073,
+          u_starSize: 0.92,
+          u_starBlinkRate: 6.26,
+          u_starIntensity: 0.52,
+          u_starColor: liftRgb(star, 0.7),
         },
       };
     }

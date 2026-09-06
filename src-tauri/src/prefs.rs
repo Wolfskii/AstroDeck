@@ -53,6 +53,7 @@ const SCENE_BACKGROUNDS: &[&str] = &[
     "fluted-glass",
     "water",
     "liquid-gradient",
+    "aurora",
 ];
 
 fn parse_scene_background(value: &str) -> String {
