@@ -38,6 +38,7 @@
     type AppUpdateInfo,
   } from "./services/updater";
   import { isAutostartEnabled, setAutostartEnabled } from "./services/autostart";
+  import { getStartMinimized, setStartMinimized } from "./services/prefs";
   import { persistMainWindowState, revealMainWindow } from "./services/windowState";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
@@ -80,6 +81,8 @@
   let startOnBoot = $state(false);
   let startOnBootBusy = $state(false);
   let startOnBootError = $state<string | null>(null);
+  let startMinimized = $state(true);
+  let startMinimizedBusy = $state(false);
   let optimisticSpotifySaved = $state<boolean | null>(null);
   let optimisticSpotifyShuffle = $state<boolean | null>(null);
   let optimisticSpotifyPlaying = $state<boolean | null>(null);
@@ -193,7 +196,12 @@
     if (!isTauri || viewMode !== "settings") return;
     void (async () => {
       try {
-        startOnBoot = await isAutostartEnabled();
+        const [boot, minimized] = await Promise.all([
+          isAutostartEnabled(),
+          getStartMinimized(),
+        ]);
+        startOnBoot = boot;
+        startMinimized = minimized;
         startOnBootError = null;
       } catch (e) {
         startOnBootError = String(e);
@@ -296,6 +304,30 @@
       logError(`Failed to update start on boot: ${String(e)}`, "Settings");
     } finally {
       startOnBootBusy = false;
+    }
+  }
+
+  async function onStartMinimizedChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const checked = input.checked;
+    startMinimizedBusy = true;
+    startOnBootError = null;
+    try {
+      await setStartMinimized(checked);
+      startMinimized = checked;
+      logInfo(
+        checked
+          ? "Enabled start minimized in the tray"
+          : "AstroDeck will open with its last window state",
+        "Settings"
+      );
+    } catch (e) {
+      startMinimized = !checked;
+      input.checked = !checked;
+      startOnBootError = String(e);
+      logError(`Failed to update start minimized: ${String(e)}`, "Settings");
+    } finally {
+      startMinimizedBusy = false;
     }
   }
 
@@ -672,12 +704,13 @@
       logInfo("Initializing system tray", "Tray");
       const icon = await defaultWindowIcon();
       const win = getCurrentWindow();
+      const initiallyVisible = await win.isVisible();
 
       trayMenu = await Menu.new({
         items: [
           {
             id: "toggle",
-            text: "Show AstroDeck",
+            text: initiallyVisible ? "Hide AstroDeck" : "Show AstroDeck",
             action: async () => {
               const visible = await win.isVisible();
               if (visible) {
@@ -1305,8 +1338,8 @@
             <div class="settings-block">
               <h3>Startup</h3>
               <p class="settings-help">
-                Launch AstroDeck in the system tray when you sign in. The window returns to its last
-                display, position, size, and maximized or fullscreen state when you open it.
+                Choose whether AstroDeck stays in the tray on launch, or opens on the last display
+                with the last position, size, and maximized or fullscreen state.
               </p>
               <label class="settings-switch" for="start-on-boot">
                 <input
@@ -1318,6 +1351,17 @@
                 />
                 <span class="settings-switch-ui" aria-hidden="true"></span>
                 <span class="settings-switch-label">Start AstroDeck when this computer starts</span>
+              </label>
+              <label class="settings-switch" for="start-minimized">
+                <input
+                  id="start-minimized"
+                  type="checkbox"
+                  checked={startMinimized}
+                  disabled={startMinimizedBusy}
+                  onchange={onStartMinimizedChange}
+                />
+                <span class="settings-switch-ui" aria-hidden="true"></span>
+                <span class="settings-switch-label">Start minimized in the system tray</span>
               </label>
               {#if startOnBootError}
                 <p class="settings-error">{startOnBootError}</p>
@@ -2086,6 +2130,10 @@
 
   .settings-block > .settings-switch {
     margin-top: 14px;
+  }
+
+  .settings-block > .settings-switch + .settings-switch {
+    margin-top: 12px;
   }
 
   .settings-primary-btn,

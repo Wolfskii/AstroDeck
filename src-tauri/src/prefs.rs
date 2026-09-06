@@ -5,6 +5,8 @@ use tauri::Manager;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AppPreferences {
+    #[serde(default = "default_start_minimized")]
+    pub start_minimized: bool,
     #[serde(default = "default_show_update_popups")]
     pub show_update_popups: bool,
 }
@@ -12,9 +14,14 @@ pub struct AppPreferences {
 impl Default for AppPreferences {
     fn default() -> Self {
         Self {
+            start_minimized: default_start_minimized(),
             show_update_popups: default_show_update_popups(),
         }
     }
+}
+
+fn default_start_minimized() -> bool {
+    true
 }
 
 fn default_show_update_popups() -> bool {
@@ -54,5 +61,25 @@ pub fn set_update_popups_enabled(app: tauri::AppHandle, enabled: bool) -> Result
     let path = preferences_path(&app)?;
     let mut preferences = load_preferences(&path)?;
     preferences.show_update_popups = enabled;
+    save_preferences(&path, &preferences)
+}
+
+pub fn start_minimized(app: &tauri::AppHandle) -> bool {
+    preferences_path(app)
+        .and_then(|path| load_preferences(&path))
+        .map(|preferences| preferences.start_minimized)
+        .unwrap_or_else(|_| default_start_minimized())
+}
+
+#[tauri::command]
+pub fn get_start_minimized(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(start_minimized(&app))
+}
+
+#[tauri::command]
+pub fn set_start_minimized(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.start_minimized = enabled;
     save_preferences(&path, &preferences)
 }

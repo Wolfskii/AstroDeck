@@ -1,7 +1,7 @@
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
-/// Geometry and chrome we persist. Visibility is excluded so the tray-first
-/// window stays hidden on launch (including OS login autostart).
+/// Geometry and chrome we persist. Visibility is not saved; launch show/hide
+/// is controlled by the start-minimized preference.
 pub fn tracked_flags() -> StateFlags {
     StateFlags::SIZE
         | StateFlags::POSITION
@@ -18,15 +18,25 @@ pub fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
-/// Restore monitor, position, and size while the window stays hidden.
-/// Maximized/fullscreen are applied later when the user shows the window,
-/// so restore cannot steal focus or flash a window on login.
-pub fn restore_hidden_geometry(window: &tauri::WebviewWindow) {
-    let flags = StateFlags::SIZE | StateFlags::POSITION | StateFlags::DECORATIONS;
+/// Restore last monitor, position, size, and chrome.
+/// If `start_minimized` is set, keep the window hidden in the tray.
+/// Otherwise show it with the last maximized/fullscreen state.
+pub fn apply_launch_state(window: &tauri::WebviewWindow, start_minimized: bool) {
+    let flags = if start_minimized {
+        StateFlags::SIZE | StateFlags::POSITION | StateFlags::DECORATIONS
+    } else {
+        tracked_flags()
+    };
     if let Err(e) = window.restore_state(flags) {
-        log::warn!("Failed to restore window geometry: {e}");
+        log::warn!("Failed to restore window state: {e}");
     }
-    let _ = window.hide();
+    if start_minimized {
+        let _ = window.hide();
+        return;
+    }
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
 }
 
 pub fn restore_show_state(window: &tauri::WebviewWindow) {
