@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AppPreferences {
@@ -11,6 +11,10 @@ pub struct AppPreferences {
     pub start_fullscreen: bool,
     #[serde(default = "default_show_update_popups")]
     pub show_update_popups: bool,
+    #[serde(default = "default_scene_background")]
+    pub scene_background: String,
+    #[serde(default)]
+    pub show_settings_terminal: bool,
 }
 
 impl Default for AppPreferences {
@@ -19,6 +23,8 @@ impl Default for AppPreferences {
             start_minimized: default_start_minimized(),
             start_fullscreen: false,
             show_update_popups: default_show_update_popups(),
+            scene_background: default_scene_background(),
+            show_settings_terminal: false,
         }
     }
 }
@@ -29,6 +35,32 @@ fn default_start_minimized() -> bool {
 
 fn default_show_update_popups() -> bool {
     true
+}
+
+fn default_scene_background() -> String {
+    "mesh-gradient".to_string()
+}
+
+const SCENE_BACKGROUNDS: &[&str] = &[
+    "off",
+    "mesh-gradient",
+    "static-radial",
+    "dithering",
+    "neuro-noise",
+    "grain-gradient",
+    "metaballs",
+    "pulsing-border",
+    "fluted-glass",
+    "water",
+    "liquid-gradient",
+];
+
+fn parse_scene_background(value: &str) -> String {
+    if SCENE_BACKGROUNDS.contains(&value) {
+        value.to_string()
+    } else {
+        default_scene_background()
+    }
 }
 
 fn preferences_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -105,4 +137,35 @@ pub fn set_start_fullscreen(app: tauri::AppHandle, enabled: bool) -> Result<(), 
     let mut preferences = load_preferences(&path)?;
     preferences.start_fullscreen = enabled;
     save_preferences(&path, &preferences)
+}
+
+#[tauri::command]
+pub fn get_scene_background(app: tauri::AppHandle) -> Result<String, String> {
+    let value = load_preferences(&preferences_path(&app)?)?.scene_background;
+    Ok(parse_scene_background(&value))
+}
+
+#[tauri::command]
+pub fn set_scene_background(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.scene_background = parse_scene_background(&id);
+    save_preferences(&path, &preferences)?;
+    let _ = app.emit("scene-background-changed", &preferences.scene_background);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_show_settings_terminal(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(load_preferences(&preferences_path(&app)?)?.show_settings_terminal)
+}
+
+#[tauri::command]
+pub fn set_show_settings_terminal(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.show_settings_terminal = enabled;
+    save_preferences(&path, &preferences)?;
+    let _ = app.emit("settings-terminal-changed", enabled);
+    Ok(())
 }

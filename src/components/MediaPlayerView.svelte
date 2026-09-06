@@ -4,10 +4,15 @@
   import type { DeckButtonConfig } from "../types";
   import { executeAction, executeActionValue } from "../services/api";
   import { logError } from "../services/logger";
+  import SceneBackground from "./SceneBackground.svelte";
+  import { sceneBackgroundId } from "../stores/appearance";
+  import { usesCoverImage, usesFullViewBackground } from "../lib/sceneBackgrounds";
   import {
     DEFAULT_CAR_BACKGROUNDS,
-    extractDominantAlbumColor,
+    DEFAULT_SHADER_COLORS,
+    extractAlbumPalette,
     paletteToCarThingBackgrounds,
+    paletteToShaderColors,
   } from "../lib/albumArtColor";
 
   interface Props {
@@ -80,6 +85,10 @@
   let seekHoldMs = $state<number | null>(null);
   let carBodyBg = $state(DEFAULT_CAR_BACKGROUNDS.body);
   let carFooterBg = $state(DEFAULT_CAR_BACKGROUNDS.footer);
+  let shaderColors = $state<string[]>([...DEFAULT_SHADER_COLORS]);
+  const backgroundStyle = $derived($sceneBackgroundId);
+  const showFullViewShader = $derived(usesFullViewBackground(backgroundStyle));
+  const showArtBorder = $derived(backgroundStyle === "pulsing-border");
 
   const isPlaying = $derived(playbackState === "playing");
   const hasDuration = $derived((durationMs ?? 0) > 0);
@@ -225,20 +234,23 @@
     if (!url) {
       carBodyBg = DEFAULT_CAR_BACKGROUNDS.body;
       carFooterBg = DEFAULT_CAR_BACKGROUNDS.footer;
+      shaderColors = [...DEFAULT_SHADER_COLORS];
       return;
     }
 
     let cancelled = false;
-    void extractDominantAlbumColor(url).then((rgb) => {
+    void extractAlbumPalette(url).then((palette) => {
       if (cancelled) return;
-      if (!rgb) {
+      if (!palette?.[0]) {
         carBodyBg = DEFAULT_CAR_BACKGROUNDS.body;
         carFooterBg = DEFAULT_CAR_BACKGROUNDS.footer;
+        shaderColors = [...DEFAULT_SHADER_COLORS];
         return;
       }
-      const palette = paletteToCarThingBackgrounds(rgb);
-      carBodyBg = palette.body;
-      carFooterBg = palette.footer;
+      const surfaces = paletteToCarThingBackgrounds(palette[0]);
+      carBodyBg = surfaces.body;
+      carFooterBg = surfaces.footer;
+      shaderColors = paletteToShaderColors(palette);
     });
 
     return () => {
@@ -284,7 +296,16 @@
   <div
     class="car-thing-body"
     class:car-thing-body--has-icon={showSettingsButton && onOpenSettings}
+    class:car-thing-body--shader={showFullViewShader}
   >
+    {#if showFullViewShader}
+      <SceneBackground
+        style={backgroundStyle}
+        colors={shaderColors}
+        imageUrl={usesCoverImage(backgroundStyle) ? artworkUrl : null}
+      />
+      <div class="car-shader-scrim" aria-hidden="true"></div>
+    {/if}
     {#if showSettingsButton && onOpenSettings}
       <button
         type="button"
@@ -300,11 +321,20 @@
     <section class="car-now-playing">
       <div class="car-now-playing-inner">
         <div class="car-art-column">
-          {#if artworkUrl}
-            <img class="car-artwork" src={artworkUrl} alt={title ?? "Album art"} />
-          {:else}
-            <div class="car-artwork car-artwork-placeholder" aria-hidden="true">♪</div>
-          {/if}
+          <div class="car-art-frame" class:car-art-frame--glow={showArtBorder}>
+            {#if showArtBorder}
+              <SceneBackground
+                style="pulsing-border"
+                colors={shaderColors}
+                placement="artwork"
+              />
+            {/if}
+            {#if artworkUrl}
+              <img class="car-artwork" src={artworkUrl} alt={title ?? "Album art"} />
+            {:else}
+              <div class="car-artwork car-artwork-placeholder" aria-hidden="true">♪</div>
+            {/if}
+          </div>
         </div>
 
         <div class="car-meta-column">
@@ -545,6 +575,19 @@
     transition: background 0.45s ease;
   }
 
+  .car-shader-scrim {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.42) 0%,
+      rgba(0, 0, 0, 0.22) 55%,
+      rgba(0, 0, 0, 0.28) 100%
+    );
+  }
+
   .car-settings-btn {
     position: absolute;
     top: 8px;
@@ -570,6 +613,8 @@
   }
 
   .car-now-playing {
+    position: relative;
+    z-index: 1;
     flex: 1 1 0;
     min-height: 0;
     width: 100%;
@@ -605,10 +650,27 @@
     align-self: stretch;
   }
 
-  .car-artwork {
-    display: block;
+  .car-art-frame {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     height: 100%;
     width: auto;
+    max-width: 100%;
+    aspect-ratio: 1 / 1;
+  }
+
+  .car-art-frame--glow {
+    overflow: visible;
+  }
+
+  .car-artwork {
+    position: relative;
+    z-index: 1;
+    display: block;
+    height: 100%;
+    width: 100%;
     max-width: 100%;
     aspect-ratio: 1 / 1;
     object-fit: contain;

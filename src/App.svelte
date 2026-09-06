@@ -38,8 +38,9 @@
     type AppUpdateInfo,
   } from "./services/updater";
   import { isAutostartEnabled, setAutostartEnabled } from "./services/autostart";
-  import { getStartMinimized, setStartMinimized, getStartFullscreen, setStartFullscreen } from "./services/prefs";
+  import { getStartMinimized, setStartMinimized, getStartFullscreen, setStartFullscreen, getShowSettingsTerminal, setShowSettingsTerminal } from "./services/prefs";
   import { persistMainWindowState, revealMainWindow } from "./services/windowState";
+  import { hydrateSceneBackground } from "./stores/appearance";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
 
@@ -62,7 +63,10 @@
   let seenScenes = $state<string[]>([]);
   // Tauri: main window can show deck or settings (viewMode). Browser: always settings/debug.
   let viewMode = $state<"deck" | "settings">("deck");
+  let showSettingsTerminal = $state(!isTauri);
+  let showSettingsTerminalBusy = $state(false);
   const isSettingsWindow = $derived(!isTauri || viewMode === "settings");
+  const showLogsPanel = $derived(isSettingsWindow && showSettingsTerminal);
   let logStatus = $state<"connecting" | "connected" | "disconnected">("connecting");
   let autoScroll = $state(true);
   let logsLinesEl = $state<HTMLElement | null>(null);
@@ -73,7 +77,6 @@
   let spotifyVolumeBusy = $state(false);
   let spotifySeekTargetMs = $state<number | null>(null);
   let spotifyVolumePercent = $state(50);
-  /** Shown under Spotify buttons in the desktop app (Tauri has no debug log panel). */
   let spotifyAuthHint = $state<string | null>(null);
   let spotifyClientIdDraft = $state("");
   let spotifyClientLockedByEnv = $state(false);
@@ -198,14 +201,16 @@
     if (!isTauri || viewMode !== "settings") return;
     void (async () => {
       try {
-        const [boot, minimized, fullscreen] = await Promise.all([
+        const [boot, minimized, fullscreen, terminal] = await Promise.all([
           isAutostartEnabled(),
           getStartMinimized(),
           getStartFullscreen(),
+          getShowSettingsTerminal(),
         ]);
         startOnBoot = boot;
         startMinimized = minimized;
         startFullscreen = fullscreen;
+        showSettingsTerminal = terminal;
         startOnBootError = null;
       } catch (e) {
         startOnBootError = String(e);
@@ -343,6 +348,28 @@
       logError(`Failed to update start minimized: ${String(e)}`, "Settings");
     } finally {
       startMinimizedBusy = false;
+    }
+  }
+
+  async function onShowSettingsTerminalChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const checked = input.checked;
+    showSettingsTerminalBusy = true;
+    startOnBootError = null;
+    try {
+      await setShowSettingsTerminal(checked);
+      showSettingsTerminal = checked;
+      logInfo(
+        checked ? "Enabled Settings terminal" : "Disabled Settings terminal",
+        "Settings"
+      );
+    } catch (e) {
+      showSettingsTerminal = !checked;
+      input.checked = !checked;
+      startOnBootError = String(e);
+      logError(`Failed to update Settings terminal: ${String(e)}`, "Settings");
+    } finally {
+      showSettingsTerminalBusy = false;
     }
   }
 
@@ -951,6 +978,7 @@
       windowLabel = "browser";
     }
     loadSeenScenes();
+    void hydrateSceneBackground();
     const handleCoreAction = async (ev: Event) => {
       const detail = (ev as CustomEvent<{ action: string; label: string }>).detail;
       if (!detail) return;
@@ -1135,6 +1163,13 @@
         .catch(() => {
           appVersion = "";
         });
+      void getShowSettingsTerminal()
+        .then((enabled) => {
+          showSettingsTerminal = enabled;
+        })
+        .catch(() => {
+          showSettingsTerminal = true;
+        });
 
       // Connect to the Rust WebSocket log bus to receive live logs from the Tauri window
       let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1270,6 +1305,11 @@
         } catch {
           showUpdatePopups = true;
         }
+        try {
+          showSettingsTerminal = await getShowSettingsTerminal();
+        } catch {
+          showSettingsTerminal = false;
+        }
         await checkForUpdates(true);
       })();
       refreshPluginsForDesktop();
@@ -1293,6 +1333,9 @@
           void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
         }
       });
+      const unlistenTerminal = listen<boolean>("settings-terminal-changed", (event) => {
+        showSettingsTerminal = event.payload;
+      });
 
       return () => {
         clearSpotifyTransportRefreshTimers();
@@ -1300,6 +1343,7 @@
         window.removeEventListener("keydown", onDeckPresentationKeydown, true);
         window.removeEventListener("focus", onWindowFocus);
         unlisten.then((fn) => fn());
+        unlistenTerminal.then((fn) => fn());
         window.removeEventListener("astrodeck-core-action", handleCoreAction as EventListener);
         window.removeEventListener("astrodeck-action-started", handleActionStarted as EventListener);
         window.removeEventListener("astrodeck-action-executed", handleActionExecuted as EventListener);
@@ -1390,10 +1434,13 @@
         startMinimizedBusy={startMinimizedBusy}
         startFullscreen={startFullscreen}
         startFullscreenBusy={startFullscreenBusy}
+        showSettingsTerminal={showSettingsTerminal}
+        showSettingsTerminalBusy={showSettingsTerminalBusy}
         startupError={startOnBootError}
         onStartOnBootChange={onStartOnBootChange}
         onStartMinimizedChange={onStartMinimizedChange}
         onStartFullscreenChange={onStartFullscreenChange}
+        onShowSettingsTerminalChange={onShowSettingsTerminalChange}
         appVersion={appVersion}
         appUpdate={appUpdate}
         appUpdateChecking={appUpdateChecking}
@@ -1481,18 +1528,22 @@
     {/if}
   </main>
 
-  {#if !isTauri}
+  {#if showLogsPanel}
     <section class="logs-panel">
       <div class="logs-card">
         <div class="logs-toolbar">
           <div class="logs-heading">
             <strong>Logs</strong>
-            <span class="logs-status" class:on={logStatus === "connected"}>
-              {logStatus === "connected"
-                ? "Connected"
-                : logStatus === "disconnected"
-                  ? "Disconnected"
-                  : "Connecting"}
+            <span class="logs-status" class:on={isTauri || logStatus === "connected"}>
+              {#if isTauri}
+                Live
+              {:else if logStatus === "connected"}
+                Connected
+              {:else if logStatus === "disconnected"}
+                Disconnected
+              {:else}
+                Connecting
+              {/if}
             </span>
           </div>
           <label class="logs-autoscroll">

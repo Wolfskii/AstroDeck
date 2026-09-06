@@ -329,6 +329,10 @@ pub fn run() {
             prefs::set_start_minimized,
             prefs::get_start_fullscreen,
             prefs::set_start_fullscreen,
+            prefs::get_scene_background,
+            prefs::set_scene_background,
+            prefs::get_show_settings_terminal,
+            prefs::set_show_settings_terminal,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

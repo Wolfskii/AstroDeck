@@ -2,11 +2,13 @@
   import ReleaseNotes from "./ReleaseNotes.svelte";
   import appIconUrl from "../assets/app-icon.png";
   import { getBuiltinSceneMeta } from "../layouts/layouts";
+  import { SCENE_BACKGROUND_OPTIONS } from "../lib/sceneBackgrounds";
+  import { persistSceneBackground, sceneBackgroundId } from "../stores/appearance";
   import type { PluginConfig } from "../types";
   import type { AppUpdateInfo } from "../services/updater";
   import type { SpotifyStatus } from "../services/api";
 
-  type SettingsSection = "general" | "updates" | "spotify" | "scenes";
+  type SettingsSection = "general" | "appearance" | "updates" | "spotify" | "scenes";
 
   let {
     isTauri,
@@ -17,10 +19,13 @@
     startMinimizedBusy,
     startFullscreen,
     startFullscreenBusy,
+    showSettingsTerminal,
+    showSettingsTerminalBusy,
     startupError,
     onStartOnBootChange,
     onStartMinimizedChange,
     onStartFullscreenChange,
+    onShowSettingsTerminalChange,
     appVersion,
     appUpdate,
     appUpdateChecking,
@@ -56,10 +61,13 @@
     startMinimizedBusy: boolean;
     startFullscreen: boolean;
     startFullscreenBusy: boolean;
+    showSettingsTerminal: boolean;
+    showSettingsTerminalBusy: boolean;
     startupError: string | null;
     onStartOnBootChange: (event: Event) => void;
     onStartMinimizedChange: (event: Event) => void;
     onStartFullscreenChange: (event: Event) => void;
+    onShowSettingsTerminalChange: (event: Event) => void;
     appVersion: string;
     appUpdate: AppUpdateInfo | null;
     appUpdateChecking: boolean;
@@ -93,6 +101,7 @@
 
   const titles: Record<SettingsSection, string> = {
     general: "General",
+    appearance: "Appearance",
     updates: "Updates",
     spotify: "Spotify",
     scenes: "Scenes",
@@ -125,6 +134,20 @@
           />
         </svg>
         General
+      </button>
+      <button
+        type="button"
+        class="settings-nav-item"
+        class:active={activeSection === "appearance"}
+        onclick={() => (section = "appearance")}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.36-.6-.36-.99A1.5 1.5 0 0 1 14.25 16h1.5A5.25 5.25 0 0 0 21 10.75 9 9 0 0 0 12 3zm-5.25 8.25a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm4.5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"
+          />
+        </svg>
+        Appearance
       </button>
       <button
         type="button"
@@ -246,10 +269,50 @@
           />
           <span class="md-check" aria-hidden="true"></span>
         </label>
+        <label class="setting-row" for="show-settings-terminal">
+          <div class="setting-copy">
+            <span class="setting-title">Show terminal in Settings</span>
+            <span class="setting-desc">
+              Show the activity log under Settings. Off by default in the installed app.
+            </span>
+          </div>
+          <input
+            id="show-settings-terminal"
+            type="checkbox"
+            checked={showSettingsTerminal}
+            disabled={showSettingsTerminalBusy}
+            onchange={onShowSettingsTerminalChange}
+          />
+          <span class="md-check" aria-hidden="true"></span>
+        </label>
       </div>
       {#if startupError}
         <p class="settings-error">{startupError}</p>
       {/if}
+    {:else if activeSection === "appearance"}
+      <p class="settings-lead">
+        Scene backgrounds pick colors from the current cover art. They apply to the Spotify
+        player first; other views will follow later.
+      </p>
+      <div class="scene-grid">
+        {#each SCENE_BACKGROUND_OPTIONS as option (option.id)}
+          <button
+            type="button"
+            class="scene-card"
+            class:active={$sceneBackgroundId === option.id}
+            onclick={() => persistSceneBackground(option.id)}
+            aria-pressed={$sceneBackgroundId === option.id}
+          >
+            <div class="scene-card-top">
+              <span class="scene-name">{option.label}</span>
+              {#if $sceneBackgroundId === option.id}
+                <span class="scene-tag current">current</span>
+              {/if}
+            </div>
+            <p class="scene-description">{option.description}</p>
+          </button>
+        {/each}
+      </div>
     {:else if activeSection === "updates"}
       <div class="settings-card settings-card-pad">
         <div class="settings-card-toolbar">

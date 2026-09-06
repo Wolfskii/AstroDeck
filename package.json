@@ -1,7 +1,7 @@
 {
   "name": "astrodeck",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5-dev",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,6 +16,7 @@
     "icons:sync": "node scripts/prepare-bundle-icon.mjs"
   },
   "dependencies": {
+    "@paper-design/shaders": "0.0.80",
     "@tauri-apps/api": "2.11.0",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-opener": "^2.5.4"
