@@ -47,18 +47,15 @@ uniform float u_speed;
 
 out vec4 fragColor;
 
-const float TAU = 6.2831853;
-
 void main() {
   vec2 uv = (gl_FragCoord.xy / (u_resolution * u_pixelRatio)) * 2.0 - 1.0;
   uv.x *= u_resolution.x / max(u_resolution.y, 1.0);
   float t = u_time * u_speed;
   float ang = atan(uv.y, uv.x);
   float rad = length(uv);
-  float spiral = ang / TAU + rad * 0.62 - t * 0.14;
-  float bands = 0.5 + 0.5 * sin(spiral * 16.0);
-  float spiral2 = ang / TAU - rad * 0.9 - t * 0.09;
-  float bands2 = 0.5 + 0.5 * sin(spiral2 * 11.0);
+  // Integer windings so sin() stays continuous across atan's -PI/PI seam.
+  float bands = 0.5 + 0.5 * sin(ang * 8.0 + rad * 9.5 - t * 2.2);
+  float bands2 = 0.5 + 0.5 * sin(ang * 5.0 - rad * 12.0 - t * 1.4);
   vec3 col = mix(u_colorBack * 0.35, u_colorA, bands * 0.7);
   col = mix(col, u_colorB, bands2 * 0.45);
   col = mix(col, u_colorC, smoothstep(0.72, 0.98, bands) * 0.28);
@@ -97,6 +94,7 @@ void main() {
   vec2 n = floor(p);
   vec2 f = fract(p);
   float minD = 8.0;
+  float minD2 = 8.0;
   vec2 winner = vec2(0.0);
   for (int j = -1; j <= 1; j++) {
     for (int i = -1; i <= 1; i++) {
@@ -106,16 +104,18 @@ void main() {
       vec2 r = g + o - f;
       float d = dot(r, r);
       if (d < minD) {
+        minD2 = minD;
         minD = d;
         winner = o;
+      } else if (d < minD2) {
+        minD2 = d;
       }
     }
   }
-  float edge = smoothstep(0.02, 0.09, sqrt(minD));
+  float grout = smoothstep(0.0, 0.07, sqrt(minD2) - sqrt(minD));
   vec3 cell = mix(u_colorA, u_colorB, winner.x);
   cell = mix(cell, u_colorC, winner.y * 0.65);
-  vec3 col = mix(u_colorBack * 0.45, cell, 0.82);
-  col = mix(u_colorBack * 0.25, col, edge);
+  vec3 col = mix(u_colorBack * 0.28, cell, grout);
   fragColor = vec4(col, 1.0);
 }
 `;

@@ -237,12 +237,12 @@ export function uniformsForStyle(
       };
     case "dithering":
       return {
-        speed: 0.35,
+        speed: 0.28,
         uniforms: {
           ...sizing("cover"),
           u_colorBack: back,
           u_colorFront: front,
-          u_shape: DitheringShapes.warp,
+          u_shape: DitheringShapes.swirl,
           u_type: DitheringTypes["4x4"],
           u_pxSize: 2.4,
           u_scale: 0.85,
@@ -256,8 +256,8 @@ export function uniformsForStyle(
           u_colorFront: front,
           u_colorMid: mid,
           u_colorBack: back,
-          u_brightness: 0.12,
-          u_contrast: 0.28,
+          u_brightness: 0.04,
+          u_contrast: 0.22,
           u_scale: 1.1,
         },
       };
@@ -272,7 +272,7 @@ export function uniformsForStyle(
           u_softness: 0.7,
           u_intensity: 0.45,
           u_noise: 0.35,
-          u_shape: GrainGradientShapes.blob,
+          u_shape: GrainGradientShapes.truchet,
           u_noiseTexture: noise,
         },
       };
@@ -304,7 +304,7 @@ export function uniformsForStyle(
           u_bloom: 0.5,
           u_spots: 4,
           u_spotSize: 0.5,
-          u_pulse: 0.7,
+          u_pulse: 0,
           u_smoke: 0.22,
           u_smokeSize: 0.45,
           u_aspectRatio: PulsingBorderAspectRatios.square,

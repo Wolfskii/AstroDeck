@@ -198,12 +198,8 @@ vec3 renderStarfield(vec3 viewDir, float timeFlow) {
   radius = min(radius, 0.5);
   float starGlow = smoothstep(radius, 0.0, length(spaceLocal));
   starGlow *= (0.08 / radius);
-  float blinkChance = fract(cellHash * 31.415);
-  float isTwinkling = step(0.85, blinkChance);
-  float blinkAnim = 0.3 + 0.7 * sin(timeFlow * u_starBlinkRate * (1.5 + blinkChance * 2.0) + cellHash * 100.0);
-  float twinkleFlow = mix(1.0, blinkAnim, isTwinkling);
   vec3 starTint = mix(vec3(0.7, 0.85, 1.0), u_starColor, fract(cellHash * 13.0));
-  return starTint * starExistence * starGlow * twinkleFlow;
+  return starTint * starExistence * starGlow;
 }
 
 vec3 paintBackdrop(vec3 viewVec) {

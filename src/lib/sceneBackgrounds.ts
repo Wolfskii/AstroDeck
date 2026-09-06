@@ -50,7 +50,7 @@ export const SCENE_BACKGROUND_OPTIONS: {
   {
     id: "dithering",
     label: "Dithering",
-    description: "Animated dither pattern in cover-art colors.",
+    description: "Swirling dither pattern in cover-art colors.",
   },
   {
     id: "neuro-noise",

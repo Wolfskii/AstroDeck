@@ -56,12 +56,11 @@ export function setupSpectrum(ctx: VisualizerCtx): VisualizerTick {
     const spin = playing ? elapsed * 0.28 : elapsed * 0.06;
     for (let i = 0; i < count; i += 1) {
       const angle = (i / count) * Math.PI * 2 + spin * 0.18;
-      const wave =
-        0.35 * Math.abs(Math.sin(elapsed * 1.7 + i * 0.41)) +
-        0.28 * Math.abs(Math.sin(elapsed * 2.6 + i * 0.17)) +
-        0.18 * Math.abs(Math.sin(elapsed * 4.1 + i * 0.09));
+      const traveling =
+        0.55 * (0.5 + 0.5 * Math.sin(angle * 4 + elapsed * 1.35)) +
+        0.35 * (0.5 + 0.5 * Math.sin(angle * 7 - elapsed * 0.85));
       const live = sampleBand(bands, i, count);
-      const level = live == null ? wave : live * 0.82 + wave * 0.18;
+      const level = live == null ? traveling : live * 0.82 + traveling * 0.18;
       const height = 0.55 + 2.15 * level;
       dummy.position.set(Math.cos(angle) * radius, height * 0.5, Math.sin(angle) * radius);
       dummy.scale.set(1, height, 1);
@@ -100,10 +99,10 @@ export function setupBokeh(ctx: VisualizerCtx): VisualizerTick {
     const material = new THREE.SpriteMaterial({
       map: glow,
       color: displayed[i % 3],
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       transparent: true,
       depthWrite: false,
-      opacity: 0.48,
+      opacity: 0.78,
     });
     const sprite = new THREE.Sprite(material);
     const origin = new THREE.Vector3(
@@ -137,7 +136,7 @@ export function setupBokeh(ctx: VisualizerCtx): VisualizerTick {
       );
       orb.sprite.scale.setScalar(orb.base);
       orb.sprite.material.color.copy(colors[orb.colorIndex]);
-      orb.sprite.material.opacity = 0.46;
+      orb.sprite.material.opacity = 0.78;
     }
     camera.position.x = Math.sin(elapsed * 0.07) * 0.9;
     camera.lookAt(0, 0, 0);
@@ -158,7 +157,7 @@ export function setupRipple(ctx: VisualizerCtx): VisualizerTick {
       transparent: true,
       opacity: 0,
       side: THREE.DoubleSide,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       depthWrite: false,
       toneMapped: false,
     });
@@ -172,10 +171,10 @@ export function setupRipple(ctx: VisualizerCtx): VisualizerTick {
     new THREE.SpriteMaterial({
       map: glow,
       color: displayed[0],
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       transparent: true,
       depthWrite: false,
-      opacity: 0.28,
+      opacity: 0.35,
     })
   );
   core.scale.set(3.2, 3.2, 1);
@@ -190,7 +189,7 @@ export function setupRipple(ctx: VisualizerCtx): VisualizerTick {
       ring.mesh.scale.set(scale, scale, 1);
       ring.mesh.rotation.z = elapsed * 0.08 + ring.phase;
       const material = ring.mesh.material as THREE.MeshBasicMaterial;
-      material.opacity = (1 - age) * 0.38;
+      material.opacity = (1 - age) * 0.55;
       material.color.copy(colors[Math.floor(ring.phase * 3) % 3]);
     }
     core.material.color.copy(colors[0]);
@@ -229,7 +228,7 @@ export function setupHelix(ctx: VisualizerCtx): VisualizerTick {
   const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    blending: THREE.AdditiveBlending,
+    blending: THREE.NormalBlending,
     uniforms: { uMap: { value: glow } },
     vertexShader: `
       attribute vec3 color;
@@ -353,10 +352,10 @@ export function setupEmbers(ctx: VisualizerCtx): VisualizerTick {
     const material = new THREE.SpriteMaterial({
       map: glow,
       color: displayed[i % 3],
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       transparent: true,
       depthWrite: false,
-      opacity: 0.42,
+      opacity: 0.7,
     });
     const sprite = new THREE.Sprite(material);
     const mote = {
@@ -392,7 +391,7 @@ export function setupEmbers(ctx: VisualizerCtx): VisualizerTick {
       );
       mote.sprite.scale.setScalar(mote.size);
       mote.sprite.material.color.copy(colors[mote.colorIndex]);
-      mote.sprite.material.opacity = 0.4;
+      mote.sprite.material.opacity = 0.7;
     }
     camera.position.x = Math.sin(elapsed * 0.08) * 1.1;
     camera.lookAt(0, 1.2, 0);

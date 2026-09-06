@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { SceneBackgroundId } from "./sceneBackgrounds";
-import { resolveBeat, resolvePlaying } from "./visualizerBeat";
+import { resolvePlaying } from "./visualizerBeat";
 import { getOsAudioFrame } from "./osAudioViz";
 import {
   setupBokeh,
@@ -559,7 +559,7 @@ export function createThreeBackground(
         scene.fog.color.copy(fogScratch);
       }
     }
-    const beat = resolveBeat(elapsed, playing);
+    const beat = 0;
     const motion = resolvePlaying(playing);
     const bands = getOsAudioFrame()?.bands ?? null;
     for (const tick of tickers) tick(dt, elapsed, colors, beat, motion, bands);
