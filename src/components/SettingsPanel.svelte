@@ -83,9 +83,7 @@
   } = $props();
 
   let section = $state<SettingsSection>("general");
-  const activeSection = $derived(
-    !isTauri && (section === "general" || section === "updates") ? "spotify" : section
-  );
+  const activeSection = $derived(section);
 
   const titles: Record<SettingsSection, string> = {
     general: "General",
@@ -108,39 +106,37 @@
     </div>
 
     <nav class="settings-nav-list" aria-label="Settings sections">
-      {#if isTauri}
-        <button
-          type="button"
-          class="settings-nav-item"
-          class:active={activeSection === "general"}
-          onclick={() => (section = "general")}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.59.22-1.14.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64L4.86 10.7c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.16a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.43.34.69.22l2.39-.96c.49.4 1.04.72 1.63.94l.36 2.54c.05.24.26.42.49.42h3.8c.24 0 .44-.18.49-.42l.36-2.54c.59-.22 1.14-.54 1.63-.94l2.39.96c.26.12.55.02.69-.22l1.92-3.32a.5.5 0 0 0-.12-.64zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"
-            />
-          </svg>
-          General
-        </button>
-        <button
-          type="button"
-          class="settings-nav-item"
-          class:active={activeSection === "updates"}
-          onclick={() => (section = "updates")}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M12 4a1 1 0 0 1 1 1v5.59l1.3-1.3a1 1 0 1 1 1.4 1.42l-3 3a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.42l1.3 1.3V5a1 1 0 0 1 1-1zm-7 9a1 1 0 0 1 1 1 7 7 0 0 0 14 0 1 1 0 1 1 2 0 9 9 0 1 1-18 0 1 1 0 0 1 1-1z"
-            />
-          </svg>
-          Updates
-          {#if updateBadge}
-            <span class="settings-nav-badge">{updateBadge}</span>
-          {/if}
-        </button>
-      {/if}
+      <button
+        type="button"
+        class="settings-nav-item"
+        class:active={activeSection === "general"}
+        onclick={() => (section = "general")}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.59.22-1.14.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64L4.86 10.7c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.16a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.43.34.69.22l2.39-.96c.49.4 1.04.72 1.63.94l.36 2.54c.05.24.26.42.49.42h3.8c.24 0 .44-.18.49-.42l.36-2.54c.59-.22 1.14-.54 1.63-.94l2.39.96c.26.12.55.02.69-.22l1.92-3.32a.5.5 0 0 0-.12-.64zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"
+          />
+        </svg>
+        General
+      </button>
+      <button
+        type="button"
+        class="settings-nav-item"
+        class:active={activeSection === "updates"}
+        onclick={() => (section = "updates")}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M12 4a1 1 0 0 1 1 1v5.59l1.3-1.3a1 1 0 1 1 1.4 1.42l-3 3a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.42l1.3 1.3V5a1 1 0 0 1 1-1zm-7 9a1 1 0 0 1 1 1 7 7 0 0 0 14 0 1 1 0 1 1 2 0 9 9 0 1 1-18 0 1 1 0 0 1 1-1z"
+          />
+        </svg>
+        Updates
+        {#if updateBadge}
+          <span class="settings-nav-badge">{updateBadge}</span>
+        {/if}
+      </button>
       <button
         type="button"
         class="settings-nav-item"
@@ -190,6 +186,11 @@
     </header>
 
     {#if activeSection === "general"}
+      {#if !isTauri}
+        <p class="settings-lead">
+          Startup options take effect in the AstroDeck desktop app. Toggles here are a preview.
+        </p>
+      {/if}
       <div class="settings-card">
         <label class="setting-row" for="start-on-boot">
           <div class="setting-copy">
@@ -203,7 +204,7 @@
             disabled={startOnBootBusy}
             onchange={onStartOnBootChange}
           />
-          <span class="md-switch" aria-hidden="true"></span>
+          <span class="md-check" aria-hidden="true"></span>
         </label>
         <label class="setting-row" for="start-minimized">
           <div class="setting-copy">
@@ -220,7 +221,7 @@
             disabled={startMinimizedBusy}
             onchange={onStartMinimizedChange}
           />
-          <span class="md-switch" aria-hidden="true"></span>
+          <span class="md-check" aria-hidden="true"></span>
         </label>
       </div>
       {#if startupError}
@@ -280,7 +281,7 @@
             disabled={showUpdatePopupsBusy}
             onchange={onShowUpdatePopupsChange}
           />
-          <span class="md-switch" aria-hidden="true"></span>
+          <span class="md-check" aria-hidden="true"></span>
         </label>
       </div>
     {:else if activeSection === "spotify"}
@@ -456,9 +457,11 @@
     --md-bg: #eceef2;
     --md-surface: #ffffff;
     --md-ink: #111827;
-    --md-muted: #6b7280;
-    --md-line: rgba(17, 24, 39, 0.08);
+    --md-muted: #1e293b;
+    --md-line: rgba(17, 24, 39, 0.14);
     --md-shadow: 0 1px 2px rgba(17, 24, 39, 0.04), 0 14px 40px rgba(17, 24, 39, 0.06);
+    --md-ease: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+      box-shadow 0.15s ease, transform 0.15s ease;
     --md-sidebar: #0d0d0d;
     --md-sidebar-text: #d4d4d4;
     --md-sidebar-muted: #a3a3a3;
@@ -523,15 +526,17 @@
     align-items: center;
     gap: 10px;
     width: 100%;
-    padding: 10px 12px;
+    min-height: 44px;
+    padding: 12px 14px;
     border: none;
     border-radius: 8px;
     background: transparent;
     color: var(--md-sidebar-text);
-    font-size: 0.92rem;
+    font-size: 0.95rem;
     font-weight: 500;
     text-align: left;
     cursor: pointer;
+    transition: var(--md-ease);
   }
 
   .settings-nav-item svg {
@@ -564,13 +569,15 @@
 
   .settings-back {
     margin-top: auto;
-    padding: 10px 12px;
+    min-height: 44px;
+    padding: 12px 14px;
     border: none;
     border-radius: 8px;
     background: var(--md-sidebar-hover);
     color: var(--md-sidebar-text);
     font-weight: 500;
     cursor: pointer;
+    transition: var(--md-ease);
   }
 
   .settings-back:hover {
@@ -604,13 +611,19 @@
   .settings-back-inline {
     display: none;
     margin: 0 0 12px;
-    padding: 8px 12px;
-    border: 1px solid var(--md-line);
+    min-height: 44px;
+    padding: 10px 14px;
+    border: none;
     border-radius: 8px;
-    background: #fff;
+    background: #e8eaee;
     color: var(--md-ink);
     font-weight: 500;
     cursor: pointer;
+    transition: var(--md-ease);
+  }
+
+  .settings-back-inline:hover {
+    background: #d7dbe3;
   }
 
   .settings-lead {
@@ -643,8 +656,14 @@
     display: flex;
     align-items: center;
     gap: 16px;
-    padding: 16px 18px;
+    min-height: 72px;
+    padding: 18px 20px;
     cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+
+  .setting-row:hover:not(:has(input:disabled)) {
+    background: #f6f7f9;
   }
 
   .setting-row + .setting-row {
@@ -686,42 +705,52 @@
     pointer-events: none;
   }
 
-  .md-switch {
+  .md-check {
     position: relative;
     flex: 0 0 auto;
-    width: 44px;
-    height: 24px;
-    border-radius: 999px;
-    background: #d1d5db;
-    transition: background 0.15s ease;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 2px solid #9aa3b2;
+    background: #fff;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   }
 
-  .md-switch::after {
+  .setting-row:hover:not(:has(input:disabled)) .md-check {
+    border-color: #64748b;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
+  }
+
+  .md-check::after {
     content: "";
     position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.2);
-    transition: transform 0.15s ease;
+    inset: 0;
+    background: center / 14px 14px no-repeat
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.5 6.5 11.5 12.5 4.8'/%3E%3C/svg%3E");
+    transform: scale(0);
+    transform-origin: center;
+    transition: transform 0.12s ease;
   }
 
-  .setting-row input:checked + .md-switch {
+  .setting-row input:checked + .md-check {
     background: var(--md-blue);
+    border-color: var(--md-blue);
   }
 
-  .setting-row input:checked + .md-switch::after {
-    transform: translateX(20px);
+  .setting-row:hover:not(:has(input:disabled)) input:checked + .md-check {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
   }
 
-  .setting-row input:disabled + .md-switch {
+  .setting-row input:checked + .md-check::after {
+    transform: scale(1);
+  }
+
+  .setting-row input:disabled + .md-check {
     opacity: 0.55;
   }
 
-  .setting-row:has(input:focus-visible) .md-switch {
+  .setting-row:has(input:focus-visible) .md-check {
     outline: 2px solid var(--md-blue);
     outline-offset: 2px;
   }
@@ -731,49 +760,82 @@
   }
 
   .md-btn {
-    padding: 9px 14px;
+    min-height: 44px;
+    padding: 12px 18px;
     border-radius: 8px;
-    border: 1px solid var(--md-line);
-    background: #fff;
+    border: none;
+    background: #e8eaee;
     color: var(--md-ink);
+    font-size: 0.95rem;
     font-weight: 500;
     cursor: pointer;
+    transition: var(--md-ease);
   }
 
   .md-btn:hover:not(:disabled) {
-    background: #f9fafb;
+    background: #d7dbe3;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(17, 24, 39, 0.08);
+  }
+
+  .md-btn:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: none;
   }
 
   .md-btn-primary {
-    border-color: #111111;
     background: #111111;
     color: #fff;
   }
 
   .md-btn-primary:hover:not(:disabled) {
-    background: #262626;
-    border-color: #262626;
+    background: #2a2a2a;
+    box-shadow: 0 6px 16px rgba(17, 24, 39, 0.22);
   }
 
   .md-btn-danger {
-    border-color: var(--md-line);
-    color: var(--md-danger);
+    background: #ef4444;
+    color: #fff;
+  }
+
+  .md-btn-danger:hover:not(:disabled) {
+    background: #dc2626;
+    color: #fff;
   }
 
   .md-btn:disabled {
     opacity: 0.55;
-    cursor: progress;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
   }
 
   .md-input {
     flex: 1 1 220px;
     min-width: 0;
-    padding: 10px 12px;
+    padding: 12px 14px;
     border-radius: 8px;
-    border: 1px solid var(--md-line);
+    border: 1px solid #c5cad3;
     background: #fff;
     color: var(--md-ink);
-    font-size: 0.9rem;
+    font-size: 0.95rem;
+    min-height: 44px;
+    transition: var(--md-ease);
+  }
+
+  .md-input:hover:not(:disabled) {
+    border-color: #9aa3b2;
+  }
+
+  .md-input:focus {
+    outline: none;
+    border-color: var(--md-blue);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+  }
+
+  .md-input:disabled {
+    cursor: not-allowed;
+    background: #f8f9fb;
   }
 
   .settings-field-row,
@@ -814,7 +876,7 @@
     padding-top: 16px;
     box-shadow: inset 0 1px 0 var(--md-line);
     --text-primary: #111827;
-    --text-secondary: #6b7280;
+    --text-secondary: #1e293b;
     --bg-primary: #f3f4f6;
     --border-subtle: rgba(17, 24, 39, 0.08);
     --accent: #2563eb;
@@ -899,21 +961,36 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 16px;
-    border: 1px solid var(--md-line);
+    padding: 18px;
+    border: 1px solid #c5cad3;
     border-radius: 10px;
     background: var(--md-surface);
     text-align: left;
     color: var(--md-ink);
     cursor: pointer;
+    min-height: 120px;
+    transition: var(--md-ease);
   }
 
   .scene-card:hover {
-    background: #fafafa;
+    background: #f7f8fa;
+    border-color: #9aa3b2;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(17, 24, 39, 0.08);
+  }
+
+  .scene-card:active {
+    transform: translateY(0);
+    box-shadow: none;
   }
 
   .scene-card.active {
-    background: #f3f4f6;
+    background: #eef0f3;
+    border-color: #9aa3b2;
+  }
+
+  .scene-card.active:hover {
+    background: #e7eaee;
   }
 
   .scene-card-top {
@@ -950,12 +1027,13 @@
   }
 
   .scene-tag {
-    font-size: 0.7rem;
-    padding: 3px 8px;
+    font-size: 0.78rem;
+    padding: 7px 14px;
     border-radius: 999px;
-    background: #f3f4f6;
-    color: var(--md-muted);
+    background: #94a3b8;
+    color: #0f172a;
     font-weight: 600;
+    line-height: 1.2;
   }
 
   .scene-tag.current {
@@ -987,6 +1065,35 @@
 
     .fact + .fact {
       box-shadow: inset 0 1px 0 var(--md-line);
+    }
+  }
+
+  .md-btn:focus-visible,
+  .scene-card:focus-visible,
+  .settings-nav-item:focus-visible,
+  .settings-back:focus-visible,
+  .settings-back-inline:focus-visible {
+    outline: 2px solid var(--md-blue);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .settings-nav-item,
+    .settings-back,
+    .settings-back-inline,
+    .md-btn,
+    .md-input,
+    .md-check,
+    .md-check::after,
+    .scene-card,
+    .setting-row {
+      transition: none;
+    }
+
+    .md-btn:hover:not(:disabled),
+    .scene-card:hover,
+    .scene-card:active {
+      transform: none;
     }
   }
 </style>

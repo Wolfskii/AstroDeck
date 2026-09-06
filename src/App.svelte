@@ -1427,46 +1427,59 @@
 
   {#if !isTauri}
     <section class="logs-panel">
-      <div class="logs-toolbar">
-        <label class="logs-autoscroll">
-          <input
-            type="checkbox"
-            checked={autoScroll}
-            onchange={toggleAutoScroll}
-          />
-          Auto-scroll
-        </label>
-        <button
-          class="logs-copy"
-          onclick={copyLogs}
-          title="Copy logs to clipboard"
-          aria-label="Copy logs to clipboard"
-        >
-          📋
-        </button>
-      </div>
-      <div class="logs-lines" bind:this={logsLinesEl}>
-        {#each $logs as entry, i}
-          <div class="log-line log-{entry.level}">
-            <span class="log-ts">{entry.timestamp}</span>
-            <span class="log-source">[{entry.source}]</span>
-            <span class="log-msg">{entry.message}</span>
+      <div class="logs-card">
+        <div class="logs-toolbar">
+          <div class="logs-heading">
+            <strong>Logs</strong>
+            <span class="logs-status" class:on={logStatus === "connected"}>
+              {logStatus === "connected"
+                ? "Connected"
+                : logStatus === "disconnected"
+                  ? "Disconnected"
+                  : "Connecting"}
+            </span>
           </div>
-        {/each}
-        {#if !$logs.length}
-          <div class="log-line log-empty">
-            <span class="log-msg">No logs yet. Interact with the deck to see activity.</span>
-          </div>
-        {/if}
+          <label class="logs-autoscroll">
+            <input
+              type="checkbox"
+              checked={autoScroll}
+              onchange={toggleAutoScroll}
+            />
+            <span class="logs-check" aria-hidden="true"></span>
+            Auto-scroll
+          </label>
+          <button
+            type="button"
+            class="logs-btn"
+            onclick={copyLogs}
+            title="Copy logs to clipboard"
+          >
+            Copy
+          </button>
+          <button
+            type="button"
+            class="logs-btn"
+            onclick={clearLogs}
+            title="Clear logs"
+          >
+            Clear
+          </button>
+        </div>
+        <div class="logs-lines" bind:this={logsLinesEl}>
+          {#each $logs as entry, i}
+            <div class="log-line log-{entry.level}">
+              <span class="log-ts">{entry.timestamp}</span>
+              <span class="log-source">{entry.source}</span>
+              <span class="log-msg">{entry.message}</span>
+            </div>
+          {/each}
+          {#if !$logs.length}
+            <div class="log-line log-empty">
+              <span class="log-msg">No logs yet. Interact with the deck to see activity.</span>
+            </div>
+          {/if}
+        </div>
       </div>
-      <button
-        class="logs-clear"
-        onclick={clearLogs}
-        title="Clear logs"
-        aria-label="Clear logs"
-      >
-        🧹
-      </button>
     </section>
   {/if}
 
@@ -1684,6 +1697,7 @@
   .settings-primary-btn,
   .settings-secondary-btn {
     padding: 10px 14px;
+    border: none;
     border-radius: 8px;
     font-weight: 700;
     font-size: 0.85rem;
@@ -1691,14 +1705,12 @@
   }
 
   .settings-primary-btn {
-    border: 1px solid rgba(99, 102, 241, 0.45);
-    background: rgba(99, 102, 241, 0.22);
-    color: #e0e7ff;
+    background: #111111;
+    color: #fff;
   }
 
   .settings-secondary-btn {
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-button);
+    background: #262626;
     color: var(--text-primary);
   }
 
@@ -1787,51 +1799,162 @@
   }
 
   .logs-panel {
-    flex: 0 0 50%;
-    background: #050509;
-    border-top: 1px solid var(--border-subtle);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-      monospace;
-    font-size: 1.4rem;
-    padding: 6px 10px 30px;
-    overflow-y: hidden;
-    position: relative;
+    flex: 0 0 46%;
+    min-height: 0;
+    background: #0d0d0d;
+    padding: 12px 16px 16px;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     user-select: text;
     -webkit-user-select: text;
   }
 
+  .logs-card {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: #171717;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 14px 40px rgba(0, 0, 0, 0.28);
+    overflow: hidden;
+  }
+
   .logs-toolbar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .logs-heading {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-right: auto;
+  }
+
+  .logs-heading strong {
+    color: #f5f5f5;
+    font-size: 0.98rem;
+    font-weight: 600;
+  }
+
+  .logs-status {
+    color: #a3a3a3;
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+
+  .logs-status.on {
+    color: #4ade80;
   }
 
   .logs-autoscroll {
     display: flex;
     align-items: center;
-    gap: 4px;
-    font-size: 0.8rem;
-    color: var(--text-secondary);
+    gap: 10px;
+    min-height: 44px;
+    padding: 0 8px;
+    color: #e5e5e5;
+    font-size: 0.9rem;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .logs-autoscroll input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    pointer-events: none;
+  }
+
+  .logs-check {
+    position: relative;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    border: 2px solid #737373;
+    background: #262626;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .logs-check::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: center / 12px 12px no-repeat
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.5 6.5 11.5 12.5 4.8'/%3E%3C/svg%3E");
+    transform: scale(0);
+    transform-origin: center;
+    transition: transform 0.12s ease;
+  }
+
+  .logs-autoscroll:hover .logs-check {
+    border-color: #a3a3a3;
+  }
+
+  .logs-autoscroll input:checked + .logs-check {
+    background: #2563eb;
+    border-color: #2563eb;
+  }
+
+  .logs-autoscroll input:checked + .logs-check::after {
+    transform: scale(1);
+  }
+
+  .logs-autoscroll:has(input:focus-visible) .logs-check {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+  }
+
+  .logs-btn {
+    min-height: 44px;
+    padding: 10px 16px;
+    border-radius: 8px;
+    border: none;
+    background: #262626;
+    color: #f5f5f5;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease, transform 0.15s ease;
+  }
+
+  .logs-btn:hover {
+    background: #333333;
+    transform: translateY(-1px);
+  }
+
+  .logs-btn:active {
+    transform: translateY(0);
   }
 
   .logs-lines {
     flex: 1 1 auto;
     overflow-y: auto;
+    padding: 10px 14px 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+      monospace;
+    font-size: 0.8rem;
+    line-height: 1.55;
   }
 
   .log-line {
     display: flex;
-    gap: 8px;
+    gap: 10px;
     align-items: baseline;
-    padding: 1px 0;
-    color: var(--text-secondary);
+    padding: 3px 0;
+    color: #a3a3a3;
   }
 
   .log-line.log-info .log-msg {
-    color: #a5b4fc;
+    color: #93c5fd;
   }
 
   .log-line.log-error .log-msg {
@@ -1839,13 +1962,16 @@
   }
 
   .log-ts {
-    opacity: 0.6;
-    min-width: 60px;
+    flex: 0 0 auto;
+    min-width: 72px;
+    color: #a3a3a3;
   }
 
   .log-source {
-    opacity: 0.75;
-    min-width: 110px;
+    flex: 0 0 auto;
+    min-width: 88px;
+    color: #d4d4d4;
+    font-weight: 500;
   }
 
   .log-msg {
@@ -1854,43 +1980,6 @@
   }
 
   .log-line.log-empty .log-msg {
-    color: var(--text-secondary);
-  }
-
-  .logs-copy {
-    position: sticky;
-    top: 0;
-    margin-left: auto;
-    margin-bottom: 4px;
-    border-radius: 999px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-surface);
-    color: var(--text-secondary);
-    font-size: 0.7rem;
-    padding: 2px 8px;
-    cursor: pointer;
-  }
-
-  .logs-copy:hover {
-    color: var(--text-primary);
-    border-color: var(--accent);
-  }
-
-  .logs-clear {
-    position: absolute;
-    right: 10px;
-    bottom: 6px;
-    border-radius: 999px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-surface);
-    color: var(--text-secondary);
-    font-size: 0.7rem;
-    padding: 2px 8px;
-    cursor: pointer;
-  }
-
-  .logs-clear:hover {
-    color: var(--text-primary);
-    border-color: var(--accent);
+    color: #a3a3a3;
   }
 </style>
