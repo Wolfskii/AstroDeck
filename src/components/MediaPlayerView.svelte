@@ -127,9 +127,11 @@
     if (seekHoldMs != null) {
       if (Math.abs(progressMs - seekHoldMs) <= 2500) {
         seekHoldMs = null;
-        playbackDisplayMs = progressMs;
+      } else if (Math.abs(progressMs - playbackDisplayMs) < 1800) {
+        return;
+      } else {
+        seekHoldMs = null;
       }
-      return;
     }
     playbackDisplayMs = progressMs;
   });

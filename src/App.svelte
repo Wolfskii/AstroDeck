@@ -602,6 +602,13 @@
     return source.toLowerCase().includes("spotify");
   }
 
+  function osProgressJumped(fromMs?: number | null, toMs?: number | null) {
+    if (toMs == null || !Number.isFinite(toMs)) return false;
+    const from = fromMs ?? 0;
+    if (from >= 2500 && toMs <= 1500) return true;
+    return Math.abs(toMs - from) >= 1800;
+  }
+
   function applyOsNowPlaying(payload: OsNowPlaying) {
     if (!isSpotifyOsSource(payload.source) || !spotifyStatus?.isAuthenticated) return;
 
@@ -612,6 +619,15 @@
         normalizeMediaText(spotifyStatus.currentTrackName);
 
     const osCover = payload.coverArtUrl?.trim() || null;
+    const osProgress =
+      payload.progressMs != null && Number.isFinite(payload.progressMs)
+        ? Math.max(0, Math.round(payload.progressMs))
+        : null;
+    const osDuration =
+      payload.durationMs != null && payload.durationMs > 0
+        ? Math.round(payload.durationMs)
+        : null;
+    const progressJumped = osProgressJumped(spotifyStatus.progressMs, osProgress);
 
     if (titleChanged) {
       clearPinnedSpotifyItem();
@@ -619,30 +635,39 @@
       osNowPlayingHold = {
         previousItemId: spotifyStatus.currentItemId ?? null,
       };
+      spotifySeekTargetMs = osProgress;
       spotifyStatus = {
         ...spotifyStatus,
         currentTrackName: nextTitle,
         currentArtistName: payload.artist?.trim() || spotifyStatus.currentArtistName,
         currentAlbumName: payload.album?.trim() || spotifyStatus.currentAlbumName,
         currentCoverArtUrl: osCover || spotifyStatus.currentCoverArtUrl,
-        progressMs: 0,
+        progressMs: osProgress ?? 0,
+        durationMs: osDuration ?? spotifyStatus.durationMs,
         isPlaying: payload.isPlaying,
         playbackState: payload.isPlaying ? "playing" : "paused",
       };
     } else {
+      const nextStatus = { ...spotifyStatus };
+      let changed = false;
       if (osCover && osCover !== spotifyStatus.currentCoverArtUrl) {
-        spotifyStatus = {
-          ...spotifyStatus,
-          currentCoverArtUrl: osCover,
-        };
+        nextStatus.currentCoverArtUrl = osCover;
+        changed = true;
       }
       if (payload.isPlaying !== spotifyStatus.isPlaying) {
         optimisticSpotifyPlaying = null;
-        spotifyStatus = {
-          ...spotifyStatus,
-          isPlaying: payload.isPlaying,
-          playbackState: payload.isPlaying ? "playing" : "paused",
-        };
+        nextStatus.isPlaying = payload.isPlaying;
+        nextStatus.playbackState = payload.isPlaying ? "playing" : "paused";
+        changed = true;
+      }
+      if (progressJumped && osProgress != null) {
+        spotifySeekTargetMs = osProgress;
+        nextStatus.progressMs = osProgress;
+        if (osDuration != null) nextStatus.durationMs = osDuration;
+        changed = true;
+      }
+      if (changed) {
+        spotifyStatus = nextStatus;
       }
     }
 

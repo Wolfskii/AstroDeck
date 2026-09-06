@@ -50,6 +50,8 @@ export interface OsNowPlaying {
   album?: string | null;
   coverArtUrl?: string | null;
   isPlaying: boolean;
+  progressMs?: number | null;
+  durationMs?: number | null;
 }
 
 export interface SpotifyTrackPreview {

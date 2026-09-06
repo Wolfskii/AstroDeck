@@ -24,6 +24,7 @@ import { hexToHsv, hsvToHex } from "./color";
 import { liquidGradientFragmentShader } from "./liquidGradientShader";
 import type { SceneBackgroundId } from "./sceneBackgrounds";
 import { kaleidoFragmentShader, plasmaFragmentShader } from "./visualizerShaders";
+import { mosaicFragmentShader, silkFragmentShader, vortexFragmentShader } from "./flowShaders";
 
 const sizing = (fit: keyof typeof ShaderFitOptions = "cover") => ({
   u_fit: ShaderFitOptions[fit],
@@ -197,6 +198,12 @@ export function fragmentForStyle(style: SceneBackgroundId): string | null {
       return plasmaFragmentShader;
     case "kaleido":
       return kaleidoFragmentShader;
+    case "silk":
+      return silkFragmentShader;
+    case "vortex":
+      return vortexFragmentShader;
+    case "mosaic":
+      return mosaicFragmentShader;
     default:
       return null;
   }
@@ -410,16 +417,20 @@ export function uniformsForStyle(
       };
     }
     case "plasma":
-    case "kaleido": {
+    case "kaleido":
+    case "silk":
+    case "vortex":
+    case "mosaic": {
+      const speed =
+        style === "vortex" ? 0.48 : style === "silk" ? 0.62 : style === "mosaic" ? 0.55 : 0.72;
       return {
-        speed: 0.55,
+        speed,
         uniforms: {
           ...sizing("cover"),
-          u_colorA: vividRgb(colors[0] ?? "#7dd3fc", 0.62, 0.42),
-          u_colorB: vividRgb(colors[1] ?? colors[0] ?? "#c084fc", 0.58, 0.4),
-          u_colorC: vividRgb(colors[2] ?? colors[0] ?? "#fb7185", 0.7, 0.45),
+          u_colorA: liftRgb(colors[0] ?? "#7dd3fc", 0.48),
+          u_colorB: liftRgb(colors[1] ?? colors[0] ?? "#c084fc", 0.44),
+          u_colorC: liftRgb(colors[2] ?? colors[0] ?? "#fb7185", 0.5),
           u_colorBack: rgb3(colors[colors.length - 1] ?? "#071018"),
-          u_beat: 0.2,
           u_speed: 0.85,
         },
       };

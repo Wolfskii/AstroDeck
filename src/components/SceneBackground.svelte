@@ -2,10 +2,9 @@
   import { untrack } from "svelte";
   import { ShaderMount, emptyPixel } from "@paper-design/shaders";
   import { mixHexPalette } from "../lib/color";
-  import { usesCoverImage, usesThreeBackground, usesVisualizerShader, type SceneBackgroundId } from "../lib/sceneBackgrounds";
+  import { usesCoverImage, usesThreeBackground, type SceneBackgroundId } from "../lib/sceneBackgrounds";
   import { createThreeBackground, type ThreeBackgroundHandle } from "../lib/threeBackground";
-  import { resolveBeat, resolvePlaying } from "../lib/visualizerBeat";
-  import { ensureOsAudioListener, getOsAudioFrame } from "../lib/osAudioViz";
+  import { ensureOsAudioListener } from "../lib/osAudioViz";
   import {
     fragmentForStyle,
     lerpPaletteUniforms,
@@ -142,7 +141,6 @@
     let lerpFrom = displayed;
     let lerpTo = displayed;
     let lerpStarted = 0;
-    let isPlaying = untrack(() => playing);
 
     function tickLerp(now: number) {
       if (disposed || !mount) return;
@@ -221,11 +219,8 @@
         style: currentStyle,
         applyPalette,
         applyImage,
-        setPlaying(next: boolean) {
-          isPlaying = next;
-        },
+        setPlaying() {},
       };
-      isPlaying = untrack(() => playing);
       const latest = untrack(() => pendingPalette);
       if (!palettesEqual(latest, displayed)) {
         applyPalette(latest);
@@ -239,23 +234,6 @@
           mount.setUniforms({
             u_shift: Math.sin(t * 0.45) * 0.22,
             u_angle: 10 + Math.sin(t * 0.18) * 14,
-          });
-          raf = requestAnimationFrame(tick);
-        };
-        raf = requestAnimationFrame(tick);
-      }
-
-      if (usesVisualizerShader(currentStyle)) {
-        const started = performance.now();
-        const tick = (now: number) => {
-          if (disposed || !mount) return;
-          const t = (now - started) / 1000;
-          const audio = getOsAudioFrame();
-          const beat = resolveBeat(t, isPlaying);
-          const motion = resolvePlaying(isPlaying);
-          mount.setUniforms({
-            u_beat: beat,
-            u_speed: motion ? 0.55 + (audio?.rms ?? 0) * 0.9 : 0.18,
           });
           raf = requestAnimationFrame(tick);
         };

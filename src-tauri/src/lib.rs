@@ -14,6 +14,7 @@ mod window_prefs;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
+use tauri::image::Image;
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::broadcast;
 
@@ -250,6 +251,14 @@ fn set_spotify_client_id(client_id: String, state: tauri::State<AppState>) -> Re
     Ok(())
 }
 
+const WINDOW_ICON_PNG: &[u8] = include_bytes!("../icons/128x128.png");
+
+fn apply_window_icon(window: &tauri::WebviewWindow) {
+    if let Ok(icon) = Image::from_bytes(WINDOW_ICON_PNG) {
+        let _ = window.set_icon(icon);
+    }
+}
+
 /// Create or focus the dedicated settings window from the tray or buttons.
 #[tauri::command]
 fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
@@ -270,6 +279,10 @@ fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     .resizable(true)
     .build()
     .map_err(|e| e.to_string())?;
+
+    if let Some(window) = app.get_webview_window(label) {
+        apply_window_icon(&window);
+    }
 
     Ok(())
 }
@@ -358,6 +371,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
 
             if let Some(window) = app.get_webview_window("main") {
+                apply_window_icon(&window);
                 window_prefs::apply_launch_state(
                     &window,
                     prefs::start_minimized(&app_handle),

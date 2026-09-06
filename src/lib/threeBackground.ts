@@ -4,7 +4,10 @@ import { resolveBeat, resolvePlaying } from "./visualizerBeat";
 import { getOsAudioFrame } from "./osAudioViz";
 import {
   setupBokeh,
+  setupEmbers,
   setupHelix,
+  setupLattice,
+  setupRain,
   setupRipple,
   setupSpectrum,
 } from "./threeVisualizers";
@@ -112,6 +115,9 @@ export function createThreeBackground(
   else if (style === "bokeh") tickers.push(setupBokeh(ctx()));
   else if (style === "ripple") tickers.push(setupRipple(ctx()));
   else if (style === "helix") tickers.push(setupHelix(ctx()));
+  else if (style === "rain") tickers.push(setupRain(ctx()));
+  else if (style === "embers") tickers.push(setupEmbers(ctx()));
+  else if (style === "lattice") tickers.push(setupLattice(ctx()));
   else setupHorizon();
 
   function ctx() {
@@ -177,7 +183,7 @@ export function createThreeBackground(
           vec4 glow = texture2D(uMap, gl_PointCoord);
           float alpha = glow.a;
           if (alpha < 0.02) discard;
-          gl_FragColor = vec4(vColor * 1.35, alpha);
+          gl_FragColor = vec4(vColor * 1.08, alpha);
         }
       `,
     });
@@ -193,17 +199,18 @@ export function createThreeBackground(
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         transparent: true,
-        opacity: 0.85,
+        opacity: 0.42,
       })
     );
-    core.scale.set(14, 14, 1);
+    core.scale.set(11, 11, 1);
     scene.add(core);
     disposables.push(core.material);
 
     tickers.push((dt, elapsed, paletteNow) => {
       points.rotation.y += dt * 0.045;
+      camera.position.set(Math.sin(elapsed * 0.045) * 5.5, 8.2 + Math.cos(elapsed * 0.03) * 1.4, 24);
+      camera.lookAt(0, 0, 0);
       core.material.color.copy(paletteNow[0]);
-      core.scale.setScalar(12 + Math.sin(elapsed * 0.7) * 1.6);
       const attr = geometry.getAttribute("color") as THREE.BufferAttribute;
       if (fade < 1) {
         for (let i = 0; i < count; i += 1) {
@@ -295,13 +302,13 @@ export function createThreeBackground(
     camera.position.set(0, 2.4, 14);
     camera.lookAt(0, 0, 0);
     scene.fog = new THREE.FogExp2(0x06070d, 0.035);
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.15;
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.toneMappingExposure = 1;
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.12);
-    const key = new THREE.PointLight(displayed[0], 18, 40, 2);
-    const fill = new THREE.PointLight(displayed[1], 12, 36, 2);
-    const rim = new THREE.PointLight(displayed[2], 10, 32, 2);
+    const ambient = new THREE.AmbientLight(0xffffff, 0.22);
+    const key = new THREE.PointLight(displayed[0], 4.2, 40, 2);
+    const fill = new THREE.PointLight(displayed[1], 2.8, 36, 2);
+    const rim = new THREE.PointLight(displayed[2], 2.2, 32, 2);
     key.position.set(6, 8, 8);
     fill.position.set(-8, -2, 4);
     rim.position.set(0, 4, -10);
@@ -311,13 +318,14 @@ export function createThreeBackground(
     scene.add(group);
     const crystals: THREE.Mesh[] = [];
     const wires: THREE.LineSegments[] = [];
+    const rests: THREE.Vector3[] = [];
 
     function addCrystal(scale: number, x: number, y: number, z: number) {
       const geometry = new THREE.IcosahedronGeometry(scale, 0);
       const material = new THREE.MeshPhongMaterial({
         color: displayed[crystals.length % 3],
         emissive: displayed[crystals.length % 3],
-        emissiveIntensity: 0.18,
+        emissiveIntensity: 0.08,
         shininess: 90,
         transparent: true,
         opacity: 0.82,
@@ -327,6 +335,7 @@ export function createThreeBackground(
       mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
       group.add(mesh);
       crystals.push(mesh);
+      rests.push(new THREE.Vector3(x, y, z));
       const edges = new THREE.EdgesGeometry(geometry);
       const line = new THREE.LineSegments(
         edges,
@@ -350,15 +359,25 @@ export function createThreeBackground(
     addCrystal(0.6, -4.8, 0.8, -2.4);
 
     tickers.push((dt, elapsed, paletteNow) => {
-      group.rotation.y += dt * 0.12;
-      group.rotation.x = Math.sin(elapsed * 0.18) * 0.08;
-      camera.position.x = Math.sin(elapsed * 0.12) * 1.6;
+      group.rotation.y += dt * 0.16;
+      group.rotation.x = Math.sin(elapsed * 0.18) * 0.1;
+      camera.position.x = Math.sin(elapsed * 0.14) * 2.4;
+      camera.position.y = 2.4 + Math.cos(elapsed * 0.09) * 0.7;
       camera.lookAt(0, 0, 0);
       key.color.copy(paletteNow[0]);
       fill.color.copy(paletteNow[1]);
       rim.color.copy(paletteNow[2]);
       crystals.forEach((mesh, index) => {
-        mesh.rotation.y += dt * (0.15 + index * 0.03);
+        mesh.rotation.y += dt * (0.22 + index * 0.04);
+        mesh.rotation.x += dt * 0.08;
+        const rest = rests[index];
+        if (rest) {
+          mesh.position.set(
+            rest.x + Math.sin(elapsed * 0.35 + index) * 0.35,
+            rest.y + Math.cos(elapsed * 0.42 + index * 0.7) * 0.45,
+            rest.z
+          );
+        }
         const material = mesh.material as THREE.MeshPhongMaterial;
         material.color.copy(paletteNow[index % 3]);
         material.emissive.copy(paletteNow[index % 3]);
@@ -533,7 +552,7 @@ export function createThreeBackground(
     const elapsed = clock.elapsedTime;
     if (fade < 1) fade = Math.min(1, fade + dt / PALETTE_FADE_SEC);
     const colors = currentColors();
-    fogScratch.copy(night).lerp(colors[3], 0.28);
+    fogScratch.copy(night).lerp(colors[3], style === "horizon" || style === "warp" ? 0.18 : 0.07);
     renderer.setClearColor(fogScratch, 1);
     if (scene.fog) {
       if (scene.fog instanceof THREE.Fog || scene.fog instanceof THREE.FogExp2) {
