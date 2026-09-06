@@ -136,9 +136,13 @@ fn sync_media_presence(app: &AppHandle, present: bool) {
     };
     ids.retain(|id| id != "media");
     let spotify_present = ids.iter().any(|id| id == "spotify");
-    if present && (playing || !spotify_present) {
+    if present
+        && crate::prefs::auto_switch_enabled(app, "media")
+        && (playing || !spotify_present)
+    {
         ids.push("media".to_string());
     }
+    ids.retain(|id| crate::prefs::auto_switch_enabled(app, id));
     let matched = ids.clone();
     drop(ids);
     crate::mode_engine::resolve(app, &matched);

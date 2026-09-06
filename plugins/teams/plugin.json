@@ -5,7 +5,7 @@
   "priority": 100,
   "triggers": {
     "windowTitlesAny": ["*Microsoft Teams*", "* | Microsoft Teams"],
-    "excludeWindowTitles": ["*notification*", "*Update*"]
+    "excludeWindowTitles": ["*notification*"]
   },
   "layout": {
     "grid": [3, 3],

@@ -9,6 +9,8 @@ use tauri::Manager;
 #[cfg(windows)]
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 #[cfg(windows)]
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
 };
@@ -80,6 +82,14 @@ pub fn start_detection_loop(app_handle: tauri::AppHandle) {
                 }
             }
 
+            if matched_ids.iter().any(|id| id == "spotify")
+                && !crate::spotify::has_saved_tokens(&state.spotify)
+            {
+                matched_ids.retain(|id| id != "spotify");
+            }
+
+            matched_ids.retain(|id| crate::prefs::auto_switch_enabled(&app_handle, id));
+
             if let Ok(mut last) = state.last_matched_ids.lock() {
                 *last = matched_ids.clone();
             }
@@ -120,7 +130,7 @@ fn collect_window_titles() -> (Vec<String>, Option<String>) {
     let mut titles = Vec::<String>::new();
 
     unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        if !unsafe { IsWindowVisible(hwnd) }.as_bool() || is_window_cloaked(hwnd) {
             return BOOL(1);
         }
 
@@ -140,6 +150,20 @@ fn collect_window_titles() -> (Vec<String>, Option<String>) {
 
     let focused = read_window_title(unsafe { GetForegroundWindow() });
     (titles, focused)
+}
+
+#[cfg(windows)]
+fn is_window_cloaked(hwnd: HWND) -> bool {
+    let mut cloaked: u32 = 0;
+    let ok = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            &mut cloaked as *mut u32 as *mut _,
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    ok.is_ok() && cloaked != 0
 }
 
 #[cfg(windows)]

@@ -238,3 +238,16 @@ export async function setAudioVisualizerEmit(emit: boolean): Promise<void> {
   if (!isTauri) return;
   await invoke("set_audio_visualizer_emit", { emit });
 }
+
+export async function getAutoSwitchScenes(): Promise<Record<string, boolean>> {
+  if (!isTauri) return {};
+  return invoke<Record<string, boolean>>("get_auto_switch_scenes");
+}
+
+export async function setAutoSwitchScene(
+  sceneId: string,
+  enabled: boolean
+): Promise<Record<string, boolean>> {
+  if (!isTauri) return { [sceneId]: enabled };
+  return invoke<Record<string, boolean>>("set_auto_switch_scene", { sceneId, enabled });
+}

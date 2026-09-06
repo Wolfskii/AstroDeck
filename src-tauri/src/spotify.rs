@@ -1086,6 +1086,15 @@ fn build_spotify_status_from_playback(
     })
 }
 
+pub fn has_saved_tokens(spotify: &SpotifyState) -> bool {
+    spotify
+        .tokens
+        .lock()
+        .ok()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false)
+}
+
 pub fn disconnect(spotify: &SpotifyState) -> Result<(), String> {
     let config = spotify.config.lock().map_err(|e| e.to_string())?.clone();
     if let Some(path) = config.token_path {

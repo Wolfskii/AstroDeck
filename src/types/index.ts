@@ -16,6 +16,7 @@ export interface PluginTriggers {
   windowTitleContains?: string;
   windowTitleGlob?: string;
   windowTitlesAny?: string[];
+  excludeWindowTitles?: string[];
 }
 
 export interface LayoutConfig {

@@ -68,7 +68,10 @@
     pluginsById,
     sceneId,
     seenScenes,
+    autoSwitchScenes = {},
+    autoSwitchBusyId = null,
     onSelectScene,
+    onAutoSwitchChange,
   }: {
     isTauri: boolean;
     onBackToDeck?: () => void;
@@ -110,7 +113,10 @@
     pluginsById: Map<string, PluginConfig>;
     sceneId: string;
     seenScenes: string[];
+    autoSwitchScenes?: Record<string, boolean>;
+    autoSwitchBusyId?: string | null;
     onSelectScene: (id: string) => void;
+    onAutoSwitchChange?: (id: string, enabled: boolean) => void;
   } = $props();
 
   let section = $state<SettingsSection>("general");
@@ -615,7 +621,11 @@
         </div>
       </div>
     {:else}
-      <p class="settings-lead">Choose a scene to manually override the active desktop deck.</p>
+      <p class="settings-lead">
+        Tap a scene to preview it. Auto switch opens that view when the app is detected. Teams only
+        switches when a Teams window is open. Spotify is preferred when a token is saved; otherwise
+        the system media player is used.
+      </p>
       {#if sceneIds.length === 0}
         <p class="settings-status">No scenes loaded yet.</p>
       {:else}
@@ -630,13 +640,16 @@
               "Manual scene override for this plugin layout."}
             {@const grid = plugin?.layout.grid ?? meta?.layout.grid ?? [0, 0]}
             {@const buttonCount = plugin?.layout.buttons.length ?? meta?.layout.buttons.length ?? 0}
-            <button
-              type="button"
+            <article
               class="scene-card"
               class:active={id === sceneId}
-              onclick={() => onSelectScene(id)}
-              aria-pressed={id === sceneId}
             >
+              <button
+                type="button"
+                class="scene-card-select"
+                onclick={() => onSelectScene(id)}
+                aria-pressed={id === sceneId}
+              >
               <div class="scene-card-top">
                 <span class="scene-name">{title}</span>
                 {#if id === sceneId}
@@ -653,7 +666,36 @@
                 <span>{grid[0]}×{grid[1]}</span>
                 <span>{buttonCount} buttons</span>
               </div>
-            </button>
+              </button>
+              <label class="setting-row scene-auto" for={`auto-switch-${id}`}>
+                <div class="setting-copy">
+                  <span class="setting-title">Auto switch</span>
+                  <span class="setting-desc">
+                    {#if id === "teams"}
+                      Switch here when a Teams window is open.
+                    {:else if id === "spotify"}
+                      Switch here when Spotify is running and a token is saved.
+                    {:else if id === "media"}
+                      Switch here for other local media players.
+                    {:else}
+                      Switch here when this app is detected.
+                    {/if}
+                  </span>
+                </div>
+                <input
+                  id={`auto-switch-${id}`}
+                  type="checkbox"
+                  checked={autoSwitchScenes[id] !== false}
+                  disabled={!onAutoSwitchChange || autoSwitchBusyId === id}
+                  onchange={(event) =>
+                    onAutoSwitchChange?.(
+                      id,
+                      (event.currentTarget as HTMLInputElement).checked
+                    )}
+                />
+                <span class="md-check" aria-hidden="true"></span>
+              </label>
+            </article>
           {/each}
         </div>
       {/if}
@@ -1319,9 +1361,31 @@
     background: var(--md-surface);
     text-align: left;
     color: var(--md-ink);
-    cursor: pointer;
     min-height: 120px;
     transition: var(--md-ease);
+  }
+
+  .scene-card-select {
+    appearance: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    text-align: left;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .scene-auto {
+    margin-top: 4px;
+    padding-top: 12px;
+    border-top: 1px solid var(--md-line);
+  }
+
+  .scene-auto .setting-desc {
+    min-height: 0;
   }
 
   .scene-card:hover {

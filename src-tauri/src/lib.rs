@@ -378,6 +378,8 @@ pub fn run() {
             prefs::set_audio_visualizer_enabled,
             prefs::get_audio_visualizer_status,
             prefs::set_audio_visualizer_emit,
+            prefs::get_auto_switch_scenes,
+            prefs::set_auto_switch_scene,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

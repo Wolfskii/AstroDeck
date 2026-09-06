@@ -43,7 +43,7 @@
     type AppUpdateInfo,
   } from "./services/updater";
   import { isAutostartEnabled, setAutostartEnabled } from "./services/autostart";
-  import { getStartMinimized, setStartMinimized, getStartFullscreen, setStartFullscreen, getShowSettingsTerminal, setShowSettingsTerminal } from "./services/prefs";
+  import { getStartMinimized, setStartMinimized, getStartFullscreen, setStartFullscreen, getShowSettingsTerminal, setShowSettingsTerminal, getAutoSwitchScenes, setAutoSwitchScene } from "./services/prefs";
   import { hideMainWindow, persistMainWindowState, revealMainWindow } from "./services/windowState";
   import { hydrateSceneBackground } from "./stores/appearance";
 
@@ -70,6 +70,8 @@
   let viewMode = $state<"deck" | "settings">("deck");
   let showSettingsTerminal = $state(!isTauri);
   let showSettingsTerminalBusy = $state(false);
+  let autoSwitchScenes = $state<Record<string, boolean>>({});
+  let autoSwitchBusyId = $state<string | null>(null);
   const isSettingsWindow = $derived(!isTauri || viewMode === "settings");
   const showLogsPanel = $derived(isSettingsWindow && showSettingsTerminal);
   let logStatus = $state<"connecting" | "connected" | "disconnected">("connecting");
@@ -1319,6 +1321,23 @@
     logInfo(`Manually selected scene: ${id}`, "Settings window");
   }
 
+  async function onAutoSwitchChange(sceneIdToToggle: string, enabled: boolean) {
+    autoSwitchBusyId = sceneIdToToggle;
+    try {
+      autoSwitchScenes = await setAutoSwitchScene(sceneIdToToggle, enabled);
+      logInfo(
+        enabled
+          ? `Auto-switch on for ${sceneIdToToggle}`
+          : `Auto-switch off for ${sceneIdToToggle}`,
+        "Settings"
+      );
+    } catch (e) {
+      logError(`Failed to update auto-switch for ${sceneIdToToggle}: ${String(e)}`, "Settings");
+    } finally {
+      autoSwitchBusyId = null;
+    }
+  }
+
   async function refreshScene() {
     try {
       const state: SceneState = await getActiveScene();
@@ -1690,6 +1709,11 @@
         } catch {
           startMinimized = true;
         }
+        try {
+          autoSwitchScenes = await getAutoSwitchScenes();
+        } catch {
+          autoSwitchScenes = {};
+        }
         await refreshScene();
       })();
       void (async () => {
@@ -1745,6 +1769,12 @@
       const unlistenTerminal = listen<boolean>("settings-terminal-changed", (event) => {
         showSettingsTerminal = event.payload;
       });
+      const unlistenAutoSwitch = listen<Record<string, boolean>>(
+        "auto-switch-scenes-changed",
+        (event) => {
+          autoSwitchScenes = event.payload ?? {};
+        }
+      );
 
       return () => {
         clearSpotifyTransportRefreshTimers();
@@ -1754,6 +1784,7 @@
         unlisten.then((fn) => fn());
         unlistenOsNowPlaying.then((fn) => fn());
         unlistenTerminal.then((fn) => fn());
+        unlistenAutoSwitch.then((fn) => fn());
         window.removeEventListener("astrodeck-core-action", handleCoreAction as EventListener);
         window.removeEventListener("astrodeck-action-started", handleActionStarted as EventListener);
         window.removeEventListener("astrodeck-action-executed", handleActionExecuted as EventListener);
@@ -1876,7 +1907,10 @@
         pluginsById={pluginsById}
         sceneId={sceneId}
         seenScenes={seenScenes}
+        autoSwitchScenes={autoSwitchScenes}
+        autoSwitchBusyId={autoSwitchBusyId}
         onSelectScene={selectScene}
+        onAutoSwitchChange={onAutoSwitchChange}
       />
     {:else}
       {#if loading}
