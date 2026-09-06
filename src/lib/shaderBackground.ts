@@ -70,6 +70,14 @@ function colorsToVec4(colors: string[]) {
   return colors.map((color) => getShaderColorFromString(color));
 }
 
+let noiseTexture: HTMLImageElement | undefined;
+
+function noiseImage(): HTMLImageElement | undefined {
+  if (noiseTexture) return noiseTexture;
+  noiseTexture = getShaderNoiseTexture();
+  return noiseTexture;
+}
+
 export function fragmentForStyle(style: SceneBackgroundId): string | null {
   switch (style) {
     case "mesh-gradient":
@@ -109,7 +117,7 @@ export function uniformsForStyle(
   const back = getShaderColorFromString(colors[colors.length - 1] ?? "#0a0a0a");
   const front = getShaderColorFromString(colors[0] ?? "#ffffff");
   const mid = getShaderColorFromString(colors[1] ?? colors[0] ?? "#888888");
-  const noise = getShaderNoiseTexture();
+  const noise = noiseImage();
 
   switch (style) {
     case "mesh-gradient":
@@ -201,27 +209,27 @@ export function uniformsForStyle(
       };
     case "pulsing-border":
       return {
-        speed: 0.55,
+        speed: 0.7,
         uniforms: {
           ...sizing("contain"),
           u_colorBack: [0, 0, 0, 0],
           u_colors: vecs.slice(0, 5),
           u_colorsCount: Math.min(vecs.length, 5),
-          u_roundness: 0.04,
-          u_thickness: 0.1,
-          u_softness: 0.55,
-          u_intensity: 0.5,
-          u_bloom: 0.62,
+          u_roundness: 0.03,
+          u_thickness: 0.16,
+          u_softness: 0.5,
+          u_intensity: 0.48,
+          u_bloom: 0.55,
           u_spots: 4,
-          u_spotSize: 0.42,
-          u_pulse: 0.4,
-          u_smoke: 0.18,
-          u_smokeSize: 0.45,
+          u_spotSize: 0.5,
+          u_pulse: 0.7,
+          u_smoke: 0.28,
+          u_smokeSize: 0.5,
           u_aspectRatio: PulsingBorderAspectRatios.square,
-          u_marginLeft: 0.11,
-          u_marginRight: 0.11,
-          u_marginTop: 0.11,
-          u_marginBottom: 0.11,
+          u_marginLeft: 0,
+          u_marginRight: 0,
+          u_marginTop: 0,
+          u_marginBottom: 0,
           u_scale: 1,
           u_noiseTexture: noise,
         },

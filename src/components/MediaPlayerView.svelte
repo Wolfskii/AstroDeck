@@ -663,6 +663,7 @@
 
   .car-art-frame--glow {
     overflow: visible;
+    isolation: isolate;
   }
 
   .car-artwork {

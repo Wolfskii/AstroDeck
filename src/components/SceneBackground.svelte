@@ -27,6 +27,16 @@
     });
   }
 
+  function waitForTexture(image: HTMLImageElement): Promise<void> {
+    if (image.complete && image.naturalWidth > 0) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      image.addEventListener("load", () => resolve(), { once: true });
+      image.addEventListener("error", () => reject(new Error("Failed to load shader texture")), {
+        once: true,
+      });
+    });
+  }
+
   $effect(() => {
     const el = host;
     const currentStyle = style;
@@ -60,13 +70,22 @@
       if (disposed || !el.isConnected) return;
       el.replaceChildren();
       const { uniforms, speed } = uniformsForStyle(currentStyle, palette, image);
+      const textures = Object.values(uniforms).filter(
+        (value): value is HTMLImageElement => value instanceof HTMLImageElement
+      );
+      try {
+        await Promise.all(textures.map((texture) => waitForTexture(texture)));
+      } catch {
+        return;
+      }
+      if (disposed || !el.isConnected) return;
       const alpha = currentStyle === "pulsing-border";
       try {
         mount = new ShaderMount(
           el,
           fragment,
           uniforms,
-          { alpha, premultipliedAlpha: true, antialias: false },
+          { alpha, premultipliedAlpha: !alpha, antialias: false },
           speed,
           0,
           1
@@ -116,7 +135,13 @@
   }
 
   .scene-background--artwork {
-    inset: -22px;
+    inset: 0;
+    z-index: 2;
+    overflow: visible;
+  }
+
+  .scene-background--artwork :global(canvas) {
+    z-index: 0;
   }
 
   .scene-background :global(canvas) {
