@@ -9,6 +9,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import DeckGrid from "./components/DeckGrid.svelte";
   import MediaPlayerView from "./components/MediaPlayerView.svelte";
+  import ReleaseNotes from "./components/ReleaseNotes.svelte";
   import appIconUrl from "./assets/app-icon.png";
   import {
     executeActionValue,
@@ -31,6 +32,9 @@
   import {
     checkForAppUpdate,
     downloadAndInstallUpdate,
+    getAppVersion,
+    getUpdatePopupsEnabled,
+    setUpdatePopupsEnabled,
     type AppUpdateInfo,
   } from "./services/updater";
   import { isAutostartEnabled, setAutostartEnabled } from "./services/autostart";
@@ -43,6 +47,15 @@
   let trayInitialized = false;
   let appUpdate = $state<AppUpdateInfo | null>(null);
   let appUpdateBusy = $state(false);
+  let appUpdateChecking = $state(false);
+  let appUpdateError = $state<string | null>(null);
+  let appVersion = $state("");
+  let updatePopupOpen = $state(false);
+  let showUpdatePopups = $state(true);
+  let showUpdatePopupsBusy = $state(false);
+  const installableUpdate = $derived(
+    Boolean(appUpdate?.available && appUpdate.downloadUrl && appUpdate.latestVersion)
+  );
   let trayMenu: Menu | null = null;
   let windowLabel = $state("main");
   let seenScenes = $state<string[]>([]);
@@ -748,39 +761,71 @@
     )
   );
 
-  async function refreshAppUpdateCheck() {
-    if (!isTauri) return;
+  async function checkForUpdates(showPopup = false) {
+    if (!isTauri) return null;
+    appUpdateChecking = true;
+    appUpdateError = null;
     try {
-      appUpdate = await checkForAppUpdate();
-      if (appUpdate.available && appUpdate.latestVersion) {
+      const update = await checkForAppUpdate();
+      appUpdate = update;
+      if (update.available && update.latestVersion) {
         logInfo(
-          `Update available: ${appUpdate.latestVersion} (current ${appUpdate.currentVersion})`,
+          `Update available: ${update.latestVersion} (current ${update.currentVersion})`,
           "Updater"
         );
+        if (showPopup && showUpdatePopups) {
+          updatePopupOpen = true;
+          await revealMainWindow();
+          const item = await trayMenu?.get("toggle");
+          if (item) await item.setText("Hide AstroDeck");
+        }
       }
+      return update;
     } catch (e) {
+      appUpdateError = String(e);
       logError(`Update check failed: ${String(e)}`, "Updater");
+      return null;
+    } finally {
+      appUpdateChecking = false;
     }
   }
 
-  async function promptAndInstallUpdate() {
+  async function installAppUpdate() {
     if (!appUpdate?.available || !appUpdate.downloadUrl || !appUpdate.latestVersion) return;
     if (appUpdateBusy) return;
 
-    const releaseLabel = appUpdate.releaseName ?? `AstroDeck ${appUpdate.latestVersion}`;
-    const confirmed = window.confirm(
-      `${releaseLabel} is available.\n\nYou are on ${appUpdate.currentVersion}. Install the update now? AstroDeck will close and run the installer.`
-    );
-    if (!confirmed) return;
-
     appUpdateBusy = true;
+    appUpdateError = null;
     try {
       logInfo(`Downloading update from ${appUpdate.installerName ?? "release asset"}`, "Updater");
       await downloadAndInstallUpdate(appUpdate.downloadUrl);
     } catch (e) {
       appUpdateBusy = false;
-      window.alert(`Update failed: ${String(e)}`);
+      appUpdateError = String(e);
       logError(`Update install failed: ${String(e)}`, "Updater");
+    }
+  }
+
+  function openUpdatePopup() {
+    if (!installableUpdate) return;
+    updatePopupOpen = true;
+  }
+
+  async function onShowUpdatePopupsChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const checked = input.checked;
+    showUpdatePopupsBusy = true;
+    appUpdateError = null;
+    try {
+      await setUpdatePopupsEnabled(checked);
+      showUpdatePopups = checked;
+    } catch (e) {
+      showUpdatePopups = !checked;
+      input.checked = !checked;
+      appUpdateError = String(e);
+      logError(`Failed to update popup setting: ${String(e)}`, "Settings");
+    } finally {
+      showUpdatePopupsBusy = false;
     }
   }
 
@@ -1109,6 +1154,11 @@
           return;
         }
         if (ev.key !== "Escape") return;
+        if (updatePopupOpen) {
+          ev.preventDefault();
+          updatePopupOpen = false;
+          return;
+        }
         void (async () => {
           try {
             if (!(await getCurrentWindow().isFullscreen())) return;
@@ -1122,7 +1172,19 @@
       window.addEventListener("keydown", onDeckPresentationKeydown, true);
 
       refreshScene();
-      void refreshAppUpdateCheck();
+      void (async () => {
+        try {
+          appVersion = await getAppVersion();
+        } catch {
+          appVersion = "";
+        }
+        try {
+          showUpdatePopups = await getUpdatePopupsEnabled();
+        } catch {
+          showUpdatePopups = true;
+        }
+        await checkForUpdates(true);
+      })();
       refreshPluginsForDesktop();
       if (sceneId === "spotify") {
         void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
@@ -1186,7 +1248,7 @@
                 ? `Update to ${appUpdate.latestVersion}`
                 : "Update available"}
               disabled={appUpdateBusy}
-              onclick={() => void promptAndInstallUpdate()}
+              onclick={() => openUpdatePopup()}
             >
               <svg class="header-update-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path
@@ -1220,7 +1282,7 @@
       title={appUpdate.latestVersion ? `Update to ${appUpdate.latestVersion}` : "Update available"}
       aria-label={appUpdate.latestVersion ? `Update to ${appUpdate.latestVersion}` : "Update available"}
       disabled={appUpdateBusy}
-      onclick={() => void promptAndInstallUpdate()}
+      onclick={() => openUpdatePopup()}
     >
       <svg class="update-fab-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path
@@ -1260,6 +1322,61 @@
               {#if startOnBootError}
                 <p class="settings-error">{startOnBootError}</p>
               {/if}
+            </div>
+            <div class="settings-block">
+              <div class="settings-update-heading">
+                <div>
+                  <h3>Updates</h3>
+                  <p class="settings-help">
+                    {#if appVersion}
+                      Current version {appVersion}.
+                    {/if}
+                    AstroDeck checks GitHub for a newer installer when it starts.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="settings-secondary-btn"
+                  disabled={appUpdateChecking}
+                  onclick={() => void checkForUpdates()}
+                >
+                  {appUpdateChecking ? "Checking…" : "Check for updates"}
+                </button>
+              </div>
+              {#if appUpdateError}
+                <p class="settings-error">{appUpdateError}</p>
+              {/if}
+              {#if installableUpdate && appUpdate}
+                <div class="update-details" role="status">
+                  <strong>
+                    Version {appUpdate.latestVersion} is available.
+                  </strong>
+                  <ReleaseNotes body={appUpdate.releaseNotes} />
+                  <button
+                    type="button"
+                    class="settings-primary-btn"
+                    disabled={appUpdateBusy}
+                    onclick={() => void installAppUpdate()}
+                  >
+                    {appUpdateBusy ? "Installing…" : "Update now"}
+                  </button>
+                </div>
+              {:else}
+                <p class="settings-status" role="status">
+                  {appUpdateChecking ? "Checking for updates…" : "No update is currently available."}
+                </p>
+              {/if}
+              <label class="settings-switch" for="show-update-popups">
+                <input
+                  id="show-update-popups"
+                  type="checkbox"
+                  checked={showUpdatePopups}
+                  disabled={showUpdatePopupsBusy}
+                  onchange={onShowUpdatePopupsChange}
+                />
+                <span class="settings-switch-ui" aria-hidden="true"></span>
+                <span class="settings-switch-label">Show update popups</span>
+              </label>
             </div>
           {/if}
           <div class="settings-block spotify-block">
@@ -1598,10 +1715,59 @@
       </button>
     </section>
   {/if}
+
+  {#if isTauri && updatePopupOpen && installableUpdate && appUpdate}
+    <div class="update-modal-backdrop">
+      <div
+        class="update-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="update-modal-title"
+      >
+        <div class="update-modal-heading">
+          <div>
+            <p class="update-modal-eyebrow">Software update</p>
+            <h2 id="update-modal-title">Version {appUpdate.latestVersion} is available</h2>
+          </div>
+          <button
+            type="button"
+            class="update-modal-close"
+            aria-label="Close update"
+            onclick={() => (updatePopupOpen = false)}
+          >
+            ×
+          </button>
+        </div>
+        <p>Would you like to install it now? AstroDeck will close and run the installer.</p>
+        <ReleaseNotes body={appUpdate.releaseNotes} />
+        {#if appUpdateError}
+          <p class="settings-error">{appUpdateError}</p>
+        {/if}
+        <div class="update-modal-actions">
+          <button
+            type="button"
+            class="settings-secondary-btn"
+            onclick={() => (updatePopupOpen = false)}
+          >
+            No, later
+          </button>
+          <button
+            type="button"
+            class="settings-primary-btn"
+            disabled={appUpdateBusy}
+            onclick={() => void installAppUpdate()}
+          >
+            {appUpdateBusy ? "Installing…" : "Yes, update now"}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
   .app {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -1883,6 +2049,148 @@
     margin: 10px 0 0;
     color: #fca5a5;
     font-size: 0.9rem;
+  }
+
+  .settings-update-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .settings-update-heading .settings-help {
+    margin-bottom: 0;
+  }
+
+  .settings-status {
+    margin: 12px 0 0;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+  }
+
+  .update-details {
+    display: grid;
+    gap: 12px;
+    margin: 14px 0 0;
+    padding: 14px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .update-details strong {
+    color: var(--text-primary);
+    font-size: 0.98rem;
+  }
+
+  .settings-block > .settings-switch {
+    margin-top: 14px;
+  }
+
+  .settings-primary-btn,
+  .settings-secondary-btn {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .settings-primary-btn {
+    border: 1px solid rgba(99, 102, 241, 0.45);
+    background: rgba(99, 102, 241, 0.22);
+    color: #e0e7ff;
+  }
+
+  .settings-secondary-btn {
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-button);
+    color: var(--text-primary);
+  }
+
+  .settings-primary-btn:hover:not(:disabled),
+  .settings-secondary-btn:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+
+  .settings-primary-btn:disabled,
+  .settings-secondary-btn:disabled {
+    opacity: 0.55;
+    cursor: progress;
+  }
+
+  .update-modal-backdrop {
+    position: fixed;
+    z-index: 40;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(8, 8, 14, 0.62);
+  }
+
+  .update-modal {
+    width: min(560px, 100%);
+    max-height: min(680px, calc(100vh - 48px));
+    overflow: auto;
+    padding: 24px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 16px;
+    background: var(--bg-surface);
+    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.45);
+  }
+
+  .update-modal-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .update-modal-eyebrow {
+    margin: 0 0 6px;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+
+  .update-modal h2 {
+    margin: 0;
+    font-size: 1.35rem;
+    font-weight: 700;
+  }
+
+  .update-modal > p {
+    margin: 16px 0 12px;
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+  }
+
+  .update-modal-close {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .update-modal-close:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+  }
+
+  .update-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 16px;
   }
 
   .spotify-header {

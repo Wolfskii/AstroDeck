@@ -40,3 +40,13 @@ export async function downloadAndInstallUpdate(downloadUrl: string): Promise<voi
   if (!isTauri) return;
   return invoke("download_and_install_update", { downloadUrl });
 }
+
+export async function getUpdatePopupsEnabled(): Promise<boolean> {
+  if (!isTauri) return true;
+  return invoke<boolean>("get_update_popups_enabled");
+}
+
+export async function setUpdatePopupsEnabled(enabled: boolean): Promise<void> {
+  if (!isTauri) return;
+  await invoke("set_update_popups_enabled", { enabled });
+}

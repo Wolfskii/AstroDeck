@@ -3,6 +3,7 @@ mod detectors;
 mod layout_engine;
 mod mode_engine;
 mod plugin_engine;
+mod prefs;
 mod spotify;
 mod updater;
 mod websocket;
@@ -322,6 +323,8 @@ pub fn run() {
             updater::get_app_version,
             updater::check_for_app_update,
             updater::download_and_install_update,
+            prefs::get_update_popups_enabled,
+            prefs::set_update_popups_enabled,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
