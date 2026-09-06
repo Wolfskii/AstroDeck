@@ -2,8 +2,9 @@
   import { untrack } from "svelte";
   import { ShaderMount, emptyPixel } from "@paper-design/shaders";
   import { mixHexPalette } from "../lib/color";
-  import { usesCoverImage, usesThreeBackground, type SceneBackgroundId } from "../lib/sceneBackgrounds";
+  import { usesCoverImage, usesThreeBackground, usesVisualizerShader, type SceneBackgroundId } from "../lib/sceneBackgrounds";
   import { createThreeBackground, type ThreeBackgroundHandle } from "../lib/threeBackground";
+  import { synthBeat } from "../lib/visualizerBeat";
   import {
     fragmentForStyle,
     lerpPaletteUniforms,
@@ -16,11 +17,13 @@
     colors,
     imageUrl = null,
     placement = "full",
+    playing = true,
   }: {
     style: SceneBackgroundId;
     colors: string[];
     imageUrl?: string | null;
     placement?: "full" | "artwork";
+    playing?: boolean;
   } = $props();
 
   const PALETTE_FADE_MS = 700;
@@ -60,6 +63,7 @@
     style: SceneBackgroundId;
     applyPalette: (palette: string[]) => void;
     applyImage: (image: HTMLImageElement) => void;
+    setPlaying: (next: boolean) => void;
   };
 
   let live: LiveShader | null = null;
@@ -68,6 +72,11 @@
   $effect(() => {
     pendingPalette = [...colors];
     live?.applyPalette(pendingPalette);
+  });
+
+  $effect(() => {
+    const isPlaying = playing;
+    untrack(() => live)?.setPlaying(isPlaying);
   });
 
   $effect(() => {
@@ -98,10 +107,12 @@
       let three: ThreeBackgroundHandle | null = null;
       try {
         three = createThreeBackground(el, currentStyle, untrack(() => pendingPalette));
+        three.setPlaying(untrack(() => playing));
         live = {
           style: currentStyle,
           applyPalette: (palette) => three?.applyPalette(palette),
           applyImage: () => {},
+          setPlaying: (next) => three?.setPlaying(next),
         };
       } catch {
         el.replaceChildren();
@@ -129,6 +140,7 @@
     let lerpFrom = displayed;
     let lerpTo = displayed;
     let lerpStarted = 0;
+    let isPlaying = untrack(() => playing);
 
     function tickLerp(now: number) {
       if (disposed || !mount) return;
@@ -207,7 +219,11 @@
         style: currentStyle,
         applyPalette,
         applyImage,
+        setPlaying(next: boolean) {
+          isPlaying = next;
+        },
       };
+      isPlaying = untrack(() => playing);
       const latest = untrack(() => pendingPalette);
       if (!palettesEqual(latest, displayed)) {
         applyPalette(latest);
@@ -221,6 +237,20 @@
           mount.setUniforms({
             u_shift: Math.sin(t * 0.45) * 0.22,
             u_angle: 10 + Math.sin(t * 0.18) * 14,
+          });
+          raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+      }
+
+      if (usesVisualizerShader(currentStyle)) {
+        const started = performance.now();
+        const tick = (now: number) => {
+          if (disposed || !mount) return;
+          const t = (now - started) / 1000;
+          mount.setUniforms({
+            u_beat: synthBeat(t, isPlaying),
+            u_speed: isPlaying ? 0.85 : 0.18,
           });
           raf = requestAnimationFrame(tick);
         };

@@ -1,8 +1,16 @@
 import * as THREE from "three";
 import type { SceneBackgroundId } from "./sceneBackgrounds";
+import { synthBeat } from "./visualizerBeat";
+import {
+  setupBokeh,
+  setupHelix,
+  setupRipple,
+  setupSpectrum,
+} from "./threeVisualizers";
 
 export type ThreeBackgroundHandle = {
   applyPalette: (palette: string[]) => void;
+  setPlaying: (next: boolean) => void;
   dispose: () => void;
 };
 
@@ -18,8 +26,8 @@ function paletteColors(hex: string[]): THREE.Color[] {
   });
 }
 
-function mixColor(from: THREE.Color, to: THREE.Color, t: number, into: THREE.Color) {
-  return into.copy(from).lerp(to, t);
+function mixColor(from: THREE.Color, to: THREE.Color, t: number, out: THREE.Color) {
+  return out.copy(from).lerp(to, t);
 }
 
 function makeGlowTexture(size = 128): THREE.CanvasTexture {
@@ -67,11 +75,14 @@ export function createThreeBackground(
   let fade = 1;
   let disposed = false;
   let raf = 0;
+  let playing = true;
   const night = new THREE.Color(0x05070c);
   const fogScratch = new THREE.Color();
 
   const disposables: { dispose: () => void }[] = [glow];
-  const tickers: Array<(dt: number, elapsed: number, colors: THREE.Color[]) => void> = [];
+  const tickers: Array<
+    (dt: number, elapsed: number, colors: THREE.Color[], beat: number, playing: boolean) => void
+  > = [];
 
   function resize() {
     const width = Math.max(1, host.clientWidth);
@@ -88,7 +99,16 @@ export function createThreeBackground(
   if (style === "cosmos") setupCosmos();
   else if (style === "warp") setupWarp();
   else if (style === "prism") setupPrism();
+  else if (style === "horizon") setupHorizon();
+  else if (style === "spectrum") tickers.push(setupSpectrum(ctx()));
+  else if (style === "bokeh") tickers.push(setupBokeh(ctx()));
+  else if (style === "ripple") tickers.push(setupRipple(ctx()));
+  else if (style === "helix") tickers.push(setupHelix(ctx()));
   else setupHorizon();
+
+  function ctx() {
+    return { scene, camera, glow, displayed, disposables };
+  }
 
   function setupCosmos() {
     camera.position.set(0, 9, 26);
@@ -494,7 +514,9 @@ export function createThreeBackground(
   function currentColors(): THREE.Color[] {
     if (fade >= 1) return to;
     const t = fade * fade * (3 - 2 * fade);
-    return displayed.map((_, index) => mixColor(from[index], to[index], t, displayed[index]));
+    return displayed.map((out, index) =>
+      mixColor(from[index] ?? out, to[index] ?? out, t, out)
+    );
   }
 
   function frame() {
@@ -510,7 +532,8 @@ export function createThreeBackground(
         scene.fog.color.copy(fogScratch);
       }
     }
-    for (const tick of tickers) tick(dt, elapsed, colors);
+    const beat = synthBeat(elapsed, playing);
+    for (const tick of tickers) tick(dt, elapsed, colors, beat, playing);
     renderer.render(scene, camera);
     raf = requestAnimationFrame(frame);
   }
@@ -522,6 +545,9 @@ export function createThreeBackground(
       to = paletteColors(nextPalette);
       displayed = from.map((color) => color.clone());
       fade = 0;
+    },
+    setPlaying(next: boolean) {
+      playing = next;
     },
     dispose() {
       disposed = true;

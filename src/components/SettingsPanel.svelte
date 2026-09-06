@@ -307,24 +307,54 @@
         Scene backgrounds pick colors from the current cover art. They apply to the Spotify
         player first; other views will follow later.
       </p>
-      <div class="scene-grid">
-        {#each SCENE_BACKGROUND_OPTIONS as option (option.id)}
-          <button
-            type="button"
-            class="scene-card"
-            class:active={$sceneBackgroundId === option.id}
-            onclick={() => persistSceneBackground(option.id)}
-            aria-pressed={$sceneBackgroundId === option.id}
-          >
-            <div class="scene-card-top">
-              <span class="scene-name">{option.label}</span>
-              {#if $sceneBackgroundId === option.id}
-                <span class="scene-tag current">current</span>
-              {/if}
-            </div>
-            <p class="scene-description">{option.description}</p>
-          </button>
-        {/each}
+      <div class="scene-group">
+        <h3 class="scene-group-title">Scenes</h3>
+        <p class="scene-group-hint">Atmospheric looks for the now-playing view.</p>
+        <div class="scene-grid">
+          {#each SCENE_BACKGROUND_OPTIONS.filter((option) => option.group === "scene") as option (option.id)}
+            <button
+              type="button"
+              class="scene-card"
+              class:active={$sceneBackgroundId === option.id}
+              onclick={() => persistSceneBackground(option.id)}
+              aria-pressed={$sceneBackgroundId === option.id}
+            >
+              <div class="scene-card-top">
+                <span class="scene-name">{option.label}</span>
+                {#if $sceneBackgroundId === option.id}
+                  <span class="scene-tag current">current</span>
+                {/if}
+              </div>
+              <p class="scene-description">{option.description}</p>
+            </button>
+          {/each}
+        </div>
+      </div>
+      <div class="scene-group">
+        <h3 class="scene-group-title">Visualizers</h3>
+        <p class="scene-group-hint">
+          Beat-driven looks that ease off when playback is paused. The pulse is timed, not read
+          from Spotify audio.
+        </p>
+        <div class="scene-grid">
+          {#each SCENE_BACKGROUND_OPTIONS.filter((option) => option.group === "visualizer") as option (option.id)}
+            <button
+              type="button"
+              class="scene-card"
+              class:active={$sceneBackgroundId === option.id}
+              onclick={() => persistSceneBackground(option.id)}
+              aria-pressed={$sceneBackgroundId === option.id}
+            >
+              <div class="scene-card-top">
+                <span class="scene-name">{option.label}</span>
+                {#if $sceneBackgroundId === option.id}
+                  <span class="scene-tag current">current</span>
+                {/if}
+              </div>
+              <p class="scene-description">{option.description}</p>
+            </button>
+          {/each}
+        </div>
       </div>
       <div class="settings-card">
         <label class="setting-row" for="controls-backdrop">
@@ -1255,6 +1285,25 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 12px;
+  }
+
+  .scene-group {
+    margin-bottom: 22px;
+  }
+
+  .scene-group-title {
+    margin: 0 0 4px;
+    font-size: 0.82rem;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--md-ink);
+  }
+
+  .scene-group-hint {
+    margin: 0 0 12px;
+    color: var(--md-muted);
+    font-size: 0.88rem;
   }
 
   .scene-card {

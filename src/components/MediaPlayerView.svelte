@@ -386,6 +386,7 @@
       style={backgroundStyle}
       colors={shaderColors}
       imageUrl={usesCoverImage(backgroundStyle) ? artworkUrl : null}
+      playing={isPlaying}
     />
   {/if}
   <div

@@ -23,6 +23,7 @@ import { auroraFragmentShader } from "./auroraShader";
 import { hexToHsv, hsvToHex } from "./color";
 import { liquidGradientFragmentShader } from "./liquidGradientShader";
 import type { SceneBackgroundId } from "./sceneBackgrounds";
+import { kaleidoFragmentShader, plasmaFragmentShader } from "./visualizerShaders";
 
 const sizing = (fit: keyof typeof ShaderFitOptions = "cover") => ({
   u_fit: ShaderFitOptions[fit],
@@ -192,6 +193,10 @@ export function fragmentForStyle(style: SceneBackgroundId): string | null {
       return liquidGradientFragmentShader;
     case "aurora":
       return auroraFragmentShader;
+    case "plasma":
+      return plasmaFragmentShader;
+    case "kaleido":
+      return kaleidoFragmentShader;
     default:
       return null;
   }
@@ -401,6 +406,21 @@ export function uniformsForStyle(
           u_starBlinkRate: 6.26,
           u_starIntensity: 0.52,
           u_starColor: vividRgb(star, 0.82, 0.4),
+        },
+      };
+    }
+    case "plasma":
+    case "kaleido": {
+      return {
+        speed: 0.55,
+        uniforms: {
+          ...sizing("cover"),
+          u_colorA: vividRgb(colors[0] ?? "#7dd3fc", 0.62, 0.42),
+          u_colorB: vividRgb(colors[1] ?? colors[0] ?? "#c084fc", 0.58, 0.4),
+          u_colorC: vividRgb(colors[2] ?? colors[0] ?? "#fb7185", 0.7, 0.45),
+          u_colorBack: rgb3(colors[colors.length - 1] ?? "#071018"),
+          u_beat: 0.2,
+          u_speed: 0.85,
         },
       };
     }
