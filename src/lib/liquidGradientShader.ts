@@ -71,22 +71,22 @@ vec3 getGradientColor(vec2 uv, float time) {
   float radial2 = 1.0 - smoothstep(0.0, 0.8, length(r2 - 0.5));
 
   vec3 color = vec3(0.0);
-  color += u_color1 * i1 * u_color1Weight;
-  color += u_color2 * i2 * u_color2Weight;
-  color += u_color3 * i3 * u_color1Weight;
-  color += u_color4 * i4 * u_color2Weight;
-  color += u_color5 * i5 * u_color1Weight;
-  color += u_color6 * i6 * u_color2Weight;
+  color += u_color1 * i1 * (0.55 + 0.45 * sin(t)) * u_color1Weight;
+  color += u_color2 * i2 * (0.55 + 0.45 * cos(t * 1.2)) * u_color2Weight;
+  color += u_color3 * i3 * (0.55 + 0.45 * sin(t * 0.8)) * u_color1Weight;
+  color += u_color4 * i4 * (0.55 + 0.45 * cos(t * 1.3)) * u_color2Weight;
+  color += u_color5 * i5 * (0.55 + 0.45 * sin(t * 1.1)) * u_color1Weight;
+  color += u_color6 * i6 * (0.55 + 0.45 * cos(t * 0.9)) * u_color2Weight;
 
   if (u_gradientCount > 6.0) {
-    color += u_color1 * i7 * u_color1Weight;
-    color += u_color2 * i8 * u_color2Weight;
-    color += u_color3 * i9 * u_color1Weight;
-    color += u_color4 * i10 * u_color2Weight;
+    color += u_color1 * i7 * (0.55 + 0.45 * sin(t * 1.4)) * u_color1Weight;
+    color += u_color2 * i8 * (0.55 + 0.45 * cos(t * 1.5)) * u_color2Weight;
+    color += u_color3 * i9 * (0.55 + 0.45 * sin(t * 1.6)) * u_color1Weight;
+    color += u_color4 * i10 * (0.55 + 0.45 * cos(t * 1.7)) * u_color2Weight;
   }
   if (u_gradientCount > 10.0) {
-    color += u_color5 * i11 * u_color1Weight;
-    color += u_color6 * i12 * u_color2Weight;
+    color += u_color5 * i11 * (0.55 + 0.45 * sin(t * 1.8)) * u_color1Weight;
+    color += u_color6 * i12 * (0.55 + 0.45 * cos(t * 1.9)) * u_color2Weight;
   }
 
   color += mix(u_color1, u_color3, radial1) * 0.45 * u_color1Weight;
@@ -111,6 +111,11 @@ void main() {
   vec3 color = getGradientColor(uv, u_time);
 
   color += grain(uv, u_time) * u_grainIntensity;
+
+  float timeShift = u_time * 0.5;
+  color.r += sin(timeShift) * 0.02;
+  color.g += cos(timeShift * 1.4) * 0.02;
+  color.b += sin(timeShift * 1.2) * 0.02;
 
   float brightness = length(color);
   color = mix(u_colorBack, color, max(brightness * 1.2, 0.15));

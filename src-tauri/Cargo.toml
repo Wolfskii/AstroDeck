@@ -1,6 +1,6 @@
 [package]
 name = "astrodeck"
-version = "0.1.6-9"
+version = "0.1.6-10"
 description = "Context-aware control deck for touchscreen monitors"
 authors = ["AstroDeck Contributors"]
 edition = "2021"

@@ -26,6 +26,24 @@ import type { SceneBackgroundId } from "./sceneBackgrounds";
 import { kaleidoFragmentShader, plasmaFragmentShader } from "./visualizerShaders";
 import { mosaicFragmentShader, silkFragmentShader, vortexFragmentShader } from "./flowShaders";
 
+const meshGradientStableShader = meshGradientFragmentShader.replace(
+  "cos(.2 * t + i * 2.4 * smoothstep(.0, 1., uv.y))",
+  "cos(i * 2.4 * smoothstep(.0, 1., uv.y) + uv.x * 1.8)"
+).replace(
+  "fragColor = vec4(color, opacity);",
+  `float luma = dot(color, vec3(0.299, 0.587, 0.114));
+  float compressed = mix(luma, 0.33, 0.42);
+  color *= compressed / max(luma, 0.06);
+  fragColor = vec4(color, opacity);`
+);
+
+const neuroNoiseStableShader = neuroNoiseFragmentShader.replace(
+  "noise = min(1.4, noise);",
+  `noise = min(1.4, noise);
+  noise = mix(pow(noise, 0.82), noise, 0.28);
+  noise = 0.2 + 0.72 * smoothstep(0.08, 1.05, noise);`
+);
+
 const sizing = (fit: keyof typeof ShaderFitOptions = "cover") => ({
   u_fit: ShaderFitOptions[fit],
   u_scale: 1,
@@ -175,11 +193,11 @@ function noiseImage(): HTMLImageElement | undefined {
 export function fragmentForStyle(style: SceneBackgroundId): string | null {
   switch (style) {
     case "mesh-gradient":
-      return meshGradientFragmentShader;
+      return meshGradientStableShader;
     case "dithering":
       return ditheringFragmentShader;
     case "neuro-noise":
-      return neuroNoiseFragmentShader;
+      return neuroNoiseStableShader;
     case "grain-gradient":
       return grainGradientFragmentShader;
     case "metaballs":
@@ -237,12 +255,12 @@ export function uniformsForStyle(
       };
     case "dithering":
       return {
-        speed: 0.28,
+        speed: 0.35,
         uniforms: {
           ...sizing("cover"),
           u_colorBack: back,
           u_colorFront: front,
-          u_shape: DitheringShapes.swirl,
+          u_shape: DitheringShapes.warp,
           u_type: DitheringTypes["4x4"],
           u_pxSize: 2.4,
           u_scale: 0.85,
@@ -256,8 +274,8 @@ export function uniformsForStyle(
           u_colorFront: front,
           u_colorMid: mid,
           u_colorBack: back,
-          u_brightness: 0.04,
-          u_contrast: 0.22,
+          u_brightness: 0.12,
+          u_contrast: 0.28,
           u_scale: 1.1,
         },
       };
@@ -272,7 +290,7 @@ export function uniformsForStyle(
           u_softness: 0.7,
           u_intensity: 0.45,
           u_noise: 0.35,
-          u_shape: GrainGradientShapes.truchet,
+          u_shape: GrainGradientShapes.blob,
           u_noiseTexture: noise,
         },
       };
@@ -304,7 +322,7 @@ export function uniformsForStyle(
           u_bloom: 0.5,
           u_spots: 4,
           u_spotSize: 0.5,
-          u_pulse: 0,
+          u_pulse: 0.7,
           u_smoke: 0.22,
           u_smokeSize: 0.45,
           u_aspectRatio: PulsingBorderAspectRatios.square,
