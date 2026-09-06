@@ -23,12 +23,14 @@ const SPOTIFY_SHUFFLE_URL: &str = "https://api.spotify.com/v1/me/player/shuffle"
 const SPOTIFY_LIBRARY_URL: &str = "https://api.spotify.com/v1/me/library";
 const SPOTIFY_LIBRARY_CONTAINS_URL: &str = "https://api.spotify.com/v1/me/library/contains";
 const SPOTIFY_QUEUE_URL: &str = "https://api.spotify.com/v1/me/player/queue";
+const SPOTIFY_PLAYLISTS_URL: &str = "https://api.spotify.com/v1/me/playlists";
+const SPOTIFY_PLAY_URL: &str = "https://api.spotify.com/v1/me/player/play";
 #[derive(Serialize)]
 struct LibraryUrisBody {
     uris: Vec<String>,
 }
 const SPOTIFY_SCOPES: &str =
-    "user-library-modify user-library-read user-read-playback-state user-modify-playback-state";
+    "user-library-modify user-library-read user-read-playback-state user-modify-playback-state playlist-read-private playlist-read-collaborative";
 
 /// Spotify's official desktop / librespot "keymaster" client id. Already approved,
 /// with localhost `/login` redirects registered, so users do not create a developer app.
@@ -419,6 +421,65 @@ pub struct SpotifyTokens {
     pub refresh_token: String,
     pub expires_at: u64,
     pub scope: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotifyPlaylist {
+    pub id: String,
+    pub name: String,
+    pub uri: String,
+    pub image_url: Option<String>,
+    pub track_count: u32,
+    pub owner_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotifyPlaylistPage {
+    pub items: Vec<SpotifyPlaylist>,
+    pub offset: u32,
+    pub limit: u32,
+    pub total: u32,
+    pub next_offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaylistsResponse {
+    items: Vec<PlaylistItem>,
+    #[serde(default)]
+    offset: u32,
+    #[serde(default)]
+    limit: u32,
+    #[serde(default)]
+    total: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaylistItem {
+    id: Option<String>,
+    name: Option<String>,
+    uri: Option<String>,
+    #[serde(default)]
+    images: Vec<PlaybackImage>,
+    tracks: Option<PlaylistTracks>,
+    owner: Option<PlaylistOwner>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaylistTracks {
+    #[serde(default)]
+    total: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaylistOwner {
+    display_name: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PlayContextBody {
+    context_uri: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1974,6 +2035,117 @@ pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
     }
 }
 
+fn playlist_context_uri(id_or_uri: &str) -> Result<String, String> {
+    let trimmed = id_or_uri.trim();
+    if trimmed.is_empty() {
+        return Err("Playlist id is required".to_string());
+    }
+    if trimmed.starts_with("spotify:playlist:") {
+        return Ok(trimmed.to_string());
+    }
+    if trimmed.starts_with("spotify:") {
+        return Err(format!("Unsupported Spotify URI for playlist play: {trimmed}"));
+    }
+    Ok(format!("spotify:playlist:{trimmed}"))
+}
+
+pub fn list_playlists(
+    spotify: &SpotifyState,
+    offset: u32,
+    limit: u32,
+) -> Result<SpotifyPlaylistPage, String> {
+    if !has_scope(spotify, "playlist-read-private")?
+        && !has_scope(spotify, "playlist-read-collaborative")?
+    {
+        return Err(
+            "Spotify token is missing playlist access. Disconnect and reconnect Spotify."
+                .to_string(),
+        );
+    }
+
+    let limit = limit.clamp(1, 50);
+    let access_token = get_access_token(spotify)?;
+    let client = spotify_http_client()?;
+    let response = client
+        .get(SPOTIFY_PLAYLISTS_URL)
+        .bearer_auth(&access_token)
+        .query(&[("limit", limit.to_string()), ("offset", offset.to_string())])
+        .send()
+        .map_err(|e| format!("Spotify playlists request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("Spotify playlists query failed: {status} {body}"));
+    }
+
+    let page: PlaylistsResponse = response.json().map_err(|e| e.to_string())?;
+    let items = page
+        .items
+        .into_iter()
+        .filter_map(|item| {
+            let id = item.id?;
+            let name = item.name.filter(|value| !value.is_empty())?;
+            Some(SpotifyPlaylist {
+                uri: item
+                    .uri
+                    .unwrap_or_else(|| format!("spotify:playlist:{id}")),
+                image_url: item.images.first().map(|image| image.url.clone()),
+                track_count: item.tracks.map(|tracks| tracks.total).unwrap_or(0),
+                owner_name: item.owner.and_then(|owner| owner.display_name),
+                id,
+                name,
+            })
+        })
+        .collect::<Vec<_>>();
+    let fetched = items.len() as u32;
+    let next_offset = (offset + fetched < page.total).then_some(offset + fetched);
+
+    Ok(SpotifyPlaylistPage {
+        items,
+        offset: page.offset,
+        limit: page.limit.max(limit),
+        total: page.total,
+        next_offset,
+    })
+}
+
+pub fn play_playlist(spotify: &SpotifyState, playlist: &str) -> Result<(), String> {
+    let context_uri = playlist_context_uri(playlist)?;
+    let device_id = get_playback_for_mutation(spotify).ok().map(|p| p.device_id);
+    let access_token = get_access_token(spotify)?;
+    let client = spotify_http_client()?;
+    let body = serde_json::to_string(&PlayContextBody {
+        context_uri: context_uri.clone(),
+    })
+    .map_err(|e| e.to_string())?;
+
+    let mut request = client
+        .put(SPOTIFY_PLAY_URL)
+        .bearer_auth(access_token)
+        .header("Content-Type", "application/json")
+        .body(body);
+    if let Some(device_id) = device_id.as_ref() {
+        request = request.query(&[("device_id", device_id)]);
+    }
+
+    let response = request
+        .send()
+        .map_err(|e| format!("Spotify play playlist request failed: {e}"))?;
+
+    if response.status().is_success() || response.status().as_u16() == 204 {
+        invalidate_playback_cache(spotify);
+        invalidate_queue_cache(spotify);
+        Ok(())
+    } else {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        Err(format!(
+            "Spotify play playlist failed for {context_uri}: {status} {body}"
+        ))
+    }
+}
+
 fn playback_item_image_url(item: &PlaybackItem) -> Option<String> {
     item.album
         .as_ref()
@@ -2241,5 +2413,19 @@ mod tests {
             serde_json::from_str(r#"{"client_id":"legacy-id"}"#).unwrap();
         assert_eq!(legacy.auth_mode, None);
         assert_eq!(legacy.client_id, "legacy-id");
+    }
+
+    #[test]
+    fn playlist_context_uri_accepts_id_or_uri() {
+        assert_eq!(
+            playlist_context_uri("37i9dQZF1DXcBWIGoYBM5M").unwrap(),
+            "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"
+        );
+        assert_eq!(
+            playlist_context_uri("spotify:playlist:37i9dQZF1DXcBWIGoYBM5M").unwrap(),
+            "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"
+        );
+        assert!(playlist_context_uri("spotify:album:abc").is_err());
+        assert!(playlist_context_uri("").is_err());
     }
 }

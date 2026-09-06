@@ -1560,6 +1560,8 @@
         if (detail.action === "spotify.toggleShuffle") {
           spotifyQueueRefreshPending = false;
           scheduleSpotifyQueueRefresh();
+        } else if (detail.action === "spotify.playPlaylist") {
+          void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
         } else if (
           detail.action === "spotify.nextTrack" ||
           detail.action === "spotify.prevTrack"
@@ -2133,6 +2135,7 @@
               : Promise.resolve()}
           showSettingsButton={isTauri}
           onOpenSettings={() => (viewMode = "settings")}
+          playlistsEnabled={isSpotifyScene}
         />
       {:else if sceneId === "teams" && displayedLayout}
         <TeamsScene
