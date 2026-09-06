@@ -267,6 +267,47 @@ fn set_spotify_client_id(client_id: String, state: tauri::State<AppState>) -> Re
     Ok(())
 }
 
+#[tauri::command]
+fn list_spotify_playlists(
+    offset: Option<u32>,
+    limit: Option<u32>,
+    state: tauri::State<AppState>,
+) -> Result<spotify::SpotifyPlaylistPage, String> {
+    spotify::list_playlists(&state.spotify, offset.unwrap_or(0), limit.unwrap_or(50))
+}
+
+#[tauri::command]
+fn play_spotify_playlist(
+    playlist: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    spotify::play_playlist(&state.spotify, &playlist)?;
+    if let Ok(status) = spotify::get_status_fresh(&state.spotify) {
+        let payload = serde_json::json!({
+            "type": "spotifyStatus",
+            "payload": status,
+        });
+        let _ = state.log_bus.send(payload.to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_spotify_auth_mode(
+    auth_mode: spotify::SpotifyAuthMode,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    spotify::set_auth_mode_from_settings(&state.spotify, auth_mode)?;
+    if let Ok(status) = spotify::get_status(&state.spotify) {
+        let payload = serde_json::json!({
+            "type": "spotifyStatus",
+            "payload": status,
+        });
+        let _ = state.log_bus.send(payload.to_string());
+    }
+    Ok(())
+}
+
 const WINDOW_ICON_PNG: &[u8] = include_bytes!("../icons/128x128.png");
 
 fn apply_window_icon(window: &tauri::WebviewWindow) {
@@ -349,6 +390,9 @@ pub fn run() {
             disconnect_spotify,
             get_spotify_client_config,
             set_spotify_client_id,
+            set_spotify_auth_mode,
+            list_spotify_playlists,
+            play_spotify_playlist,
             open_settings_window,
             persist_window_state,
             restore_window_show_state,

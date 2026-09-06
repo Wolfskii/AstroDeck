@@ -265,6 +265,18 @@ pub fn handle_value(
             );
             Ok(())
         }
+        "playPlaylist" => {
+            let playlist = value
+                .as_str()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| {
+                    "spotify.playPlaylist expects a playlist id or spotify:playlist URI".to_string()
+                })?;
+            crate::spotify::play_playlist(spotify, playlist)?;
+            log::info!("Spotify: started playlist {playlist}");
+            Ok(())
+        }
         _ => Err(format!(
             "Spotify action '{}' does not support a value payload",
             command

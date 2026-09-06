@@ -3,6 +3,7 @@
   import appIconUrl from "../assets/app-icon.png";
   import type { DeckButtonConfig } from "../types";
   import { executeAction, executeActionValue } from "../services/api";
+  import PlaylistBrowser from "./PlaylistBrowser.svelte";
   import { logError } from "../services/logger";
   import SceneBackground from "./SceneBackground.svelte";
   import { sceneBackgroundId, controlsBackdropEnabled, controlsTransparency, controlsOverlayColor, controlsOverlayCustom } from "../stores/appearance";
@@ -43,6 +44,7 @@
     onSeekCommit?: (positionMs: number) => Promise<void> | void;
     showSettingsButton?: boolean;
     onOpenSettings?: () => void;
+    playlistsEnabled?: boolean;
   }
 
   let {
@@ -71,6 +73,7 @@
     onSeekCommit,
     showSettingsButton = false,
     onOpenSettings,
+    playlistsEnabled = false,
   }: Props = $props();
 
   let localVolume = $state(50);
@@ -394,6 +397,8 @@
     }
   }
 
+  let playlistsOpen = $state(false);
+
   function formatTime(ms: number): string {
     const totalSec = Math.max(0, Math.floor(ms / 1000));
     const min = Math.floor(totalSec / 60);
@@ -433,6 +438,23 @@
         onclick={() => onOpenSettings()}
       >
         <img class="car-app-icon" src={appIconUrl} alt="" aria-hidden="true" />
+      </button>
+    {/if}
+    {#if playlistsEnabled}
+      <button
+        type="button"
+        class="car-playlists-btn"
+        title="Playlists"
+        aria-label="Browse playlists"
+        onclick={() => (playlistsOpen = true)}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M4 6h12v2H4V6zm0 5h12v2H4v-2zm0 5h8v2H4v-2zm13-1.5v-6.2c0-.7.6-1.3 1.3-1.3H22v2h-2.7v7.1c0 1.5-1.2 2.7-2.7 2.7s-2.6-1.2-2.6-2.7 1.2-2.6 2.6-2.6c.5 0 .9.1 1.4.3z"
+          />
+        </svg>
+        <span>Playlists</span>
       </button>
     {/if}
 
@@ -611,6 +633,8 @@
     </div>
   </footer>
 
+  <PlaylistBrowser open={playlistsOpen} onClose={() => (playlistsOpen = false)} />
+
   {#if volumeAction}
     <aside class="car-fader" aria-label="Volume">
       <div class="car-volume-display" aria-hidden="true">
@@ -752,6 +776,34 @@
 
   .car-settings-btn:hover {
     background: rgba(255, 255, 255, 0.08);
+  }
+
+  .car-playlists-btn {
+    position: absolute;
+    top: 18px;
+    right: 20px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 56px;
+    padding: 10px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 999px;
+    background: rgba(12, 12, 12, 0.55);
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .car-playlists-btn svg {
+    width: 26px;
+    height: 26px;
+  }
+
+  .car-playlists-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
   }
 
   .car-app-icon {
