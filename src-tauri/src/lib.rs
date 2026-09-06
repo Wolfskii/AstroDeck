@@ -359,6 +359,7 @@ pub fn run() {
             prefs::get_audio_visualizer_enabled,
             prefs::set_audio_visualizer_enabled,
             prefs::get_audio_visualizer_status,
+            prefs::set_audio_visualizer_emit,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {

@@ -233,3 +233,8 @@ export async function getAudioVisualizerStatus(): Promise<AudioVisualizerStatus>
   }
   return invoke<AudioVisualizerStatus>("get_audio_visualizer_status");
 }
+
+export async function setAudioVisualizerEmit(emit: boolean): Promise<void> {
+  if (!isTauri) return;
+  await invoke("set_audio_visualizer_emit", { emit });
+}

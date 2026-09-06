@@ -66,19 +66,31 @@ impl CaptureCtl {
 }
 
 static CAPTURE: Mutex<Option<CaptureCtl>> = Mutex::new(None);
+static EMIT_FRAMES: AtomicBool = AtomicBool::new(false);
 
 pub fn supported() -> bool {
     cfg!(windows)
 }
 
+pub fn set_emit_frames(emit: bool) {
+    EMIT_FRAMES.store(emit, Ordering::SeqCst);
+}
+
+fn emit_wanted() -> bool {
+    EMIT_FRAMES.load(Ordering::SeqCst)
+}
+
 fn emit_frame(app: &AppHandle, frame: &AudioVizFrame) {
+    if !emit_wanted() && frame.error.is_none() {
+        return;
+    }
     if let Err(err) = app.emit(EVENT_NAME, frame) {
         log::debug!("Failed to emit {EVENT_NAME}: {err}");
     }
 }
 
 pub fn sync(app: &AppHandle, enabled: bool) {
-    if enabled && supported() {
+    if enabled && supported() && emit_wanted() {
         start(app.clone());
     } else {
         stop(app);

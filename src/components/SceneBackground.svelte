@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { ShaderMount, emptyPixel } from "@paper-design/shaders";
   import { mixHexPalette } from "../lib/color";
   import { usesCoverImage, usesThreeBackground, type SceneBackgroundId } from "../lib/sceneBackgrounds";
   import { createThreeBackground, type ThreeBackgroundHandle } from "../lib/threeBackground";
-  import { ensureOsAudioListener } from "../lib/osAudioViz";
+  import { acquireOsAudioFrames, releaseOsAudioFrames } from "../lib/osAudioViz";
   import {
     fragmentForStyle,
     lerpPaletteUniforms,
@@ -98,11 +98,15 @@
     };
   });
 
+  onMount(() => {
+    acquireOsAudioFrames();
+    return () => releaseOsAudioFrames();
+  });
+
   $effect(() => {
     const el = host;
     const currentStyle = style;
     if (!el) return;
-    ensureOsAudioListener();
 
     if (usesThreeBackground(currentStyle)) {
       let three: ThreeBackgroundHandle | null = null;

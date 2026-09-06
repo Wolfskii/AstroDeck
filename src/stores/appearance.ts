@@ -27,7 +27,7 @@ import {
   setAudioVisualizerEnabled,
   DEFAULT_AUDIO_VISUALIZER,
 } from "../services/prefs";
-import { ensureOsAudioListener, type OsAudioFrame } from "../lib/osAudioViz";
+import { subscribeOsAudioError } from "../lib/osAudioViz";
 
 const STORAGE_KEY = "astrodeck:sceneBackground";
 const BACKDROP_KEY = "astrodeck:controlsBackdrop";
@@ -202,13 +202,12 @@ if (typeof window !== "undefined") {
         listen<boolean>("audio-visualizer-changed", (event) => {
           audioVisualizerEnabled.set(!!event.payload);
         }),
-        listen<OsAudioFrame>("os-audio-viz", (event) => {
-          audioVisualizerError.set(event.payload.error ?? null);
-        }),
       ])
     )
     .then(() => {
-      ensureOsAudioListener();
+      subscribeOsAudioError((error) => {
+        audioVisualizerError.set(error);
+      });
     })
     .catch(() => {
       // browser / unavailable
@@ -233,8 +232,7 @@ export async function hydrateSceneBackground(): Promise<void> {
     const status = await getAudioVisualizerStatus();
     audioVisualizerSupported.set(status.supported);
     audioVisualizerEnabled.set(status.enabled);
-    audioVisualizerError.set(status.error);
-    if (status.enabled) ensureOsAudioListener();
+    audioVisualizerError.set(status.error ?? null);
   } catch {
     try {
       audioVisualizerEnabled.set(await getAudioVisualizerEnabled());
@@ -273,15 +271,12 @@ export function persistControlsOverlayCustom(enabled: boolean): void {
 
 export function persistAudioVisualizerEnabled(enabled: boolean): void {
   audioVisualizerEnabled.set(enabled);
-  if (enabled) {
-    audioVisualizerError.set(null);
-    ensureOsAudioListener();
-  }
+  if (enabled) audioVisualizerError.set(null);
   void setAudioVisualizerEnabled(enabled).then(async () => {
     try {
       const status = await getAudioVisualizerStatus();
       audioVisualizerSupported.set(status.supported);
-      if (status.error) audioVisualizerError.set(status.error);
+      audioVisualizerError.set(status.error ?? null);
     } catch {
       // keep current status
     }

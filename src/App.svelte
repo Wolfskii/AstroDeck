@@ -203,6 +203,11 @@
 
   $effect(() => {
     if (!isTauri || viewMode !== "settings") return;
+    void hydrateSceneBackground();
+  });
+
+  $effect(() => {
+    if (!isTauri || viewMode !== "settings") return;
     void (async () => {
       try {
         const [boot, minimized, fullscreen, terminal] = await Promise.all([

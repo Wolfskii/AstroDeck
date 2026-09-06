@@ -355,3 +355,10 @@ pub fn get_audio_visualizer_status(
 ) -> Result<crate::audio_viz::AudioVisualizerStatus, String> {
     Ok(crate::audio_viz::status(audio_visualizer_enabled(&app)))
 }
+
+#[tauri::command]
+pub fn set_audio_visualizer_emit(app: tauri::AppHandle, emit: bool) -> Result<(), String> {
+    crate::audio_viz::set_emit_frames(emit);
+    crate::audio_viz::sync(&app, audio_visualizer_enabled(&app));
+    Ok(())
+}

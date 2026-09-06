@@ -1,5 +1,7 @@
 /** Latest speaker-mix analysis. Read from rAF loops; do not subscribe in mount effects. */
 
+import { setAudioVisualizerEmit } from "../services/prefs";
+
 export type OsAudioFrame = {
   active: boolean;
   beat: number;
@@ -11,13 +13,41 @@ export type OsAudioFrame = {
   error?: string | null;
 };
 
+type ErrorListener = (error: string | null) => void;
+
 let latest: OsAudioFrame | null = null;
 let listening = false;
+let frameConsumers = 0;
+let lastError: string | null = null;
+let emitQueue: Promise<void> = Promise.resolve();
+const errorListeners = new Set<ErrorListener>();
+
+function errorFromFrame(frame: OsAudioFrame | null | undefined): string | null {
+  const value = frame?.error;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function publishError(next: string | null): void {
+  if (next === lastError) return;
+  lastError = next;
+  for (const listener of errorListeners) listener(next);
+}
+
+function syncEmit(): void {
+  emitQueue = emitQueue.then(() => setAudioVisualizerEmit(frameConsumers > 0)).catch(() => {});
+}
 
 export function getOsAudioFrame(): OsAudioFrame | null {
   const frame = latest;
   if (!frame?.active) return null;
   return frame;
+}
+
+export function subscribeOsAudioError(listener: ErrorListener): () => void {
+  errorListeners.add(listener);
+  return () => {
+    errorListeners.delete(listener);
+  };
 }
 
 export function ensureOsAudioListener(): void {
@@ -26,12 +56,29 @@ export function ensureOsAudioListener(): void {
   void import("@tauri-apps/api/event")
     .then(({ listen }) =>
       listen<OsAudioFrame>("os-audio-viz", (event) => {
-        latest = event.payload?.active ? event.payload : null;
+        const payload = event.payload;
+        latest = payload?.active ? payload : null;
+        publishError(errorFromFrame(payload));
       })
     )
     .catch(() => {
       listening = false;
     });
+}
+
+/** Start speaker capture/events only while a now-playing background is mounted. */
+export function acquireOsAudioFrames(): void {
+  ensureOsAudioListener();
+  frameConsumers += 1;
+  if (frameConsumers === 1) syncEmit();
+}
+
+export function releaseOsAudioFrames(): void {
+  frameConsumers = Math.max(0, frameConsumers - 1);
+  if (frameConsumers === 0) {
+    latest = null;
+    syncEmit();
+  }
 }
 
 export function sampleBand(bands: number[] | null | undefined, index: number, count: number): number | null {
