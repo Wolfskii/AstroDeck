@@ -420,6 +420,7 @@
                 style="pulsing-border"
                 colors={shaderColors}
                 placement="artwork"
+                playing={isPlaying}
               />
             {/if}
             <div class="car-art-plate">
@@ -511,6 +512,8 @@
               />
             </svg>
           </button>
+        {:else}
+          <span class="car-transport-spacer" aria-hidden="true"></span>
         {/if}
         {#if previous}
           <button
@@ -577,6 +580,8 @@
               {/if}
             </svg>
           </button>
+        {:else}
+          <span class="car-transport-spacer" aria-hidden="true"></span>
         {/if}
     </div>
   </footer>
@@ -1017,6 +1022,13 @@
     gap: 12px;
     max-width: min(100%, 720px);
     margin: 0 auto;
+  }
+
+  .car-transport-spacer {
+    width: 104px;
+    height: 1px;
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .car-transport-btn {

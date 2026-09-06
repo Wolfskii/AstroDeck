@@ -1,0 +1,24 @@
+{
+  "id": "media",
+  "name": "System Media",
+  "description": "Playback controls for local OS media players.",
+  "priority": 70,
+  "view": {
+    "type": "mediaPlayer",
+    "mediaPlayer": {
+      "previous": { "label": "Previous", "emoji": "⏮️", "action": "media.prevTrack" },
+      "playPause": { "label": "Play", "emoji": "▶️", "action": "media.togglePlay" },
+      "next": { "label": "Next", "emoji": "⏭️", "action": "media.nextTrack" },
+      "volumeAction": "media.setVolume",
+      "seekAction": "media.seek"
+    }
+  },
+  "layout": {
+    "grid": [2, 2],
+    "buttons": [
+      { "label": "Previous", "emoji": "⏮️", "action": "media.prevTrack" },
+      { "label": "Play/Pause", "emoji": "⏯️", "action": "media.togglePlay" },
+      { "label": "Next", "emoji": "⏭️", "action": "media.nextTrack" }
+    ]
+  }
+}

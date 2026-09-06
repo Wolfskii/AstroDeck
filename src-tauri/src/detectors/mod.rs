@@ -1,4 +1,3 @@
-mod default_detector;
 mod spotify_detector;
 mod teams_detector;
 mod vscode_detector;
@@ -30,7 +29,6 @@ fn all_detectors() -> Vec<Box<dyn Detector>> {
         Box::new(teams_detector::TeamsDetector),
         Box::new(spotify_detector::SpotifyDetector),
         Box::new(vscode_detector::VscodeDetector),
-        Box::new(default_detector::DefaultDetector),
     ]
 }
 
@@ -68,7 +66,24 @@ pub fn start_detection_loop(app_handle: tauri::AppHandle) {
                 }
             }
 
+            let has_media_plugin = plugins.iter().any(|plugin| plugin.id == "media");
             drop(plugins);
+
+            if has_media_plugin && crate::os_media::has_local_session(&app_handle) {
+                let local_playing = crate::os_media::current_local(&state)
+                    .is_some_and(|payload| payload.is_playing);
+                let spotify_present = matched_ids.iter().any(|id| id == "spotify");
+                if (local_playing || !spotify_present)
+                    && !matched_ids.iter().any(|id| id == "media")
+                {
+                    matched_ids.push("media".to_string());
+                }
+            }
+
+            if let Ok(mut last) = state.last_matched_ids.lock() {
+                *last = matched_ids.clone();
+            }
+
             crate::mode_engine::resolve(&app_handle, &matched_ids);
 
             std::thread::sleep(Duration::from_millis(interval_ms));

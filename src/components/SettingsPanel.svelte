@@ -256,8 +256,9 @@
           <div class="setting-copy">
             <span class="setting-title">Start minimized in the tray</span>
             <span class="setting-desc">
-              Keep the window hidden until you open it. Turn this off to restore the last display,
-              position, size, and maximized state.
+              Stay in the tray until you open AstroDeck yourself. Turn this off to restore the last
+              position, size, and mode when VS Code, Cursor, Teams, Spotify, or a local media
+              player opens.
             </span>
           </div>
           <input

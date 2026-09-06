@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import type { SceneBackgroundId } from "./sceneBackgrounds";
-import { resolvePlaying } from "./visualizerBeat";
 import { getOsAudioFrame } from "./osAudioViz";
 import {
   setupBokeh,
@@ -80,6 +79,8 @@ export function createThreeBackground(
   let disposed = false;
   let raf = 0;
   let playing = true;
+  let animElapsed = 0;
+  let lastBands: number[] | null = null;
   const night = new THREE.Color(0x05070c);
   const fogScratch = new THREE.Color();
 
@@ -548,9 +549,10 @@ export function createThreeBackground(
 
   function frame() {
     if (disposed) return;
-    const dt = Math.min(0.05, clock.getDelta());
-    const elapsed = clock.elapsedTime;
-    if (fade < 1) fade = Math.min(1, fade + dt / PALETTE_FADE_SEC);
+    const rawDt = Math.min(0.05, clock.getDelta());
+    const dt = playing ? rawDt : 0;
+    animElapsed += dt;
+    if (fade < 1) fade = Math.min(1, fade + rawDt / PALETTE_FADE_SEC);
     const colors = currentColors();
     fogScratch.copy(night).lerp(colors[3], style === "horizon" || style === "warp" ? 0.18 : 0.07);
     renderer.setClearColor(fogScratch, 1);
@@ -559,10 +561,8 @@ export function createThreeBackground(
         scene.fog.color.copy(fogScratch);
       }
     }
-    const beat = 0;
-    const motion = resolvePlaying(playing);
-    const bands = getOsAudioFrame()?.bands ?? null;
-    for (const tick of tickers) tick(dt, elapsed, colors, beat, motion, bands);
+    if (playing) lastBands = getOsAudioFrame()?.bands ?? lastBands;
+    for (const tick of tickers) tick(dt, animElapsed, colors, 0, playing, lastBands);
     renderer.render(scene, camera);
     raf = requestAnimationFrame(frame);
   }

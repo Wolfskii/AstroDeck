@@ -25,6 +25,8 @@ pub struct AppState {
     pub plugin_actions: Mutex<HashMap<String, plugin_engine::ActionSpec>>,
     pub active_scene_id: Mutex<String>,
     pub manual_scene_override: Mutex<Option<String>>,
+    pub last_matched_ids: Mutex<Vec<String>>,
+    pub os_local_media: Mutex<Option<os_media::OsNowPlaying>>,
     pub spotify: spotify::SpotifyState,
     pub log_bus: broadcast::Sender<String>,
 }
@@ -35,8 +37,10 @@ impl AppState {
         Self {
             plugins: Mutex::new(Vec::new()),
             plugin_actions: Mutex::new(HashMap::new()),
-            active_scene_id: Mutex::new("default".to_string()),
+            active_scene_id: Mutex::new("idle".to_string()),
             manual_scene_override: Mutex::new(None),
+            last_matched_ids: Mutex::new(Vec::new()),
+            os_local_media: Mutex::new(None),
             spotify: spotify::SpotifyState::default(),
             log_bus: log_tx,
         }
@@ -51,10 +55,12 @@ pub fn apply_scene_change(
 ) -> Result<(), String> {
     let plugins = state.plugins.lock().map_err(|e| e.to_string())?;
 
-    let target_id = if plugins.iter().any(|p| p.id == requested_scene_id) {
+    let target_id = if requested_scene_id == "idle"
+        || plugins.iter().any(|p| p.id == requested_scene_id)
+    {
         requested_scene_id
     } else {
-        "default".to_string()
+        "idle".to_string()
     };
 
     {
@@ -183,6 +189,16 @@ fn set_active_scene(scene_id: String, state: tauri::State<AppState>, app: tauri:
 fn log_to_bus(entry: String, state: tauri::State<AppState>) -> Result<(), String> {
     let _ = state.log_bus.send(entry);
     Ok(())
+}
+
+#[tauri::command]
+fn get_os_now_playing(state: tauri::State<AppState>) -> Option<os_media::OsNowPlaying> {
+    os_media::current_local(&state)
+}
+
+#[tauri::command]
+fn get_output_volume() -> Result<u8, String> {
+    os_media::get_output_volume()
 }
 
 #[tauri::command]
@@ -324,6 +340,8 @@ pub fn run() {
             get_plugins,
             set_active_scene,
             log_to_bus,
+            get_os_now_playing,
+            get_output_volume,
             get_spotify_status,
             peek_spotify_skip_track,
             set_spotify_volume,

@@ -11,10 +11,14 @@
   import MediaPlayerView from "./components/MediaPlayerView.svelte";
   import ReleaseNotes from "./components/ReleaseNotes.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
+  import TeamsScene from "./components/TeamsScene.svelte";
+  import VsCodeScene from "./components/VsCodeScene.svelte";
   import appIconUrl from "./assets/app-icon.png";
   import {
     executeActionValue,
     getActiveScene,
+    getOsNowPlaying,
+    getOutputVolume,
     getPlugins,
     getSpotifyClientConfig,
     getSpotifyStatus,
@@ -27,6 +31,7 @@
   import {
     getBuiltinLayout,
     getBuiltinSceneIds,
+    isIdleScene,
   } from "./layouts/layouts";
   import { logs, logInfo, logError, pushExternal, type LogEntry } from "./services/logger";
   import {
@@ -39,7 +44,7 @@
   } from "./services/updater";
   import { isAutostartEnabled, setAutostartEnabled } from "./services/autostart";
   import { getStartMinimized, setStartMinimized, getStartFullscreen, setStartFullscreen, getShowSettingsTerminal, setShowSettingsTerminal } from "./services/prefs";
-  import { persistMainWindowState, revealMainWindow } from "./services/windowState";
+  import { hideMainWindow, persistMainWindowState, revealMainWindow } from "./services/windowState";
   import { hydrateSceneBackground } from "./stores/appearance";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
@@ -59,7 +64,7 @@
     Boolean(appUpdate?.available && appUpdate.downloadUrl && appUpdate.latestVersion)
   );
   let trayMenu: Menu | null = null;
-  let windowLabel = $state("main");
+  let windowLabel = $state("");
   let seenScenes = $state<string[]>([]);
   // Tauri: main window can show deck or settings (viewMode). Browser: always settings/debug.
   let viewMode = $state<"deck" | "settings">("deck");
@@ -88,6 +93,11 @@
   let startMinimizedBusy = $state(false);
   let startFullscreen = $state(false);
   let startFullscreenBusy = $state(false);
+  let osLocalNowPlaying = $state<OsNowPlaying | null>(null);
+  let optimisticMediaPlaying = $state<boolean | null>(null);
+  let osVolumePercent = $state(50);
+  let osVolumeBusy = $state(false);
+  let osVolumeTarget = $state<number | null>(null);
   let optimisticSpotifySaved = $state<boolean | null>(null);
   let optimisticSpotifyShuffle = $state<boolean | null>(null);
   let optimisticSpotifyPlaying = $state<boolean | null>(null);
@@ -131,10 +141,27 @@
         : "paused"
       : (spotifyStatus?.playbackState ?? "stopped")
   );
+  const effectiveOsMediaPlaybackState = $derived(
+    optimisticMediaPlaying !== null
+      ? optimisticMediaPlaying
+        ? "playing"
+        : "paused"
+      : osLocalNowPlaying?.isPlaying
+        ? "playing"
+        : "paused"
+  );
   const currentMediaView = $derived.by(() => {
     const media = currentPlugin?.view?.type === "mediaPlayer"
       ? currentPlugin.view.mediaPlayer
-      : null;
+      : sceneId === "media"
+        ? {
+            previous: { label: "Previous", emoji: "⏮️", action: "media.prevTrack" },
+            playPause: { label: "Play", emoji: "▶️", action: "media.togglePlay" },
+            next: { label: "Next", emoji: "⏭️", action: "media.nextTrack" },
+            volumeAction: "media.setVolume",
+            seekAction: "media.seek",
+          }
+        : null;
     if (!media) return null;
 
     const withSpotifyLikeState = (button?: DeckButtonConfig | null) => {
@@ -146,20 +173,32 @@
       };
     };
 
-    const withSpotifyPlayState = (button?: DeckButtonConfig | null) => {
-      if (!button || button.action !== "spotify.togglePlay") return button ?? null;
-      const playing =
-        optimisticSpotifyPlaying ?? spotifyStatus?.isPlaying ?? false;
-      return {
-        ...button,
-        label: playing ? "Pause" : "Play",
-        emoji: playing ? "⏸️" : "▶️",
-      };
+    const withPlayState = (button?: DeckButtonConfig | null) => {
+      if (!button) return null;
+      if (button.action === "spotify.togglePlay") {
+        const playing =
+          optimisticSpotifyPlaying ?? spotifyStatus?.isPlaying ?? false;
+        return {
+          ...button,
+          label: playing ? "Pause" : "Play",
+          emoji: playing ? "⏸️" : "▶️",
+        };
+      }
+      if (button.action === "media.togglePlay") {
+        const playing =
+          optimisticMediaPlaying ?? osLocalNowPlaying?.isPlaying ?? false;
+        return {
+          ...button,
+          label: playing ? "Pause" : "Play",
+          emoji: playing ? "⏸️" : "▶️",
+        };
+      }
+      return button;
     };
 
     return {
       previous: media.previous ?? null,
-      playPause: withSpotifyPlayState(media.playPause),
+      playPause: withPlayState(media.playPause),
       next: media.next ?? null,
       like: withSpotifyLikeState(media.like),
       shuffle: media.shuffle ?? null,
@@ -167,10 +206,24 @@
       seekAction: media.seekAction ?? null,
     };
   });
-  const isMediaDeckView = $derived(isTauri && !isSettingsWindow && currentMediaView !== null);
+  const isImmersiveDeckView = $derived.by(
+    () =>
+      isTauri &&
+      !isSettingsWindow &&
+      (currentMediaView !== null || sceneId === "teams" || sceneId === "vscode")
+  );
   const displayedLayout = $derived.by(() => {
     if (!layout) return null;
     return layout;
+  });
+
+  $effect(() => {
+    if (!isTauri || loading || windowLabel !== "main") return;
+    const mode = viewMode;
+    const id = sceneId;
+    if (mode === "deck" && isIdleScene(id)) {
+      void syncWindowToPresence(id);
+    }
   });
 
   $effect(() => {
@@ -346,10 +399,11 @@
       startMinimized = checked;
       logInfo(
         checked
-          ? "Enabled start minimized in the tray"
-          : "AstroDeck will open with its last window state",
+          ? "Stay in the tray until you open AstroDeck yourself"
+          : "AstroDeck will open when VS Code, Cursor, Teams, Spotify, or a local media player is running",
         "Settings"
       );
+      void syncWindowToPresence();
     } catch (e) {
       startMinimized = !checked;
       input.checked = !checked;
@@ -462,7 +516,7 @@
   }
 
   function markSceneSeen(id: string) {
-    if (!id) return;
+    if (!id || isIdleScene(id)) return;
     if (!seenScenes.includes(id)) {
       seenScenes = [...seenScenes, id];
       persistSeenScenes();
@@ -607,6 +661,20 @@
     return source.toLowerCase().includes("spotify");
   }
 
+  function isLocalOsPayload(payload: OsNowPlaying) {
+    if (payload.kind === "local") return true;
+    if (payload.kind === "spotify") return false;
+    return !isSpotifyOsSource(payload.source);
+  }
+
+  function friendlyOsSource(source?: string | null) {
+    const raw = (source ?? "").trim();
+    if (!raw) return "System media";
+    const noExe = raw.replace(/\.exe$/i, "");
+    const token = noExe.split(/[\\/!.]/).filter(Boolean).pop() ?? noExe;
+    return token.replace(/([a-z])([A-Z])/g, "$1 $2");
+  }
+
   function osProgressJumped(fromMs?: number | null, toMs?: number | null) {
     if (toMs == null || !Number.isFinite(toMs)) return false;
     const from = fromMs ?? 0;
@@ -615,6 +683,22 @@
   }
 
   function applyOsNowPlaying(payload: OsNowPlaying) {
+    if (isLocalOsPayload(payload)) {
+      if (payload.active === false) {
+        osLocalNowPlaying = null;
+        optimisticMediaPlaying = null;
+        return;
+      }
+      osLocalNowPlaying = payload;
+      if (
+        optimisticMediaPlaying !== null &&
+        payload.isPlaying === optimisticMediaPlaying
+      ) {
+        optimisticMediaPlaying = null;
+      }
+      return;
+    }
+
     if (!isSpotifyOsSource(payload.source) || !spotifyStatus?.isAuthenticated) return;
 
     const nextTitle = payload.title?.trim() || null;
@@ -863,7 +947,49 @@
     }
   }
 
+  async function refreshOsVolume() {
+    if (!isTauri) return;
+    try {
+      const next = await getOutputVolume();
+      if (osVolumeBusy) return;
+      if (osVolumeTarget != null) {
+        if (Math.abs(next - osVolumeTarget) <= 2) {
+          osVolumeTarget = null;
+        } else {
+          return;
+        }
+      }
+      osVolumePercent = next;
+    } catch {
+      // System volume is optional; keep the last known fader value.
+    }
+  }
+
+  async function hydrateOsLocalMedia() {
+    if (!isTauri) return;
+    try {
+      osLocalNowPlaying = await getOsNowPlaying();
+    } catch {
+      osLocalNowPlaying = null;
+    }
+    await refreshOsVolume();
+  }
+
   async function commitSceneVolume(action: string, value: number) {
+    if (action.startsWith("media.")) {
+      osVolumePercent = value;
+      osVolumeTarget = value;
+      try {
+        osVolumeBusy = true;
+        await executeActionValue(action, value);
+      } catch (e) {
+        logError(`Failed to set volume via ${action}: ${String(e)}`, `${sceneId} window`);
+        osVolumeTarget = null;
+      } finally {
+        osVolumeBusy = false;
+      }
+      return;
+    }
     spotifyVolumePercent = value;
     spotifyVolumeTarget = value;
     try {
@@ -878,6 +1004,19 @@
   }
 
   function commitSceneSeek(action: string, positionMs: number) {
+    if (action.startsWith("media.")) {
+      if (osLocalNowPlaying) {
+        osLocalNowPlaying = { ...osLocalNowPlaying, progressMs: positionMs };
+      }
+      void (async () => {
+        try {
+          await executeActionValue(action, positionMs);
+        } catch (e) {
+          logError(`Failed to seek via ${action}: ${String(e)}`, `${sceneId} window`);
+        }
+      })();
+      return;
+    }
     spotifySeekTargetMs = positionMs;
     if (spotifyStatus) {
       spotifyStatus = { ...spotifyStatus, progressMs: positionMs };
@@ -891,6 +1030,15 @@
       }
     })();
   }
+
+  $effect(() => {
+    if (!isTauri || sceneId !== "media") return;
+    void refreshOsVolume();
+    const id = window.setInterval(() => {
+      void refreshOsVolume();
+    }, 2000);
+    return () => window.clearInterval(id);
+  });
 
   $effect(() => {
     if (!isTauri || sceneId !== "spotify") return;
@@ -939,11 +1087,7 @@
                 const item = await trayMenu?.get("toggle");
                 if (item) await item.setText("Show AstroDeck");
               } else {
-                viewMode = "deck";
-                await revealMainWindow();
-                logInfo("Showed AstroDeck window from tray menu", "Tray");
-                const item = await trayMenu?.get("toggle");
-                if (item) await item.setText("Hide AstroDeck");
+                await showAstroDeckFromTray();
               }
             },
           },
@@ -981,10 +1125,8 @@
             (event as any).button === "Left"
           ) {
             if (!(await win.isVisible())) {
-              await revealMainWindow();
+              await showAstroDeckFromTray();
               logInfo("Tray icon clicked: showing window", "Tray");
-              const item = await trayMenu?.get("toggle");
-              if (item) await item.setText("Hide AstroDeck");
             }
           }
         },
@@ -998,10 +1140,44 @@
     }
   }
 
-  let sceneId = $state("default");
+  let sceneId = $state("idle");
   let layout = $state<LayoutConfig | null>(null);
   let availableScenes = $state<string[]>([]);
   let loading = $state(true);
+  const isSpotifyScene = $derived(sceneId === "spotify");
+  const isOsMediaScene = $derived(sceneId === "media");
+  const mediaPlayerTitle = $derived.by(() => {
+    if (isSpotifyScene) {
+      return (
+        spotifyStatus?.currentTrackName ??
+        (spotifyStatus?.isConfigured === false
+          ? "Spotify setup required"
+          : spotifyStatus?.isAuthenticated === false
+            ? "Connect Spotify"
+            : "Nothing playing")
+      );
+    }
+    if (isOsMediaScene) {
+      return osLocalNowPlaying?.title?.trim() || "Nothing playing";
+    }
+    return null;
+  });
+  const mediaPlayerSubtitle = $derived.by(() => {
+    if (isSpotifyScene) {
+      return (
+        spotifyStatus?.currentArtistName ??
+        (spotifyStatus?.message ??
+          "Tray → Settings: save Client ID, then Connect Spotify")
+      );
+    }
+    if (isOsMediaScene) {
+      return (
+        osLocalNowPlaying?.artist?.trim() ||
+        friendlyOsSource(osLocalNowPlaying?.source)
+      );
+    }
+    return null;
+  });
   const settingsSceneIds = $derived(
     Array.from(
       new Set([
@@ -1010,8 +1186,48 @@
         ...availableScenes,
         ...seenScenes,
       ])
-    )
+    ).filter((id) => !isIdleScene(id))
   );
+
+  async function setTrayToggleVisible(visible: boolean) {
+    const item = await trayMenu?.get("toggle");
+    if (item) await item.setText(visible ? "Hide AstroDeck" : "Show AstroDeck");
+  }
+
+  async function showAstroDeckFromTray() {
+    viewMode = isIdleScene(sceneId) ? "settings" : "deck";
+    await revealMainWindow();
+    await setTrayToggleVisible(true);
+    logInfo(
+      isIdleScene(sceneId)
+        ? "Showed Settings from tray; no supported app is running"
+        : `Showed AstroDeck window from tray (${sceneId})`,
+      "Tray"
+    );
+  }
+
+  async function syncWindowToPresence(nextSceneId = sceneId) {
+    if (!isTauri || windowLabel !== "main") return;
+    const idle = isIdleScene(nextSceneId);
+    const win = getCurrentWindow();
+    const visible = await win.isVisible();
+    if (idle) {
+      if (viewMode === "settings") return;
+      if (visible) {
+        await hideMainWindow();
+        await setTrayToggleVisible(false);
+        logInfo("Hid AstroDeck; no supported app or local media is running", "Scenes");
+      }
+      return;
+    }
+    if (startMinimized && !visible) return;
+    if (!visible) {
+      viewMode = "deck";
+      await revealMainWindow();
+      await setTrayToggleVisible(true);
+      logInfo(`Opened AstroDeck for ${nextSceneId}`, "Scenes");
+    }
+  }
 
   async function checkForUpdates(showPopup = false) {
     if (!isTauri) return null;
@@ -1093,7 +1309,7 @@
         logBusSocket.send(JSON.stringify({ type: "setScene", sceneId: id }));
       } else {
         logError(`Log bus is not connected; cannot set scene to ${id}`, "Settings window");
-        const next = getBuiltinLayout(id) ?? getBuiltinLayout("default");
+        const next = getBuiltinLayout(id);
         if (next) {
           sceneId = id;
           layout = next;
@@ -1115,6 +1331,10 @@
       if (state.activeSceneId === "spotify") {
         await refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
       }
+      if (state.activeSceneId === "media") {
+        await hydrateOsLocalMedia();
+      }
+      await syncWindowToPresence(state.activeSceneId);
     } catch (e) {
       logError(`Failed to fetch scene state: ${String(e)}`);
     } finally {
@@ -1207,6 +1427,11 @@
           optimisticSpotifyPlaying ?? spotifyStatus?.isPlaying ?? false;
         optimisticSpotifyPlaying = !playing;
       }
+      if (detail.action === "media.togglePlay") {
+        const playing =
+          optimisticMediaPlaying ?? osLocalNowPlaying?.isPlaying ?? false;
+        optimisticMediaPlaying = !playing;
+      }
       if (detail.action === "spotify.nextTrack") {
         if (isTauri) {
           void (async () => {
@@ -1290,6 +1515,9 @@
       if (detail.action === "spotify.togglePlay") {
         optimisticSpotifyPlaying = null;
       }
+      if (detail.action === "media.togglePlay") {
+        optimisticMediaPlaying = null;
+      }
       if (
         detail.action === "spotify.nextTrack" ||
         detail.action === "spotify.prevTrack"
@@ -1309,16 +1537,16 @@
     window.addEventListener("astrodeck-action-failed", handleActionFailed as EventListener);
 
     if (!isTauri) {
-      // Browser debug mode: start with a static default layout and settings view.
-      const debugLayout = getBuiltinLayout("default");
-      sceneId = "default";
+      // Browser debug mode: preview a built-in app scene in Settings.
+      const debugLayout = getBuiltinLayout("vscode");
+      sceneId = "vscode";
       layout = debugLayout;
       availableScenes = getBuiltinSceneIds();
       loading = false;
       logStatus = "connecting";
       updateDebugTitle();
-      logInfo("Browser mode: loaded builtin default layout", "Browser");
-      markSceneSeen("default");
+      logInfo("Browser mode: loaded builtin VS Code layout", "Browser");
+      markSceneSeen("vscode");
       void getAppVersion()
         .then((version) => {
           appVersion = version;
@@ -1456,7 +1684,14 @@
       };
       window.addEventListener("keydown", onDeckPresentationKeydown, true);
 
-      refreshScene();
+      void (async () => {
+        try {
+          startMinimized = await getStartMinimized();
+        } catch {
+          startMinimized = true;
+        }
+        await refreshScene();
+      })();
       void (async () => {
         try {
           appVersion = await getAppVersion();
@@ -1479,9 +1714,13 @@
       if (sceneId === "spotify") {
         void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
       }
+      void hydrateOsLocalMedia();
 
       const onWindowFocus = () => {
         void refreshSpotifyStatusForDesktop();
+        if (sceneId === "media") {
+          void refreshOsVolume();
+        }
       };
       window.addEventListener("focus", onWindowFocus);
 
@@ -1498,6 +1737,10 @@
         if (event.payload.activeSceneId === "spotify") {
           void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
         }
+        if (event.payload.activeSceneId === "media") {
+          void hydrateOsLocalMedia();
+        }
+        void syncWindowToPresence(event.payload.activeSceneId);
       });
       const unlistenTerminal = listen<boolean>("settings-terminal-changed", (event) => {
         showSettingsTerminal = event.payload;
@@ -1521,7 +1764,7 @@
 </script>
 
 <div class="app" class:app-settings={isSettingsWindow}>
-  {#if !isMediaDeckView && !isSettingsWindow}
+  {#if !isImmersiveDeckView && !isSettingsWindow}
     <header class="app-header">
       <div class="app-header-left">
         <h1 class="app-title">AstroDeck</h1>
@@ -1569,7 +1812,7 @@
     </header>
   {/if}
 
-  {#if isTauri && isMediaDeckView && appUpdate?.available}
+  {#if isTauri && isImmersiveDeckView && appUpdate?.available}
     <button
       type="button"
       class="update-fab"
@@ -1643,34 +1886,43 @@
           previous={currentMediaView.previous}
           playPause={currentMediaView.playPause}
           next={currentMediaView.next}
-          like={currentMediaView.like}
-          shuffle={currentMediaView.shuffle}
-          shuffleActive={sceneId === "spotify" ? effectiveSpotifyShuffle : false}
-          trackSaved={sceneId === "spotify" ? effectiveSpotifySaved : null}
-          title={sceneId === "spotify"
-            ? spotifyStatus?.currentTrackName ??
-              (spotifyStatus?.isConfigured === false
-                ? "Spotify setup required"
-                : spotifyStatus?.isAuthenticated === false
-                  ? "Connect Spotify"
-                  : "Nothing playing")
-            : null}
-          subtitle={sceneId === "spotify"
-            ? spotifyStatus?.currentArtistName ??
-              (spotifyStatus?.message ??
-                "Tray → Settings: save Client ID, then Connect Spotify")
-            : null}
-          albumName={sceneId === "spotify" ? spotifyStatus?.currentAlbumName : null}
-          artworkUrl={sceneId === "spotify" ? spotifyStatus?.currentCoverArtUrl : null}
-          playbackState={sceneId === "spotify" ? effectiveSpotifyPlaybackState : "stopped"}
-          progressMs={sceneId === "spotify" ? spotifyStatus?.progressMs : null}
-          durationMs={sceneId === "spotify" ? spotifyStatus?.durationMs : null}
+          like={isOsMediaScene ? null : currentMediaView.like}
+          shuffle={isOsMediaScene ? null : currentMediaView.shuffle}
+          shuffleActive={isSpotifyScene ? effectiveSpotifyShuffle : false}
+          trackSaved={isSpotifyScene ? effectiveSpotifySaved : null}
+          title={mediaPlayerTitle}
+          subtitle={mediaPlayerSubtitle}
+          albumName={isSpotifyScene
+            ? spotifyStatus?.currentAlbumName
+            : isOsMediaScene
+              ? osLocalNowPlaying?.album
+              : null}
+          artworkUrl={isSpotifyScene
+            ? spotifyStatus?.currentCoverArtUrl
+            : isOsMediaScene
+              ? osLocalNowPlaying?.coverArtUrl
+              : null}
+          playbackState={isSpotifyScene
+            ? effectiveSpotifyPlaybackState
+            : isOsMediaScene
+              ? effectiveOsMediaPlaybackState
+              : "stopped"}
+          progressMs={isSpotifyScene
+            ? spotifyStatus?.progressMs
+            : isOsMediaScene
+              ? osLocalNowPlaying?.progressMs
+              : null}
+          durationMs={isSpotifyScene
+            ? spotifyStatus?.durationMs
+            : isOsMediaScene
+              ? osLocalNowPlaying?.durationMs
+              : null}
           volumeAction={currentMediaView.volumeAction}
           seekAction={currentMediaView.seekAction}
-          volumePercent={spotifyVolumePercent}
-          volumeBusy={spotifyVolumeBusy}
-          volumeEnabled={sceneId !== "spotify" || !!spotifyStatus?.hasActiveDevice}
-          seekEnabled={sceneId !== "spotify" || !!spotifyStatus?.hasActiveDevice}
+          volumePercent={isOsMediaScene ? osVolumePercent : spotifyVolumePercent}
+          volumeBusy={isOsMediaScene ? osVolumeBusy : spotifyVolumeBusy}
+          volumeEnabled={isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
+          seekEnabled={isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
           source={`${sceneId} window`}
           onVolumeCommit={(value) =>
             currentMediaView.volumeAction
@@ -1680,6 +1932,18 @@
             currentMediaView.seekAction
               ? commitSceneSeek(currentMediaView.seekAction, positionMs)
               : Promise.resolve()}
+          showSettingsButton={isTauri}
+          onOpenSettings={() => (viewMode = "settings")}
+        />
+      {:else if sceneId === "teams" && displayedLayout}
+        <TeamsScene
+          buttons={displayedLayout.buttons}
+          showSettingsButton={isTauri}
+          onOpenSettings={() => (viewMode = "settings")}
+        />
+      {:else if sceneId === "vscode" && displayedLayout}
+        <VsCodeScene
+          buttons={displayedLayout.buttons}
           showSettingsButton={isTauri}
           onOpenSettings={() => (viewMode = "settings")}
         />

@@ -4,8 +4,7 @@
   "description": "Reactions and in-call controls for meetings.",
   "priority": 100,
   "triggers": {
-    "processGlob": "*teams*",
-    "windowTitleContains": "Meeting"
+    "processGlob": "*teams*"
   },
   "layout": {
     "grid": [3, 3],

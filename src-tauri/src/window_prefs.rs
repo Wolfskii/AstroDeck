@@ -17,22 +17,16 @@ pub fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .build()
 }
 
-/// Restore last monitor, position, size, and chrome.
-/// If `start_minimized` is set, keep the window hidden in the tray.
-/// If `start_fullscreen` is set, enter presentation fullscreen after restore.
-pub fn apply_launch_state(window: &tauri::WebviewWindow, start_minimized: bool, start_fullscreen: bool) {
+/// Restore last monitor, position, size, and chrome, then stay in the tray.
+/// The deck window is shown later when VS Code, Cursor, Teams, Spotify, or
+/// local OS media is detected (unless start-minimized is enabled).
+pub fn apply_launch_state(window: &tauri::WebviewWindow, _start_minimized: bool, start_fullscreen: bool) {
     let flags = StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::DECORATIONS;
     if let Err(e) = window.restore_state(flags) {
         log::warn!("Failed to restore window state: {e}");
     }
     apply_fullscreen(window, start_fullscreen);
-    if start_minimized {
-        let _ = window.hide();
-        return;
-    }
-    let _ = window.show();
-    let _ = window.unminimize();
-    let _ = window.set_focus();
+    let _ = window.hide();
 }
 
 pub fn restore_show_state(window: &tauri::WebviewWindow, start_fullscreen: bool) {

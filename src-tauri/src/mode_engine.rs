@@ -2,13 +2,35 @@ use crate::plugin_engine::PluginConfig;
 use crate::{AppState, SceneResponse};
 use tauri::{Emitter, Manager};
 
+fn is_presence_scene(id: &str) -> bool {
+    matches!(id, "teams" | "spotify" | "vscode" | "media")
+}
+
+fn emit_scene(app_handle: &tauri::AppHandle, scene_id: String, plugins: &[PluginConfig]) {
+    let layout = crate::layout_engine::get_layout(&scene_id, plugins);
+    let available_scenes: Vec<String> = plugins.iter().map(|p| p.id.clone()).collect();
+    let response = SceneResponse {
+        active_scene_id: scene_id,
+        layout,
+        available_scenes,
+    };
+    if let Err(e) = app_handle.emit("scene-changed", &response) {
+        log::error!("Failed to emit scene-changed event: {}", e);
+    }
+}
+
 /// Given a list of matched plugin IDs from detectors, resolve the highest-priority
 /// active scene. Emits a `scene-changed` event if the scene actually changed.
 pub fn resolve(app_handle: &tauri::AppHandle, matched_ids: &[String]) {
     let state = app_handle.state::<AppState>();
     let plugins = state.plugins.lock().expect("failed to lock plugins");
+    let has_presence = matched_ids.iter().any(|id| is_presence_scene(id));
 
-    if let Some(override_scene) = state
+    if !has_presence {
+        if let Ok(mut override_state) = state.manual_scene_override.lock() {
+            *override_state = None;
+        }
+    } else if let Some(override_scene) = state
         .manual_scene_override
         .lock()
         .expect("failed to lock manual override")
@@ -17,16 +39,7 @@ pub fn resolve(app_handle: &tauri::AppHandle, matched_ids: &[String]) {
         let mut current = state.active_scene_id.lock().expect("failed to lock scene id");
         if *current != override_scene {
             *current = override_scene.clone();
-            let layout = crate::layout_engine::get_layout(&override_scene, &plugins);
-            let available_scenes: Vec<String> = plugins.iter().map(|p| p.id.clone()).collect();
-            let response = SceneResponse {
-                active_scene_id: override_scene,
-                layout,
-                available_scenes,
-            };
-            if let Err(e) = app_handle.emit("scene-changed", &response) {
-                log::error!("Failed to emit manual override scene-changed event: {}", e);
-            }
+            emit_scene(app_handle, override_scene, &plugins);
         }
         return;
     }
@@ -36,25 +49,13 @@ pub fn resolve(app_handle: &tauri::AppHandle, matched_ids: &[String]) {
         .filter(|p| matched_ids.contains(&p.id))
         .max_by_key(|p| p.priority);
 
-    let new_scene_id = best.map(|p| p.id.clone()).unwrap_or_else(|| "default".to_string());
+    let new_scene_id = best.map(|p| p.id.clone()).unwrap_or_else(|| "idle".to_string());
 
     let mut current = state.active_scene_id.lock().expect("failed to lock scene id");
     if *current != new_scene_id {
         log::info!("Scene changed: {} -> {}", *current, new_scene_id);
         *current = new_scene_id.clone();
-
-        let layout = crate::layout_engine::get_layout(&new_scene_id, &plugins);
-        let available_scenes: Vec<String> = plugins.iter().map(|p| p.id.clone()).collect();
-
-        let response = SceneResponse {
-            active_scene_id: new_scene_id,
-            layout,
-            available_scenes,
-        };
-
-        if let Err(e) = app_handle.emit("scene-changed", &response) {
-            log::error!("Failed to emit scene-changed event: {}", e);
-        }
+        emit_scene(app_handle, new_scene_id, &plugins);
     }
 }
 

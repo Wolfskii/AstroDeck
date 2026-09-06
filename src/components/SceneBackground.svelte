@@ -205,13 +205,14 @@
       }
       if (disposed || !el.isConnected) return;
       const alpha = currentStyle === "pulsing-border";
+      let shaderPlaying = untrack(() => playing);
       try {
         mount = new ShaderMount(
           el,
           fragment,
           uniforms,
           { alpha, premultipliedAlpha: !alpha, antialias: false },
-          speed,
+          shaderPlaying ? speed : 0,
           0,
           1
         );
@@ -223,7 +224,10 @@
         style: currentStyle,
         applyPalette,
         applyImage,
-        setPlaying() {},
+        setPlaying(next) {
+          shaderPlaying = next;
+          mount?.setSpeed(next ? speed : 0);
+        },
       };
       const latest = untrack(() => pendingPalette);
       if (!palettesEqual(latest, displayed)) {
@@ -231,14 +235,19 @@
       }
 
       if (currentStyle === "fluted-glass") {
-        const started = performance.now();
+        let t = 0;
+        let last = performance.now();
         const tick = (now: number) => {
           if (disposed || !mount) return;
-          const t = (now - started) / 1000;
-          mount.setUniforms({
-            u_shift: Math.sin(t * 0.45) * 0.22,
-            u_angle: 10 + Math.sin(t * 0.18) * 14,
-          });
+          const dt = now - last;
+          last = now;
+          if (shaderPlaying) {
+            t += dt / 1000;
+            mount.setUniforms({
+              u_shift: Math.sin(t * 0.45) * 0.22,
+              u_angle: 10 + Math.sin(t * 0.18) * 14,
+            });
+          }
           raf = requestAnimationFrame(tick);
         };
         raf = requestAnimationFrame(tick);

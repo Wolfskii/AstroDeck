@@ -44,6 +44,7 @@ export async function setActiveScene(sceneId: string): Promise<void> {
 }
 
 export interface OsNowPlaying {
+  kind?: string;
   source: string;
   title?: string | null;
   artist?: string | null;
@@ -52,6 +53,15 @@ export interface OsNowPlaying {
   isPlaying: boolean;
   progressMs?: number | null;
   durationMs?: number | null;
+  active?: boolean;
+}
+
+export async function getOsNowPlaying(): Promise<OsNowPlaying | null> {
+  return invoke<OsNowPlaying | null>("get_os_now_playing");
+}
+
+export async function getOutputVolume(): Promise<number> {
+  return invoke<number>("get_output_volume");
 }
 
 export interface SpotifyTrackPreview {

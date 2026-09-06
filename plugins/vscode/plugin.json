@@ -1,10 +1,10 @@
 {
   "id": "vscode",
   "name": "VS Code",
-  "description": "Editor, debug, and workspace shortcuts.",
+  "description": "Editor, debug, and workspace shortcuts for VS Code and Cursor.",
   "priority": 50,
   "triggers": {
-    "processGlob": "*code*",
+    "processesAny": ["*code*", "*cursor*"],
     "excludeProcesses": ["*codec*"]
   },
   "layout": {

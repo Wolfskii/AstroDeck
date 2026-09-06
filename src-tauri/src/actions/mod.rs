@@ -31,6 +31,7 @@ pub fn dispatch(action: &str, _app: &tauri::AppHandle, state: &crate::AppState) 
             spotify_actions::handle(command, &state.spotify)?;
             Ok(())
         }
+        "media" => crate::os_media::handle(command, state),
         "core" => handle_core(command),
         _ => {
             log::warn!("Unknown action namespace: {}", namespace);
@@ -58,6 +59,7 @@ pub fn dispatch_value(
             spotify_actions::handle_value(command, value, &state.spotify)?;
             Ok(())
         }
+        "media" => crate::os_media::handle_value(command, value, state),
         _ => Err(format!(
             "Action '{}' does not support value payload execution",
             action

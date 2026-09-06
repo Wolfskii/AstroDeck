@@ -11,7 +11,7 @@ impl Detector for VscodeDetector {
     fn detect(&self, system: &System) -> bool {
         system.processes().values().any(|p| {
             let name = p.name().to_string_lossy().to_lowercase();
-            name.contains("code") && !name.contains("codec")
+            (name.contains("code") && !name.contains("codec")) || name.contains("cursor")
         })
     }
 }

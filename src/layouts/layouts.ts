@@ -1,5 +1,7 @@
 import type { LayoutConfig } from "../types";
 
+export const IDLE_SCENE_ID = "idle";
+
 export interface BuiltinSceneMeta {
   id: string;
   name: string;
@@ -9,21 +11,6 @@ export interface BuiltinSceneMeta {
 }
 
 const builtinScenes: Record<string, BuiltinSceneMeta> = {
-  default: {
-    id: "default",
-    name: "Default Deck",
-    description: "Core app actions and general controls.",
-    accent: "#8b5cf6",
-    layout: {
-      grid: [2, 2],
-      buttons: [
-        { label: "Settings", emoji: "⚙️", action: "core.settings" },
-        { label: "Plugins", emoji: "🧩", action: "core.plugins" },
-        { label: "Refresh", emoji: "🔄", action: "core.refresh" },
-        { label: "Info", emoji: "ℹ️", action: "core.info" },
-      ],
-    },
-  },
   teams: {
     id: "teams",
     name: "Teams Meeting",
@@ -62,7 +49,7 @@ const builtinScenes: Record<string, BuiltinSceneMeta> = {
   vscode: {
     id: "vscode",
     name: "VS Code",
-    description: "Editor, debug, and workspace shortcuts.",
+    description: "Editor, debug, and workspace shortcuts for VS Code and Cursor.",
     accent: "#0ea5e9",
     layout: {
       grid: [2, 3],
@@ -76,7 +63,25 @@ const builtinScenes: Record<string, BuiltinSceneMeta> = {
       ],
     },
   },
+  media: {
+    id: "media",
+    name: "System Media",
+    description: "Playback controls for local OS media players.",
+    accent: "#f59e0b",
+    layout: {
+      grid: [2, 2],
+      buttons: [
+        { label: "Prev Track", emoji: "⏮️", action: "media.prevTrack" },
+        { label: "Play/Pause", emoji: "⏯️", action: "media.togglePlay" },
+        { label: "Next Track", emoji: "⏭️", action: "media.nextTrack" },
+      ],
+    },
+  },
 };
+
+export function isIdleScene(id: string | null | undefined): boolean {
+  return !id || id === IDLE_SCENE_ID || id === "default";
+}
 
 export function getBuiltinLayout(sceneId: string): LayoutConfig | null {
   return builtinScenes[sceneId]?.layout ?? null;

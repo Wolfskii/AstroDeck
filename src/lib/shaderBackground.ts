@@ -44,6 +44,11 @@ const neuroNoiseStableShader = neuroNoiseFragmentShader.replace(
   noise = 0.2 + 0.72 * smoothstep(0.08, 1.05, noise);`
 );
 
+const ditheringStableShader = ditheringFragmentShader.replace(
+  "shape = .15 / max(0.001, abs(sin(t - shapeUV.y - shapeUV.x)));",
+  "shape = 0.5 + 0.5 * sin(shapeUV.x * 1.65 - shapeUV.y * 1.2);"
+);
+
 const sizing = (fit: keyof typeof ShaderFitOptions = "cover") => ({
   u_fit: ShaderFitOptions[fit],
   u_scale: 1,
@@ -195,7 +200,7 @@ export function fragmentForStyle(style: SceneBackgroundId): string | null {
     case "mesh-gradient":
       return meshGradientStableShader;
     case "dithering":
-      return ditheringFragmentShader;
+      return ditheringStableShader;
     case "neuro-noise":
       return neuroNoiseStableShader;
     case "grain-gradient":

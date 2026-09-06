@@ -13,6 +13,12 @@ export async function revealMainWindow(): Promise<void> {
   await win.setFocus();
 }
 
+export async function hideMainWindow(): Promise<void> {
+  const win = getCurrentWindow();
+  await persistMainWindowState();
+  await win.hide();
+}
+
 export async function persistMainWindowState(): Promise<void> {
   try {
     await invoke("persist_window_state");
