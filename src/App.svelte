@@ -96,6 +96,8 @@
   let startFullscreen = $state(false);
   let startFullscreenBusy = $state(false);
   let osLocalNowPlaying = $state<OsNowPlaying | null>(null);
+  let localProgressAt = Date.now();
+  let spotifyProgressAt = Date.now();
   let optimisticMediaPlaying = $state<boolean | null>(null);
   let osVolumePercent = $state(50);
   let osVolumeBusy = $state(false);
@@ -104,8 +106,10 @@
   let optimisticSpotifyShuffle = $state<boolean | null>(null);
   let optimisticSpotifyPlaying = $state<boolean | null>(null);
   let pinnedSpotifyItemId: string | null = null;
+  let pinnedSpotifyFromId: string | null = null;
   let pinnedSpotifyUntil = 0;
   let osNowPlayingHold: { previousItemId: string | null } | null = null;
+  let localSkipHold: { fromKey: string; until: number } | null = null;
   let spotifyVolumeTarget = $state<number | null>(null);
   let spotifyStatusRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let spotifyTransportRefreshTimers: ReturnType<typeof setTimeout>[] = [];
@@ -677,11 +681,50 @@
     return token.replace(/([a-z])([A-Z])/g, "$1 $2");
   }
 
-  function osProgressJumped(fromMs?: number | null, toMs?: number | null) {
+  const PROGRESS_SYNC_SLACK_MS = 2000;
+
+  function osProgressJumped(
+    fromMs?: number | null,
+    toMs?: number | null,
+    fromAtMs = Date.now(),
+    wasPlaying = false
+  ) {
     if (toMs == null || !Number.isFinite(toMs)) return false;
     const from = fromMs ?? 0;
     if (from >= 2500 && toMs <= 1500) return true;
-    return Math.abs(toMs - from) >= 1800;
+    const elapsed = wasPlaying ? Math.max(0, Date.now() - fromAtMs) : 0;
+    const expected = from + elapsed;
+    return Math.abs(toMs - expected) >= PROGRESS_SYNC_SLACK_MS;
+  }
+
+  function sameOsTrack(previous: OsNowPlaying | null, next: OsNowPlaying) {
+    if (!previous) return false;
+    return (
+      previous.source === next.source &&
+      (previous.title ?? "") === (next.title ?? "") &&
+      (previous.artist ?? "") === (next.artist ?? "") &&
+      (previous.album ?? "") === (next.album ?? "")
+    );
+  }
+
+  function osTrackKey(payload: OsNowPlaying | null | undefined) {
+    if (!payload) return "";
+    return `${payload.source}\0${payload.title ?? ""}\0${payload.artist ?? ""}\0${payload.album ?? ""}`;
+  }
+
+  function isSpotifySkipPinned() {
+    return pinnedSpotifyItemId != null && Date.now() < pinnedSpotifyUntil;
+  }
+
+  function beginLocalSkipHold() {
+    if (!osLocalNowPlaying) {
+      localSkipHold = null;
+      return;
+    }
+    localSkipHold = {
+      fromKey: osTrackKey(osLocalNowPlaying),
+      until: Date.now() + 4000,
+    };
   }
 
   function applyOsNowPlaying(payload: OsNowPlaying) {
@@ -689,9 +732,41 @@
       if (payload.active === false) {
         osLocalNowPlaying = null;
         optimisticMediaPlaying = null;
+        localSkipHold = null;
         return;
       }
-      osLocalNowPlaying = payload;
+      if (localSkipHold && Date.now() > localSkipHold.until) {
+        localSkipHold = null;
+      }
+      if (localSkipHold && osTrackKey(payload) === localSkipHold.fromKey) {
+        if (
+          optimisticMediaPlaying !== null &&
+          payload.isPlaying === optimisticMediaPlaying
+        ) {
+          optimisticMediaPlaying = null;
+        }
+        return;
+      }
+      if (localSkipHold) {
+        localSkipHold = null;
+      }
+      const previous = osLocalNowPlaying;
+      const keepProgress =
+        sameOsTrack(previous, payload) &&
+        !osProgressJumped(
+          previous?.progressMs,
+          payload.progressMs,
+          localProgressAt,
+          !!previous?.isPlaying
+        );
+      osLocalNowPlaying = {
+        ...payload,
+        progressMs: keepProgress
+          ? (previous?.progressMs ?? payload.progressMs)
+          : payload.progressMs,
+        coverArtUrl: payload.coverArtUrl || previous?.coverArtUrl || null,
+      };
+      if (!keepProgress) localProgressAt = Date.now();
       if (
         optimisticMediaPlaying !== null &&
         payload.isPlaying === optimisticMediaPlaying
@@ -718,15 +793,24 @@
       payload.durationMs != null && payload.durationMs > 0
         ? Math.round(payload.durationMs)
         : null;
-    const progressJumped = osProgressJumped(spotifyStatus.progressMs, osProgress);
+    const progressJumped = osProgressJumped(
+      spotifyStatus.progressMs,
+      osProgress,
+      spotifyProgressAt,
+      !!spotifyStatus.isPlaying
+    );
 
     if (titleChanged) {
-      clearPinnedSpotifyItem();
+      if (isSpotifySkipPinned()) {
+        scheduleSpotifyTransportRefresh();
+        return;
+      }
       optimisticSpotifySaved = null;
       osNowPlayingHold = {
         previousItemId: spotifyStatus.currentItemId ?? null,
       };
       spotifySeekTargetMs = osProgress;
+      spotifyProgressAt = Date.now();
       spotifyStatus = {
         ...spotifyStatus,
         currentTrackName: nextTitle,
@@ -755,6 +839,7 @@
         spotifySeekTargetMs = osProgress;
         nextStatus.progressMs = osProgress;
         if (osDuration != null) nextStatus.durationMs = osDuration;
+        spotifyProgressAt = Date.now();
         changed = true;
       }
       if (changed) {
@@ -765,21 +850,28 @@
     scheduleSpotifyTransportRefresh();
   }
 
-  function pinSpotifyItem(itemId: string) {
+  function pinSpotifyItem(itemId: string, fromItemId?: string | null) {
     pinnedSpotifyItemId = itemId;
+    pinnedSpotifyFromId = fromItemId ?? null;
     pinnedSpotifyUntil = Date.now() + 5000;
   }
 
   function clearPinnedSpotifyItem() {
     pinnedSpotifyItemId = null;
+    pinnedSpotifyFromId = null;
     pinnedSpotifyUntil = 0;
   }
 
   function applySpotifyTrackPreview(preview: SpotifyTrackPreview) {
     optimisticSpotifySaved = null;
     spotifySeekTargetMs = null;
-    pinSpotifyItem(preview.itemId);
+    const fromId =
+      spotifyStatus?.currentItemId && spotifyStatus.currentItemId !== preview.itemId
+        ? spotifyStatus.currentItemId
+        : pinnedSpotifyFromId;
+    pinSpotifyItem(preview.itemId, fromId);
     if (!spotifyStatus) return;
+    spotifyProgressAt = Date.now();
     spotifyStatus = {
       ...spotifyStatus,
       currentItemId: preview.itemId,
@@ -834,6 +926,23 @@
       pinnedSpotifyItemId != null && Date.now() < pinnedSpotifyUntil;
     if (pinActive && next.currentItemId === pinnedSpotifyItemId) {
       clearPinnedSpotifyItem();
+    } else if (pinActive && next.currentItemId && next.currentItemId === pinnedSpotifyFromId) {
+      if (spotifyStatus) {
+        next = {
+          ...next,
+          currentItemId: spotifyStatus.currentItemId,
+          currentItemType: spotifyStatus.currentItemType,
+          currentTrackName: spotifyStatus.currentTrackName,
+          currentArtistName: spotifyStatus.currentArtistName,
+          currentAlbumName: spotifyStatus.currentAlbumName,
+          currentCoverArtUrl: spotifyStatus.currentCoverArtUrl,
+          durationMs: spotifyStatus.durationMs,
+          progressMs: spotifyStatus.progressMs,
+          isCurrentTrackSaved: spotifyStatus.isCurrentTrackSaved,
+        };
+      }
+    } else if (pinActive && next.currentItemId && next.currentItemId !== pinnedSpotifyItemId) {
+      clearPinnedSpotifyItem();
     } else if (pinActive && spotifyStatus) {
       next = {
         ...next,
@@ -884,9 +993,25 @@
       optimisticSpotifyPlaying = null;
       spotifyVolumeTarget = null;
       spotifySeekTargetMs = null;
+      spotifyProgressAt = Date.now();
     }
 
     let merged: SpotifyStatus = { ...next };
+
+    if (sameTrack && spotifyStatus && merged.progressMs != null) {
+      if (
+        !osProgressJumped(
+          spotifyStatus.progressMs,
+          merged.progressMs,
+          spotifyProgressAt,
+          !!spotifyStatus.isPlaying
+        )
+      ) {
+        merged.progressMs = spotifyStatus.progressMs;
+      } else {
+        spotifyProgressAt = Date.now();
+      }
+    }
 
     if (optimisticSpotifyShuffle !== null) {
       if (next.isShuffle === optimisticSpotifyShuffle) {
@@ -1009,6 +1134,7 @@
     if (action.startsWith("media.")) {
       if (osLocalNowPlaying) {
         osLocalNowPlaying = { ...osLocalNowPlaying, progressMs: positionMs };
+        localProgressAt = Date.now();
       }
       void (async () => {
         try {
@@ -1022,6 +1148,7 @@
     spotifySeekTargetMs = positionMs;
     if (spotifyStatus) {
       spotifyStatus = { ...spotifyStatus, progressMs: positionMs };
+      spotifyProgressAt = Date.now();
     }
     void (async () => {
       try {
@@ -1451,6 +1578,9 @@
           optimisticMediaPlaying ?? osLocalNowPlaying?.isPlaying ?? false;
         optimisticMediaPlaying = !playing;
       }
+      if (detail.action === "media.nextTrack" || detail.action === "media.prevTrack") {
+        beginLocalSkipHold();
+      }
       if (detail.action === "spotify.nextTrack") {
         if (isTauri) {
           void (async () => {
@@ -1536,6 +1666,9 @@
       }
       if (detail.action === "media.togglePlay") {
         optimisticMediaPlaying = null;
+      }
+      if (detail.action === "media.nextTrack" || detail.action === "media.prevTrack") {
+        localSkipHold = null;
       }
       if (
         detail.action === "spotify.nextTrack" ||

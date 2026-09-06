@@ -85,6 +85,7 @@
   const FADER_THUMB_HEIGHT_PX = 78;
   const FADER_THUMB_HALF_PX = FADER_THUMB_HEIGHT_PX / 2;
   let seekHoldMs = $state<number | null>(null);
+  let progressTrackStamp = $state("");
   let carBodyBg = $state(DEFAULT_CAR_BACKGROUNDS.body);
   let carFooterBg = $state(DEFAULT_CAR_BACKGROUNDS.footer);
   let shaderColors = $state<string[]>([...DEFAULT_SHADER_COLORS]);
@@ -122,29 +123,53 @@
     localVolume = volumePercent;
   });
 
+  const PROGRESS_SYNC_SLACK_MS = 2000;
+
   $effect(() => {
     if (progressDragging || progressMs == null) return;
-    if (seekHoldMs != null) {
-      if (Math.abs(progressMs - seekHoldMs) <= 2500) {
-        seekHoldMs = null;
-      } else if (Math.abs(progressMs - playbackDisplayMs) < 1800) {
-        return;
-      } else {
-        seekHoldMs = null;
-      }
+    const incoming = progressMs;
+    const trackStamp = `${title ?? ""}\0${albumName ?? ""}\0${durationMs ?? 0}`;
+    const displayed = untrack(() => playbackDisplayMs);
+    const hold = untrack(() => seekHoldMs);
+    const previousStamp = untrack(() => progressTrackStamp);
+
+    if (previousStamp !== trackStamp) {
+      progressTrackStamp = trackStamp;
+      seekHoldMs = null;
+      playbackDisplayMs = incoming;
+      return;
     }
-    playbackDisplayMs = progressMs;
+
+    if (hold != null) {
+      if (Math.abs(incoming - hold) <= 2500) {
+        seekHoldMs = null;
+        return;
+      }
+      if (Math.abs(incoming - displayed) <= PROGRESS_SYNC_SLACK_MS) return;
+      seekHoldMs = null;
+    }
+
+    if (displayed >= 2500 && incoming <= 1500) {
+      playbackDisplayMs = incoming;
+      return;
+    }
+    if (Math.abs(incoming - displayed) <= PROGRESS_SYNC_SLACK_MS) return;
+    playbackDisplayMs = incoming;
   });
 
   $effect(() => {
     if (!isPlaying || progressDragging || !hasDuration) return;
-    const tick = window.setInterval(() => {
-      playbackDisplayMs = Math.min(
-        durationMs as number,
-        playbackDisplayMs + 1000
-      );
-    }, 1000);
-    return () => window.clearInterval(tick);
+    const duration = durationMs as number;
+    let last = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      const dt = now - last;
+      last = now;
+      playbackDisplayMs = Math.min(duration, playbackDisplayMs + dt);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   });
 
   function applyOptimisticSeek(positionMs: number) {

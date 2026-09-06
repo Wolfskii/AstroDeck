@@ -4,7 +4,7 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
 
 const EVENT_NAME: &str = "os-now-playing";
-const SEEK_JUMP_MS: i64 = 1800;
+const SEEK_JUMP_MS: i64 = 2500;
 const RESTART_FROM_MS: i64 = 2500;
 const RESTART_TO_MS: i64 = 1500;
 
