@@ -30,6 +30,12 @@ struct LibraryUrisBody {
 const SPOTIFY_SCOPES: &str =
     "user-library-modify user-library-read user-read-playback-state user-modify-playback-state";
 
+/// Spotify's official desktop / librespot "keymaster" client id. Already approved,
+/// with localhost `/login` redirects registered, so users do not create a developer app.
+const OFFICIAL_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
+const OFFICIAL_REDIRECT_URI: &str = "http://127.0.0.1:8989/login";
+const CUSTOM_REDIRECT_URI: &str = "http://127.0.0.1:43821/callback";
+
 #[derive(Default)]
 struct SavedTrackCache {
     track_id: Option<String>,
@@ -359,23 +365,50 @@ fn ensure_library_read_available(spotify: &SpotifyState) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpotifyAuthMode {
+    /// OAuth against Spotify's official desktop client id. Default for new installs.
+    #[default]
+    Official,
+    /// User-supplied Web API developer-app client id.
+    Custom,
+}
+
+impl SpotifyAuthMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Official => "official",
+            Self::Custom => "custom",
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct SpotifyConfig {
+    pub auth_mode: SpotifyAuthMode,
+    /// Effective client id used for OAuth and token refresh.
     pub client_id: String,
+    /// User-entered developer-app id, kept when switching back from official login.
+    pub custom_client_id: String,
     pub redirect_uri: String,
     pub token_path: Option<PathBuf>,
     /// `app_local_data_dir/spotify_client.json` — used when `SPOTIFY_CLIENT_ID` is unset.
     pub client_store_path: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct SpotifyClientFile {
+    #[serde(default)]
+    auth_mode: Option<SpotifyAuthMode>,
+    #[serde(default)]
     client_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpotifyClientConfigResponse {
+    pub auth_mode: SpotifyAuthMode,
     pub client_id: String,
     pub locked_by_env: bool,
 }
@@ -519,11 +552,9 @@ struct PlaybackArtist {
     name: String,
 }
 
-fn read_stored_client_id(path: &PathBuf) -> Option<String> {
+fn read_stored_client_file(path: &PathBuf) -> Option<SpotifyClientFile> {
     let raw = fs::read_to_string(path).ok()?;
-    let parsed: SpotifyClientFile = serde_json::from_str(&raw).ok()?;
-    let id = parsed.client_id.trim().to_string();
-    (!id.is_empty()).then_some(id)
+    serde_json::from_str(&raw).ok()
 }
 
 fn env_client_id() -> String {
@@ -531,6 +562,87 @@ fn env_client_id() -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+fn env_redirect_uri() -> Option<String> {
+    let value = std::env::var("SPOTIFY_REDIRECT_URI")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn resolve_auth_mode(stored: Option<&SpotifyClientFile>, env_id: &str) -> SpotifyAuthMode {
+    if !env_id.is_empty() {
+        return SpotifyAuthMode::Custom;
+    }
+    match stored {
+        Some(file) => match file.auth_mode {
+            Some(mode) => mode,
+            None if !file.client_id.trim().is_empty() => SpotifyAuthMode::Custom,
+            None => SpotifyAuthMode::Official,
+        },
+        None => SpotifyAuthMode::Official,
+    }
+}
+
+fn stored_custom_client_id(stored: Option<&SpotifyClientFile>, env_id: &str) -> String {
+    if !env_id.is_empty() {
+        return env_id.to_string();
+    }
+    stored
+        .map(|file| file.client_id.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn effective_client_id(mode: SpotifyAuthMode, custom_client_id: &str, env_id: &str) -> String {
+    if !env_id.is_empty() {
+        return env_id.to_string();
+    }
+    match mode {
+        SpotifyAuthMode::Official => OFFICIAL_CLIENT_ID.to_string(),
+        SpotifyAuthMode::Custom => custom_client_id.trim().to_string(),
+    }
+}
+
+fn redirect_uri_for_mode(mode: SpotifyAuthMode) -> String {
+    redirect_uri_for_mode_with(mode, env_redirect_uri().as_deref())
+}
+
+fn redirect_uri_for_mode_with(mode: SpotifyAuthMode, env_redirect: Option<&str>) -> String {
+    match mode {
+        SpotifyAuthMode::Official => OFFICIAL_REDIRECT_URI.to_string(),
+        SpotifyAuthMode::Custom => env_redirect
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| CUSTOM_REDIRECT_URI.to_string()),
+    }
+}
+
+fn apply_mode_to_config(config: &mut SpotifyConfig, mode: SpotifyAuthMode, env_id: &str) {
+    config.auth_mode = mode;
+    config.client_id = effective_client_id(mode, &config.custom_client_id, env_id);
+    config.redirect_uri = redirect_uri_for_mode(mode);
+}
+
+fn persist_client_file(spotify: &SpotifyState) -> Result<(), String> {
+    let (store_path, file) = {
+        let guard = spotify.config.lock().map_err(|e| e.to_string())?;
+        let path = guard
+            .client_store_path
+            .clone()
+            .ok_or_else(|| "Spotify paths not initialized.".to_string())?;
+        (
+            path,
+            SpotifyClientFile {
+                auth_mode: Some(guard.auth_mode),
+                client_id: guard.custom_client_id.clone(),
+            },
+        )
+    };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    fs::write(store_path, json).map_err(|e| e.to_string())
 }
 
 fn migrate_legacy_spotify_files(app: &tauri::AppHandle, new_base: &PathBuf) {
@@ -577,19 +689,17 @@ pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String
     let token_path = base.join("spotify_tokens.json");
 
     let from_env = env_client_id();
-    let from_file = read_stored_client_id(&client_store_path).unwrap_or_default();
-    let client_id = if !from_env.is_empty() {
-        from_env
-    } else {
-        from_file
-    };
-
-    let redirect_uri = std::env::var("SPOTIFY_REDIRECT_URI")
-        .unwrap_or_else(|_| "http://127.0.0.1:43821/callback".to_string());
+    let stored = read_stored_client_file(&client_store_path);
+    let auth_mode = resolve_auth_mode(stored.as_ref(), &from_env);
+    let custom_client_id = stored_custom_client_id(stored.as_ref(), &from_env);
+    let client_id = effective_client_id(auth_mode, &custom_client_id, &from_env);
+    let redirect_uri = redirect_uri_for_mode(auth_mode);
 
     {
         let mut config = spotify.config.lock().map_err(|e| e.to_string())?;
+        config.auth_mode = auth_mode;
         config.client_id = client_id;
+        config.custom_client_id = custom_client_id;
         config.redirect_uri = redirect_uri;
         config.token_path = Some(token_path.clone());
         config.client_store_path = Some(client_store_path);
@@ -615,52 +725,82 @@ pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String
 
 pub fn get_client_config_for_ui(spotify: &SpotifyState) -> SpotifyClientConfigResponse {
     let locked_by_env = !env_client_id().is_empty();
-    let client_id = spotify
+    let (auth_mode, client_id) = spotify
         .config
         .lock()
-        .map(|c| c.client_id.clone())
+        .map(|c| (c.auth_mode, c.custom_client_id.clone()))
         .unwrap_or_default();
     SpotifyClientConfigResponse {
+        auth_mode,
         client_id,
         locked_by_env,
     }
+}
+
+pub fn set_auth_mode_from_settings(
+    spotify: &SpotifyState,
+    mode: SpotifyAuthMode,
+) -> Result<(), String> {
+    let env_id = env_client_id();
+    if !env_id.is_empty() {
+        return Err(
+            "SPOTIFY_CLIENT_ID is set in the environment; unset it to change the Spotify login method."
+                .to_string(),
+        );
+    }
+
+    let previous_client_id = {
+        let mut cfg = spotify.config.lock().map_err(|e| e.to_string())?;
+        let previous = cfg.client_id.clone();
+        apply_mode_to_config(&mut cfg, mode, "");
+        previous
+    };
+    persist_client_file(spotify)?;
+    log::info!("Spotify auth mode set to {}", mode.as_str());
+
+    let next_client_id = spotify
+        .config
+        .lock()
+        .map_err(|e| e.to_string())?
+        .client_id
+        .clone();
+    if previous_client_id != next_client_id && has_saved_tokens(spotify) {
+        disconnect(spotify)?;
+    }
+    Ok(())
 }
 
 pub fn set_client_id_from_settings(
     spotify: &SpotifyState,
     client_id: &str,
 ) -> Result<(), String> {
-    if !env_client_id().is_empty() {
+    let env_id = env_client_id();
+    if !env_id.is_empty() {
         return Err(
             "SPOTIFY_CLIENT_ID is set in the environment; unset it to save a Client ID from Settings."
                 .to_string(),
         );
     }
 
-    let store_path = {
-        let guard = spotify.config.lock().map_err(|e| e.to_string())?;
-        guard
-            .client_store_path
-            .clone()
-            .ok_or_else(|| "Spotify paths not initialized.".to_string())?
-    };
-
-    let trimmed = client_id.trim();
-    if trimmed.is_empty() {
-        let _ = fs::remove_file(&store_path);
+    let trimmed = client_id.trim().to_string();
+    let previous_client_id = {
         let mut cfg = spotify.config.lock().map_err(|e| e.to_string())?;
-        cfg.client_id.clear();
-        return Ok(());
-    }
-
-    let file = SpotifyClientFile {
-        client_id: trimmed.to_string(),
+        let previous = cfg.client_id.clone();
+        cfg.custom_client_id = trimmed.clone();
+        apply_mode_to_config(&mut cfg, SpotifyAuthMode::Custom, "");
+        previous
     };
-    let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
-    fs::write(&store_path, json).map_err(|e| e.to_string())?;
+    persist_client_file(spotify)?;
 
-    let mut cfg = spotify.config.lock().map_err(|e| e.to_string())?;
-    cfg.client_id = trimmed.to_string();
+    let next_client_id = spotify
+        .config
+        .lock()
+        .map_err(|e| e.to_string())?
+        .client_id
+        .clone();
+    if previous_client_id != next_client_id && has_saved_tokens(spotify) {
+        disconnect(spotify)?;
+    }
     Ok(())
 }
 
@@ -944,7 +1084,7 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
             granted_scopes,
             next_track_preview: None,
             prev_track_preview: None,
-            message: "Save your Spotify Client ID in Settings (desktop app), or set SPOTIFY_CLIENT_ID. Use Open Spotify Developer Dashboard to create an app and copy the Client ID."
+            message: "Spotify developer-app login needs a Client ID. Save one in Settings, or switch to Spotify desktop login."
                 .to_string(),
         });
     }
@@ -1118,7 +1258,15 @@ pub fn disconnect(spotify: &SpotifyState) -> Result<(), String> {
 pub fn start_auth_flow(spotify: &SpotifyState) -> Result<String, String> {
     let config = spotify.config.lock().map_err(|e| e.to_string())?.clone();
     if config.client_id.is_empty() {
-        return Err("Missing SPOTIFY_CLIENT_ID in environment configuration.".to_string());
+        return Err(match config.auth_mode {
+            SpotifyAuthMode::Official => {
+                "Official Spotify desktop login is not configured.".to_string()
+            }
+            SpotifyAuthMode::Custom => {
+                "Save your Spotify Client ID in Settings, or switch to Spotify desktop login."
+                    .to_string()
+            }
+        });
     }
 
     let state = random_string(24);
@@ -1998,4 +2146,100 @@ fn current_scopes(spotify: &SpotifyState) -> Result<Vec<String>, String> {
         .clone()
         .ok_or_else(|| "Spotify is not authenticated yet.".to_string())?;
     Ok(parse_scopes(&tokens.scope))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_install_defaults_to_official_desktop_login() {
+        assert_eq!(resolve_auth_mode(None, ""), SpotifyAuthMode::Official);
+        assert_eq!(
+            effective_client_id(SpotifyAuthMode::Official, "", ""),
+            OFFICIAL_CLIENT_ID
+        );
+        assert_eq!(
+            redirect_uri_for_mode(SpotifyAuthMode::Official),
+            OFFICIAL_REDIRECT_URI
+        );
+    }
+
+    #[test]
+    fn legacy_saved_client_id_stays_on_custom_api() {
+        let stored = SpotifyClientFile {
+            auth_mode: None,
+            client_id: "user-app-id".to_string(),
+        };
+        assert_eq!(
+            resolve_auth_mode(Some(&stored), ""),
+            SpotifyAuthMode::Custom
+        );
+        assert_eq!(
+            effective_client_id(SpotifyAuthMode::Custom, "user-app-id", ""),
+            "user-app-id"
+        );
+        assert_eq!(
+            redirect_uri_for_mode_with(SpotifyAuthMode::Custom, None),
+            CUSTOM_REDIRECT_URI
+        );
+        assert_eq!(
+            redirect_uri_for_mode_with(SpotifyAuthMode::Custom, Some("http://127.0.0.1:9/cb")),
+            "http://127.0.0.1:9/cb"
+        );
+        assert_eq!(
+            redirect_uri_for_mode_with(SpotifyAuthMode::Official, Some("http://127.0.0.1:9/cb")),
+            OFFICIAL_REDIRECT_URI
+        );
+    }
+
+    #[test]
+    fn env_client_id_forces_custom_api() {
+        let stored = SpotifyClientFile {
+            auth_mode: Some(SpotifyAuthMode::Official),
+            client_id: String::new(),
+        };
+        assert_eq!(
+            resolve_auth_mode(Some(&stored), "env-app-id"),
+            SpotifyAuthMode::Custom
+        );
+        assert_eq!(
+            effective_client_id(SpotifyAuthMode::Official, "", "env-app-id"),
+            "env-app-id"
+        );
+    }
+
+    #[test]
+    fn stored_official_mode_keeps_custom_id_for_later() {
+        let stored = SpotifyClientFile {
+            auth_mode: Some(SpotifyAuthMode::Official),
+            client_id: "user-app-id".to_string(),
+        };
+        assert_eq!(
+            resolve_auth_mode(Some(&stored), ""),
+            SpotifyAuthMode::Official
+        );
+        assert_eq!(stored_custom_client_id(Some(&stored), ""), "user-app-id");
+        assert_eq!(
+            effective_client_id(SpotifyAuthMode::Official, "user-app-id", ""),
+            OFFICIAL_CLIENT_ID
+        );
+    }
+
+    #[test]
+    fn client_file_round_trips_auth_mode() {
+        let file = SpotifyClientFile {
+            auth_mode: Some(SpotifyAuthMode::Official),
+            client_id: "abc".to_string(),
+        };
+        let json = serde_json::to_string(&file).unwrap();
+        let parsed: SpotifyClientFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.auth_mode, Some(SpotifyAuthMode::Official));
+        assert_eq!(parsed.client_id, "abc");
+
+        let legacy: SpotifyClientFile =
+            serde_json::from_str(r#"{"client_id":"legacy-id"}"#).unwrap();
+        assert_eq!(legacy.auth_mode, None);
+        assert_eq!(legacy.client_id, "legacy-id");
+    }
 }

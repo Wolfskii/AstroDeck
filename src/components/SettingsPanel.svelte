@@ -27,7 +27,7 @@
   import type { SettingsThemeId } from "../services/prefs";
   import type { PluginConfig } from "../types";
   import type { AppUpdateInfo } from "../services/updater";
-  import type { SpotifyStatus } from "../services/api";
+  import type { SpotifyAuthMode, SpotifyStatus } from "../services/api";
 
   type SettingsSection = "general" | "appearance" | "updates" | "spotify" | "scenes";
 
@@ -62,9 +62,12 @@
     spotifyBusy,
     spotifyAuthHint,
     spotifyClientIdDraft = $bindable(""),
+    spotifyAuthMode = "official",
     spotifyClientLockedByEnv,
     spotifySavingClientId,
+    spotifySavingAuthMode = false,
     onSaveSpotifyClientId,
+    onSpotifyAuthModeChange,
     onOpenSpotifyDashboard,
     onConnectSpotify,
     onDisconnectSpotify,
@@ -107,9 +110,12 @@
     spotifyBusy: boolean;
     spotifyAuthHint: string | null;
     spotifyClientIdDraft: string;
+    spotifyAuthMode: SpotifyAuthMode;
     spotifyClientLockedByEnv: boolean;
     spotifySavingClientId: boolean;
+    spotifySavingAuthMode?: boolean;
     onSaveSpotifyClientId: () => void;
+    onSpotifyAuthModeChange: (mode: SpotifyAuthMode) => void;
     onOpenSpotifyDashboard: () => void;
     onConnectSpotify: () => void;
     onDisconnectSpotify: () => void;
@@ -539,7 +545,12 @@
           <div>
             <p class="setting-title">Account</p>
             <p class="setting-desc">
-              Connect once to enable track liking and Spotify-only volume control.
+              {#if spotifyAuthMode === "official"}
+                Sign in with Spotify to enable track liking and Spotify-only volume. No developer app
+                needed.
+              {:else}
+                Connect once to enable track liking and Spotify-only volume control.
+              {/if}
             </p>
           </div>
           <div class="settings-btn-row">
@@ -572,7 +583,56 @@
         {/if}
       </div>
 
-      {#if isTauri}
+      <div class="settings-card settings-card-pad">
+        <p class="setting-title">Login method</p>
+        <p class="setting-desc">
+          Desktop login is the default. Switch to a developer app if you already have a Client ID
+          or desktop login is unavailable.
+        </p>
+        <div class="auth-mode-list" role="radiogroup" aria-label="Spotify login method">
+          <button
+            type="button"
+            class="auth-mode-card"
+            class:active={spotifyAuthMode === "official"}
+            role="radio"
+            aria-checked={spotifyAuthMode === "official"}
+            disabled={spotifyClientLockedByEnv || spotifySavingAuthMode}
+            onclick={() => onSpotifyAuthModeChange("official")}
+          >
+            <div class="auth-mode-top">
+              <span class="setting-title">Spotify desktop login</span>
+              <span class="scene-tag current">default</span>
+            </div>
+            <p class="setting-desc">
+              Sign in with your Spotify account. No developer dashboard or Client ID.
+            </p>
+          </button>
+          <button
+            type="button"
+            class="auth-mode-card"
+            class:active={spotifyAuthMode === "custom"}
+            role="radio"
+            aria-checked={spotifyAuthMode === "custom"}
+            disabled={spotifyClientLockedByEnv || spotifySavingAuthMode}
+            onclick={() => onSpotifyAuthModeChange("custom")}
+          >
+            <div class="auth-mode-top">
+              <span class="setting-title">Your Spotify developer app</span>
+            </div>
+            <p class="setting-desc">
+              Use a Client ID from the Spotify Developer Dashboard and the Web API.
+            </p>
+          </button>
+        </div>
+        {#if spotifyClientLockedByEnv}
+          <p class="setting-desc">
+            Using <code>SPOTIFY_CLIENT_ID</code> from the environment, so developer-app login is
+            locked. Unset it to change the method here.
+          </p>
+        {/if}
+      </div>
+
+      {#if spotifyAuthMode === "custom"}
         <div class="settings-card settings-card-pad">
           <p class="setting-title">Spotify Client ID</p>
           <p class="setting-desc">
@@ -1385,6 +1445,54 @@
     gap: 10px;
     align-items: center;
     margin-top: 12px;
+  }
+
+  .auth-mode-list {
+    display: grid;
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .auth-mode-card {
+    appearance: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    padding: 14px 16px;
+    border: 1px solid var(--md-line);
+    border-radius: 10px;
+    background: var(--md-surface);
+    color: var(--md-ink);
+    text-align: left;
+    cursor: pointer;
+    transition: var(--md-ease);
+  }
+
+  .auth-mode-card:hover:not(:disabled) {
+    background: var(--md-row-hover);
+    border-color: var(--md-input-border-hover);
+  }
+
+  .auth-mode-card.active {
+    background: var(--md-scene-active);
+    border-color: var(--md-input-border-hover);
+  }
+
+  .auth-mode-card:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .auth-mode-card .setting-desc {
+    margin: 0;
+  }
+
+  .auth-mode-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
   }
 
   .settings-error {

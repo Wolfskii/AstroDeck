@@ -114,7 +114,10 @@ export async function getSpotifyStatus(options?: {
   });
 }
 
+export type SpotifyAuthMode = "official" | "custom";
+
 export interface SpotifyClientConfig {
+  authMode: SpotifyAuthMode;
   clientId: string;
   lockedByEnv: boolean;
 }
@@ -125,6 +128,10 @@ export async function getSpotifyClientConfig(): Promise<SpotifyClientConfig> {
 
 export async function setSpotifyClientId(clientId: string): Promise<void> {
   return invoke("set_spotify_client_id", { clientId });
+}
+
+export async function setSpotifyAuthMode(authMode: SpotifyAuthMode): Promise<void> {
+  return invoke("set_spotify_auth_mode", { authMode });
 }
 
 export async function setSpotifyVolume(volumePercent: number): Promise<number> {
