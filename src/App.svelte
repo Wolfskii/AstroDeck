@@ -24,9 +24,10 @@
     getSpotifyStatus,
     peekSpotifySkipTrack,
     setActiveScene,
+    setSpotifyAuthMode,
     setSpotifyClientId,
   } from "./services/api";
-  import type { OsNowPlaying, SpotifyTrackPreview } from "./services/api";
+  import type { OsNowPlaying, SpotifyAuthMode, SpotifyTrackPreview } from "./services/api";
   import type { SceneState, LayoutConfig, PluginConfig, DeckButtonConfig } from "./types";
   import {
     getBuiltinLayout,
@@ -86,8 +87,10 @@
   let spotifyVolumePercent = $state(50);
   let spotifyAuthHint = $state<string | null>(null);
   let spotifyClientIdDraft = $state("");
+  let spotifyAuthMode = $state<SpotifyAuthMode>("official");
   let spotifyClientLockedByEnv = $state(false);
   let spotifySavingClientId = $state(false);
+  let spotifySavingAuthMode = $state(false);
   let startOnBoot = $state(false);
   let startOnBootBusy = $state(false);
   let startOnBootError = $state<string | null>(null);
@@ -252,6 +255,7 @@
     void (async () => {
       try {
         const c = await getSpotifyClientConfig();
+        spotifyAuthMode = c.authMode ?? "official";
         spotifyClientIdDraft = c.clientId;
         spotifyClientLockedByEnv = c.lockedByEnv;
       } catch {
@@ -473,14 +477,39 @@
     spotifyAuthHint = null;
     try {
       await setSpotifyClientId(spotifyClientIdDraft.trim());
+      spotifyAuthMode = "custom";
       await refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
       spotifyAuthHint = spotifyClientIdDraft.trim()
-        ? "Client ID saved locally."
+        ? "Client ID saved. Connect Spotify to use your developer app."
         : "Cleared saved Client ID.";
     } catch (e) {
       spotifyAuthHint = String(e);
     } finally {
       spotifySavingClientId = false;
+    }
+  }
+
+  async function saveSpotifyAuthMode(mode: SpotifyAuthMode) {
+    if (spotifyClientLockedByEnv || spotifySavingAuthMode) return;
+    if (mode === spotifyAuthMode) return;
+    if (!isTauri) {
+      spotifyAuthMode = mode;
+      return;
+    }
+    spotifySavingAuthMode = true;
+    spotifyAuthHint = null;
+    try {
+      await setSpotifyAuthMode(mode);
+      spotifyAuthMode = mode;
+      await refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
+      spotifyAuthHint =
+        mode === "official"
+          ? "Using Spotify desktop login. Connect to sign in — no developer app needed."
+          : "Using your Spotify developer app. Save a Client ID, then Connect.";
+    } catch (e) {
+      spotifyAuthHint = String(e);
+    } finally {
+      spotifySavingAuthMode = false;
     }
   }
 
@@ -1296,7 +1325,7 @@
       return (
         spotifyStatus?.currentArtistName ??
         (spotifyStatus?.message ??
-          "Tray → Settings: save Client ID, then Connect Spotify")
+          "Tray → Settings: Connect Spotify")
       );
     }
     if (isOsMediaScene) {
@@ -1531,6 +1560,8 @@
         if (detail.action === "spotify.toggleShuffle") {
           spotifyQueueRefreshPending = false;
           scheduleSpotifyQueueRefresh();
+        } else if (detail.action === "spotify.playPlaylist") {
+          void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
         } else if (
           detail.action === "spotify.nextTrack" ||
           detail.action === "spotify.prevTrack"
@@ -2030,9 +2061,12 @@
         spotifyBusy={spotifyBusy}
         spotifyAuthHint={spotifyAuthHint}
         bind:spotifyClientIdDraft
+        spotifyAuthMode={spotifyAuthMode}
         spotifyClientLockedByEnv={spotifyClientLockedByEnv}
         spotifySavingClientId={spotifySavingClientId}
+        spotifySavingAuthMode={spotifySavingAuthMode}
         onSaveSpotifyClientId={() => void saveSpotifyClientId()}
+        onSpotifyAuthModeChange={(mode) => void saveSpotifyAuthMode(mode)}
         onOpenSpotifyDashboard={openSpotifyDeveloperDashboard}
         onConnectSpotify={() => void connectSpotify()}
         onDisconnectSpotify={() => void disconnectSpotify()}
@@ -2101,6 +2135,7 @@
               : Promise.resolve()}
           showSettingsButton={isTauri}
           onOpenSettings={() => (viewMode = "settings")}
+          playlistsEnabled={isSpotifyScene}
         />
       {:else if sceneId === "teams" && displayedLayout}
         <TeamsScene

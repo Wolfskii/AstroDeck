@@ -114,7 +114,10 @@ export async function getSpotifyStatus(options?: {
   });
 }
 
+export type SpotifyAuthMode = "official" | "custom";
+
 export interface SpotifyClientConfig {
+  authMode: SpotifyAuthMode;
   clientId: string;
   lockedByEnv: boolean;
 }
@@ -125,6 +128,41 @@ export async function getSpotifyClientConfig(): Promise<SpotifyClientConfig> {
 
 export async function setSpotifyClientId(clientId: string): Promise<void> {
   return invoke("set_spotify_client_id", { clientId });
+}
+
+export async function setSpotifyAuthMode(authMode: SpotifyAuthMode): Promise<void> {
+  return invoke("set_spotify_auth_mode", { authMode });
+}
+
+export interface SpotifyPlaylist {
+  id: string;
+  name: string;
+  uri: string;
+  imageUrl?: string | null;
+  trackCount: number;
+  ownerName?: string | null;
+}
+
+export interface SpotifyPlaylistPage {
+  items: SpotifyPlaylist[];
+  offset: number;
+  limit: number;
+  total: number;
+  nextOffset?: number | null;
+}
+
+export async function listSpotifyPlaylists(options?: {
+  offset?: number;
+  limit?: number;
+}): Promise<SpotifyPlaylistPage> {
+  return invoke<SpotifyPlaylistPage>("list_spotify_playlists", {
+    offset: options?.offset ?? 0,
+    limit: options?.limit ?? 50,
+  });
+}
+
+export async function playSpotifyPlaylist(playlist: string): Promise<void> {
+  return invoke("play_spotify_playlist", { playlist });
 }
 
 export async function setSpotifyVolume(volumePercent: number): Promise<number> {
