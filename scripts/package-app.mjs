@@ -1,6 +1,6 @@
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -121,6 +121,66 @@ function copyArtifacts(sourceDir, platform, target) {
   return destinationDir;
 }
 
+const INSTALLER_EXTENSIONS = new Set([
+  ".msi",
+  ".exe",
+  ".dmg",
+  ".deb",
+  ".rpm",
+  ".appimage",
+]);
+
+function installerLabel(filePath) {
+  const name = path.basename(filePath);
+  if (name.endsWith(".app")) return "App";
+  const ext = path.extname(name).replace(".", "").toUpperCase();
+  return ext || "File";
+}
+
+function collectInstallers(dir, found = []) {
+  if (!existsSync(dir)) return found;
+  for (const name of readdirSync(dir)) {
+    const full = path.join(dir, name);
+    let stats;
+    try {
+      stats = statSync(full);
+    } catch {
+      continue;
+    }
+    if (stats.isDirectory()) {
+      if (name.endsWith(".app")) found.push(full);
+      else collectInstallers(full, found);
+      continue;
+    }
+    if (INSTALLER_EXTENSIONS.has(path.extname(name).toLowerCase())) {
+      found.push(full);
+    }
+  }
+  return found;
+}
+
+function fileLink(filePath) {
+  return pathToFileURL(path.resolve(filePath)).href;
+}
+
+function printArtifactLinks(destinationDir) {
+  const folderUrl = fileLink(destinationDir);
+  const installers = collectInstallers(destinationDir).sort((a, b) =>
+    a.localeCompare(b)
+  );
+
+  console.log("");
+  console.log("[package] Artifacts");
+  console.log(`  ${"Folder".padEnd(10)} ${folderUrl}`);
+  if (installers.length === 0) {
+    console.log("  File       (no installer found in artifact folder)");
+    return;
+  }
+  for (const filePath of installers) {
+    console.log(`  ${installerLabel(filePath).padEnd(10)} ${fileLink(filePath)}`);
+  }
+}
+
 function ensureDependenciesInstalled() {
   const inDocker = process.env.ASTRODECK_IN_DOCKER === "1";
   const nodeModulesDir = path.join(rootDir, "node_modules");
@@ -194,6 +254,8 @@ function buildLinuxViaDocker(platform, target) {
     platform,
     ...(target ? ["--target", target] : []),
   ]);
+
+  printArtifactLinks(path.join(artifactsRoot, platform));
 }
 
 function main() {
@@ -246,6 +308,9 @@ function main() {
 
   console.log(`[package] bundled artifacts copied to ${destinationDir}`);
   console.log(`[package] native installers/bundles remain in ${sourceDir}`);
+  if (process.env.ASTRODECK_IN_DOCKER !== "1") {
+    printArtifactLinks(destinationDir);
+  }
 }
 
 main();

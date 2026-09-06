@@ -137,8 +137,7 @@ fn pick_release_candidate<'a>(
     let mut prerelease: Option<&GitHubRelease> = None;
 
     for release in releases.iter().filter(|r| !r.draft) {
-        let release_version = normalize_tag_version(&release.tag_name);
-        if !is_version_newer(&release_version, current_version) {
+        if !is_version_newer(&release.tag_name, current_version) {
             continue;
         }
         if !release.prerelease {
@@ -204,21 +203,55 @@ fn installer_asset_rank() -> Vec<fn(&str) -> bool> {
 }
 
 fn normalize_tag_version(tag: &str) -> String {
-    tag.trim_start_matches('v').trim_end_matches("-dev").to_string()
+    tag.trim().trim_start_matches('v').to_string()
 }
 
-fn parse_version_parts(version: &str) -> Option<(u32, u32, u32)> {
-    let main = version.split('-').next()?.trim();
-    let mut parts = main.split('.');
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AppVersion {
+    major: u32,
+    minor: u32,
+    patch: u32,
+    /// Local/dev build (`-dev`, `-1`, `-2`). Channel releases have `None`.
+    local: Option<u32>,
+}
+
+impl AppVersion {
+    fn core(self) -> (u32, u32, u32) {
+        (self.major, self.minor, self.patch)
+    }
+}
+
+fn parse_app_version(version: &str) -> Option<AppVersion> {
+    let version = version.trim().trim_start_matches('v');
+    let (core, suffix) = match version.split_once('-') {
+        Some((core, suffix)) => (core, Some(suffix)),
+        None => (version, None),
+    };
+    let mut parts = core.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
     let patch = parts.next()?.parse().ok()?;
-    Some((major, minor, patch))
+    let local = match suffix {
+        None | Some("") => None,
+        Some("dev") => Some(0),
+        Some(rest) => {
+            let number = rest.split(|c: char| !c.is_ascii_digit()).next().unwrap_or("");
+            Some(number.parse().unwrap_or(0))
+        }
+    };
+    Some(AppVersion {
+        major,
+        minor,
+        patch,
+        local,
+    })
 }
 
+/// GitHub is newer only when major.minor.patch is strictly higher.
+/// Same x.y.z: a local `-1` / `-2` / `-dev` build is assumed to have newer code.
 fn is_version_newer(candidate: &str, current: &str) -> bool {
-    match (parse_version_parts(candidate), parse_version_parts(current)) {
-        (Some(c), Some(cur)) => c > cur,
+    match (parse_app_version(candidate), parse_app_version(current)) {
+        (Some(candidate), Some(current)) => candidate.core() > current.core(),
         _ => false,
     }
 }
@@ -335,17 +368,52 @@ fn launch_installer(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn release(tag: &str, prerelease: bool) -> GitHubRelease {
+        GitHubRelease {
+            tag_name: tag.to_string(),
+            name: tag.to_string(),
+            body: None,
+            html_url: "https://example.invalid".to_string(),
+            prerelease,
+            draft: false,
+            assets: vec![],
+        }
+    }
+
     #[test]
     fn compares_semver_versions() {
         assert!(is_version_newer("0.1.2", "0.1.1"));
         assert!(!is_version_newer("0.1.1", "0.1.2"));
         assert!(is_version_newer("0.1.5", "0.1.4-dev"));
+        assert!(is_version_newer("0.1.6-dev", "0.1.5-2"));
+        assert!(is_version_newer("v0.2.0", "0.1.5-2"));
         assert!(!is_version_newer("0.1.4", "0.1.4-dev"));
+        assert!(!is_version_newer("0.1.5", "0.1.5-1"));
+        assert!(!is_version_newer("0.1.5-dev", "0.1.5-2"));
+        assert!(!is_version_newer("v0.1.5", "0.1.5-2"));
+        assert!(!is_version_newer("0.1.5-1", "0.1.5-2"));
+    }
+
+    #[test]
+    fn parses_local_dev_suffix() {
+        assert_eq!(parse_app_version("0.1.5-dev").unwrap().local, Some(0));
+        assert_eq!(parse_app_version("0.1.5-2").unwrap().local, Some(2));
+        assert_eq!(parse_app_version("v0.1.5").unwrap().local, None);
+    }
+
+    #[test]
+    fn local_build_ignores_same_triple_github_tags() {
+        let releases = vec![release("v0.1.5-dev", true), release("v0.1.5", false)];
+        assert!(pick_release_candidate(&releases, "0.1.5-2").is_none());
+        assert_eq!(
+            pick_release_candidate(&releases, "0.1.4-1").map(|r| r.tag_name.as_str()),
+            Some("v0.1.5")
+        );
     }
 
     #[test]
     fn normalizes_release_tags() {
-        assert_eq!(normalize_tag_version("v0.1.2-dev"), "0.1.2");
+        assert_eq!(normalize_tag_version("v0.1.2-dev"), "0.1.2-dev");
         assert_eq!(normalize_tag_version("v1.0.0"), "1.0.0");
     }
 }
