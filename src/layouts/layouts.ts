@@ -20,10 +20,10 @@ const builtinScenes: Record<string, BuiltinSceneMeta> = {
       grid: [3, 3],
       buttons: [
         { label: "Like", emoji: "👍", action: "teams.reaction.like" },
-        { label: "Heart", emoji: "❤️", action: "teams.reaction.heart" },
-        { label: "Clap", emoji: "👏", action: "teams.reaction.clap" },
+        { label: "Love", emoji: "❤️", action: "teams.reaction.heart" },
+        { label: "Applause", emoji: "👏", action: "teams.reaction.clap" },
         { label: "Laugh", emoji: "😂", action: "teams.reaction.laugh" },
-        { label: "Wow", emoji: "😮", action: "teams.reaction.wow" },
+        { label: "Surprise", emoji: "😮", action: "teams.reaction.wow" },
         { label: "Raise Hand", emoji: "✋", action: "teams.raiseHand" },
         { label: "Mute", emoji: "🎤", action: "teams.toggleMute" },
         { label: "Camera", emoji: "📷", action: "teams.toggleCamera" },

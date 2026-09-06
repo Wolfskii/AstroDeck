@@ -2,6 +2,7 @@
   import Icon from "./Icon.svelte";
   import { runDeckAction } from "../lib/runDeckAction";
   import { iconForAction, type SceneIconName } from "../lib/sceneIcons";
+  import { teamsEmojiForAction } from "../lib/teamsEmojis";
 
   let {
     label,
@@ -20,6 +21,7 @@
   } = $props();
 
   let pressed = $state(false);
+  const emojiSrc = $derived(teamsEmojiForAction(action));
   const resolvedIcon = $derived(icon ?? iconForAction(action) ?? "letter");
   const initial = $derived((label.trim()[0] ?? "?").toUpperCase());
 
@@ -48,7 +50,9 @@
   aria-label={label}
 >
   <span class="glyph" aria-hidden="true">
-    {#if resolvedIcon === "letter"}
+    {#if emojiSrc}
+      <img class="emoji" src={emojiSrc} alt="" />
+    {:else if resolvedIcon === "letter"}
       <span class="letter">{initial}</span>
     {:else}
       <Icon name={resolvedIcon} size={variant === "call" ? 32 : variant === "tile" ? 34 : 26} />
@@ -104,15 +108,28 @@
   }
 
   .reaction .glyph {
-    width: 64px;
-    height: 64px;
-    border-radius: 18px;
-    background: #2b2a33;
+    width: 72px;
+    height: 72px;
+    border-radius: 20px;
+    background: transparent;
     color: #f3f2f1;
   }
 
   .reaction:hover .glyph {
-    background: #3b3a46;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .emoji {
+    display: block;
+    width: 56px;
+    height: 56px;
+    object-fit: contain;
+    pointer-events: none;
+  }
+
+  .call .emoji {
+    width: 48px;
+    height: 48px;
   }
 
   .reaction .caption {
