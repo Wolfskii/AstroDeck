@@ -38,7 +38,7 @@
     type AppUpdateInfo,
   } from "./services/updater";
   import { isAutostartEnabled, setAutostartEnabled } from "./services/autostart";
-  import { getStartMinimized, setStartMinimized } from "./services/prefs";
+  import { getStartMinimized, setStartMinimized, getStartFullscreen, setStartFullscreen } from "./services/prefs";
   import { persistMainWindowState, revealMainWindow } from "./services/windowState";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
@@ -83,6 +83,8 @@
   let startOnBootError = $state<string | null>(null);
   let startMinimized = $state(true);
   let startMinimizedBusy = $state(false);
+  let startFullscreen = $state(false);
+  let startFullscreenBusy = $state(false);
   let optimisticSpotifySaved = $state<boolean | null>(null);
   let optimisticSpotifyShuffle = $state<boolean | null>(null);
   let optimisticSpotifyPlaying = $state<boolean | null>(null);
@@ -196,12 +198,14 @@
     if (!isTauri || viewMode !== "settings") return;
     void (async () => {
       try {
-        const [boot, minimized] = await Promise.all([
+        const [boot, minimized, fullscreen] = await Promise.all([
           isAutostartEnabled(),
           getStartMinimized(),
+          getStartFullscreen(),
         ]);
         startOnBoot = boot;
         startMinimized = minimized;
+        startFullscreen = fullscreen;
         startOnBootError = null;
       } catch (e) {
         startOnBootError = String(e);
@@ -239,6 +243,15 @@
     }
   }
 
+  async function persistFullscreenPreference(enabled: boolean) {
+    startFullscreen = enabled;
+    try {
+      await setStartFullscreen(enabled);
+    } catch (e) {
+      logError(`Failed to save fullscreen setting: ${String(e)}`, "Settings");
+    }
+  }
+
   async function enterDeckPresentationFullscreen() {
     if (!isTauri) return;
     const win = getCurrentWindow();
@@ -255,6 +268,7 @@
       }
     }
     await syncDeckFullscreenState();
+    await persistFullscreenPreference(deckPresentationFullscreen);
     await persistMainWindowState();
   }
 
@@ -268,6 +282,7 @@
       logError(String(e), "Window");
     }
     await syncDeckFullscreenState();
+    await persistFullscreenPreference(deckPresentationFullscreen);
     await persistMainWindowState();
   }
 
@@ -328,6 +343,31 @@
       logError(`Failed to update start minimized: ${String(e)}`, "Settings");
     } finally {
       startMinimizedBusy = false;
+    }
+  }
+
+  async function onStartFullscreenChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const checked = input.checked;
+    startFullscreenBusy = true;
+    startOnBootError = null;
+    try {
+      if (checked) {
+        await enterDeckPresentationFullscreen();
+      } else {
+        await exitDeckPresentationFullscreen();
+      }
+      logInfo(
+        checked ? "Enabled fullscreen mode" : "Disabled fullscreen mode",
+        "Settings"
+      );
+    } catch (e) {
+      startFullscreen = !checked;
+      input.checked = !checked;
+      startOnBootError = String(e);
+      logError(`Failed to update fullscreen: ${String(e)}`, "Settings");
+    } finally {
+      startFullscreenBusy = false;
     }
   }
 
@@ -1178,6 +1218,13 @@
         initTray();
       }
       void syncDeckFullscreenState();
+      void getStartFullscreen()
+        .then((enabled) => {
+          startFullscreen = enabled;
+        })
+        .catch(() => {
+          startFullscreen = false;
+        });
       window.addEventListener("resize", syncDeckFullscreenState);
 
       const onDeckPresentationKeydown = (ev: KeyboardEvent) => {
@@ -1292,10 +1339,10 @@
           {/if}
           <button
             type="button"
-            class="header-fullscreen-btn"
-            title={deckPresentationFullscreen ? "Exit fullscreen (F11, Esc)" : "Fullscreen on this display (F11)"}
-            aria-label={deckPresentationFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-            onclick={() => toggleDeckPresentationFullscreen()}
+            class="header-settings-btn"
+            title="Settings"
+            aria-label="Open settings"
+            onclick={() => (viewMode = "settings")}
           >
             <img class="header-app-icon" src={appIconUrl} alt="" aria-hidden="true" />
           </button>
@@ -1334,9 +1381,12 @@
         startOnBootBusy={startOnBootBusy}
         startMinimized={startMinimized}
         startMinimizedBusy={startMinimizedBusy}
+        startFullscreen={startFullscreen}
+        startFullscreenBusy={startFullscreenBusy}
         startupError={startOnBootError}
         onStartOnBootChange={onStartOnBootChange}
         onStartMinimizedChange={onStartMinimizedChange}
+        onStartFullscreenChange={onStartFullscreenChange}
         appVersion={appVersion}
         appUpdate={appUpdate}
         appUpdateChecking={appUpdateChecking}
@@ -1409,9 +1459,8 @@
             currentMediaView.seekAction
               ? commitSceneSeek(currentMediaView.seekAction, positionMs)
               : Promise.resolve()}
-          showFullscreenToggle={isTauri}
-          presentationFullscreen={deckPresentationFullscreen}
-          onToggleFullscreen={toggleDeckPresentationFullscreen}
+          showSettingsButton={isTauri}
+          onOpenSettings={() => (viewMode = "settings")}
         />
       {:else if displayedLayout}
         <DeckGrid
@@ -1634,7 +1683,7 @@
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   }
 
-  .header-fullscreen-btn {
+  .header-settings-btn {
     flex-shrink: 0;
     padding: 4px;
     border-radius: 10px;
@@ -1644,7 +1693,7 @@
     line-height: 0;
   }
 
-  .header-fullscreen-btn:hover {
+  .header-settings-btn:hover {
     background: rgba(255, 255, 255, 0.08);
   }
 

@@ -6,7 +6,6 @@ pub fn tracked_flags() -> StateFlags {
     StateFlags::SIZE
         | StateFlags::POSITION
         | StateFlags::MAXIMIZED
-        | StateFlags::FULLSCREEN
         | StateFlags::DECORATIONS
 }
 
@@ -20,16 +19,13 @@ pub fn plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 
 /// Restore last monitor, position, size, and chrome.
 /// If `start_minimized` is set, keep the window hidden in the tray.
-/// Otherwise show it with the last maximized/fullscreen state.
-pub fn apply_launch_state(window: &tauri::WebviewWindow, start_minimized: bool) {
-    let flags = if start_minimized {
-        StateFlags::SIZE | StateFlags::POSITION | StateFlags::DECORATIONS
-    } else {
-        tracked_flags()
-    };
+/// If `start_fullscreen` is set, enter presentation fullscreen after restore.
+pub fn apply_launch_state(window: &tauri::WebviewWindow, start_minimized: bool, start_fullscreen: bool) {
+    let flags = StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::DECORATIONS;
     if let Err(e) = window.restore_state(flags) {
         log::warn!("Failed to restore window state: {e}");
     }
+    apply_fullscreen(window, start_fullscreen);
     if start_minimized {
         let _ = window.hide();
         return;
@@ -39,14 +35,21 @@ pub fn apply_launch_state(window: &tauri::WebviewWindow, start_minimized: bool) 
     let _ = window.set_focus();
 }
 
-pub fn restore_show_state(window: &tauri::WebviewWindow) {
-    let flags = StateFlags::SIZE
-        | StateFlags::POSITION
-        | StateFlags::MAXIMIZED
-        | StateFlags::FULLSCREEN
-        | StateFlags::DECORATIONS;
+pub fn restore_show_state(window: &tauri::WebviewWindow, start_fullscreen: bool) {
+    let flags = StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED | StateFlags::DECORATIONS;
     if let Err(e) = window.restore_state(flags) {
         log::warn!("Failed to restore window show state: {e}");
+    }
+    apply_fullscreen(window, start_fullscreen);
+}
+
+fn apply_fullscreen(window: &tauri::WebviewWindow, start_fullscreen: bool) {
+    if start_fullscreen {
+        let _ = window.set_decorations(false);
+        let _ = window.set_fullscreen(true);
+    } else {
+        let _ = window.set_fullscreen(false);
+        let _ = window.set_decorations(true);
     }
 }
 

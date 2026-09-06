@@ -34,9 +34,8 @@
     source?: string;
     onVolumeCommit?: (value: number) => Promise<void> | void;
     onSeekCommit?: (positionMs: number) => Promise<void> | void;
-    showFullscreenToggle?: boolean;
-    presentationFullscreen?: boolean;
-    onToggleFullscreen?: () => void;
+    showSettingsButton?: boolean;
+    onOpenSettings?: () => void;
   }
 
   let {
@@ -63,9 +62,8 @@
     source = "media window",
     onVolumeCommit,
     onSeekCommit,
-    showFullscreenToggle = false,
-    presentationFullscreen = false,
-    onToggleFullscreen,
+    showSettingsButton = false,
+    onOpenSettings,
   }: Props = $props();
 
   let localVolume = $state(50);
@@ -285,15 +283,15 @@
 >
   <div
     class="car-thing-body"
-    class:car-thing-body--has-icon={showFullscreenToggle && onToggleFullscreen}
+    class:car-thing-body--has-icon={showSettingsButton && onOpenSettings}
   >
-    {#if showFullscreenToggle && onToggleFullscreen}
+    {#if showSettingsButton && onOpenSettings}
       <button
         type="button"
-        class="car-fullscreen-btn"
-        title={presentationFullscreen ? "Exit fullscreen (F11, Esc)" : "Fullscreen on this display (F11)"}
-        aria-label={presentationFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-        onclick={() => onToggleFullscreen()}
+        class="car-settings-btn"
+        title="Settings"
+        aria-label="Open settings"
+        onclick={() => onOpenSettings()}
       >
         <img class="car-app-icon" src={appIconUrl} alt="" aria-hidden="true" />
       </button>
@@ -547,7 +545,7 @@
     transition: background 0.45s ease;
   }
 
-  .car-fullscreen-btn {
+  .car-settings-btn {
     position: absolute;
     top: 8px;
     left: 12px;
@@ -560,7 +558,7 @@
     cursor: pointer;
   }
 
-  .car-fullscreen-btn:hover {
+  .car-settings-btn:hover {
     background: rgba(255, 255, 255, 0.08);
   }
 

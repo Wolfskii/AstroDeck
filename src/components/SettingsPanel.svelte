@@ -15,9 +15,12 @@
     startOnBootBusy,
     startMinimized,
     startMinimizedBusy,
+    startFullscreen,
+    startFullscreenBusy,
     startupError,
     onStartOnBootChange,
     onStartMinimizedChange,
+    onStartFullscreenChange,
     appVersion,
     appUpdate,
     appUpdateChecking,
@@ -51,9 +54,12 @@
     startOnBootBusy: boolean;
     startMinimized: boolean;
     startMinimizedBusy: boolean;
+    startFullscreen: boolean;
+    startFullscreenBusy: boolean;
     startupError: string | null;
     onStartOnBootChange: (event: Event) => void;
     onStartMinimizedChange: (event: Event) => void;
+    onStartFullscreenChange: (event: Event) => void;
     appVersion: string;
     appUpdate: AppUpdateInfo | null;
     appUpdateChecking: boolean;
@@ -211,7 +217,7 @@
             <span class="setting-title">Start minimized in the tray</span>
             <span class="setting-desc">
               Keep the window hidden until you open it. Turn this off to restore the last display,
-              position, size, and maximized or fullscreen state.
+              position, size, and maximized state.
             </span>
           </div>
           <input
@@ -220,6 +226,23 @@
             checked={startMinimized}
             disabled={startMinimizedBusy}
             onchange={onStartMinimizedChange}
+          />
+          <span class="md-check" aria-hidden="true"></span>
+        </label>
+        <label class="setting-row" for="start-fullscreen">
+          <div class="setting-copy">
+            <span class="setting-title">Fullscreen mode</span>
+            <span class="setting-desc">
+              Fill this display with no window chrome. The app also starts in the mode selected
+              here. F11 also toggles this. Press F11 or Esc to leave fullscreen.
+            </span>
+          </div>
+          <input
+            id="start-fullscreen"
+            type="checkbox"
+            checked={startFullscreen}
+            disabled={startFullscreenBusy}
+            onchange={onStartFullscreenChange}
           />
           <span class="md-check" aria-hidden="true"></span>
         </label>
@@ -764,7 +787,7 @@
     padding: 12px 18px;
     border-radius: 8px;
     border: none;
-    background: #e8eaee;
+    background: #c5cad3;
     color: var(--md-ink);
     font-size: 0.95rem;
     font-weight: 500;
@@ -773,7 +796,7 @@
   }
 
   .md-btn:hover:not(:disabled) {
-    background: #d7dbe3;
+    background: #b4bac4;
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(17, 24, 39, 0.08);
   }

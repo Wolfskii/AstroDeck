@@ -281,7 +281,7 @@ fn persist_window_state(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn restore_window_show_state(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
-        window_prefs::restore_show_state(&window);
+        window_prefs::restore_show_state(&window, prefs::start_fullscreen(&app));
     }
     Ok(())
 }
@@ -327,6 +327,8 @@ pub fn run() {
             prefs::set_update_popups_enabled,
             prefs::get_start_minimized,
             prefs::set_start_minimized,
+            prefs::get_start_fullscreen,
+            prefs::set_start_fullscreen,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -339,7 +341,11 @@ pub fn run() {
             let app_handle = app.handle().clone();
 
             if let Some(window) = app.get_webview_window("main") {
-                window_prefs::apply_launch_state(&window, prefs::start_minimized(&app_handle));
+                window_prefs::apply_launch_state(
+                    &window,
+                    prefs::start_minimized(&app_handle),
+                    prefs::start_fullscreen(&app_handle),
+                );
             }
 
             plugin_engine::load_plugins(&app_handle);

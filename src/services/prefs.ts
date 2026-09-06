@@ -13,3 +13,13 @@ export async function setStartMinimized(enabled: boolean): Promise<void> {
   if (!isTauri) return;
   await invoke("set_start_minimized", { enabled });
 }
+
+export async function getStartFullscreen(): Promise<boolean> {
+  if (!isTauri) return false;
+  return invoke<boolean>("get_start_fullscreen");
+}
+
+export async function setStartFullscreen(enabled: boolean): Promise<void> {
+  if (!isTauri) return;
+  await invoke("set_start_fullscreen", { enabled });
+}

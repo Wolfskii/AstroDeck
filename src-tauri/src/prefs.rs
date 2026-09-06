@@ -7,6 +7,8 @@ use tauri::Manager;
 pub struct AppPreferences {
     #[serde(default = "default_start_minimized")]
     pub start_minimized: bool,
+    #[serde(default)]
+    pub start_fullscreen: bool,
     #[serde(default = "default_show_update_popups")]
     pub show_update_popups: bool,
 }
@@ -15,6 +17,7 @@ impl Default for AppPreferences {
     fn default() -> Self {
         Self {
             start_minimized: default_start_minimized(),
+            start_fullscreen: false,
             show_update_popups: default_show_update_popups(),
         }
     }
@@ -71,6 +74,13 @@ pub fn start_minimized(app: &tauri::AppHandle) -> bool {
         .unwrap_or_else(|_| default_start_minimized())
 }
 
+pub fn start_fullscreen(app: &tauri::AppHandle) -> bool {
+    preferences_path(app)
+        .and_then(|path| load_preferences(&path))
+        .map(|preferences| preferences.start_fullscreen)
+        .unwrap_or(false)
+}
+
 #[tauri::command]
 pub fn get_start_minimized(app: tauri::AppHandle) -> Result<bool, String> {
     Ok(start_minimized(&app))
@@ -81,5 +91,18 @@ pub fn set_start_minimized(app: tauri::AppHandle, enabled: bool) -> Result<(), S
     let path = preferences_path(&app)?;
     let mut preferences = load_preferences(&path)?;
     preferences.start_minimized = enabled;
+    save_preferences(&path, &preferences)
+}
+
+#[tauri::command]
+pub fn get_start_fullscreen(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(start_fullscreen(&app))
+}
+
+#[tauri::command]
+pub fn set_start_fullscreen(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.start_fullscreen = enabled;
     save_preferences(&path, &preferences)
 }
