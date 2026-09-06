@@ -113,10 +113,21 @@ pub fn matches_triggers(
         return false;
     }
 
+    let visible_titles: Vec<&String> = context
+        .window_titles
+        .iter()
+        .filter(|title| {
+            !plugin
+                .triggers
+                .exclude_window_titles
+                .iter()
+                .any(|pattern| matches_glob(pattern, title))
+        })
+        .collect();
+
     if let Some(ref title_match) = plugin.triggers.window_title_contains {
         let wanted = title_match.to_lowercase();
-        if !context
-            .window_titles
+        if !visible_titles
             .iter()
             .any(|title| title.to_lowercase().contains(&wanted))
         {
@@ -125,8 +136,7 @@ pub fn matches_triggers(
     }
 
     if let Some(ref pattern) = plugin.triggers.window_title_glob {
-        if !context
-            .window_titles
+        if !visible_titles
             .iter()
             .any(|title| matches_glob(pattern, title))
         {
@@ -135,11 +145,11 @@ pub fn matches_triggers(
     }
 
     if !plugin.triggers.window_titles_any.is_empty()
-        && !plugin
-            .triggers
-            .window_titles_any
-            .iter()
-            .any(|pattern| context.window_titles.iter().any(|title| matches_glob(pattern, title)))
+        && !plugin.triggers.window_titles_any.iter().any(|pattern| {
+            visible_titles
+                .iter()
+                .any(|title| matches_glob(pattern, title))
+        })
     {
         return false;
     }

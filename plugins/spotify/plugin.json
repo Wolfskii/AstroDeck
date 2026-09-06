@@ -2,7 +2,7 @@
   "id": "spotify",
   "name": "Spotify Control",
   "description": "Playback controls and track actions for Spotify.",
-  "priority": 60,
+  "priority": 80,
   "triggers": {
     "processesAny": ["*spotify*", "*spotify.exe"]
   },

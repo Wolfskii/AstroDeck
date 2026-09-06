@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tauri::{Emitter, Manager};
@@ -25,6 +26,8 @@ pub struct AppPreferences {
     pub controls_overlay_custom: Option<bool>,
     #[serde(default)]
     pub audio_visualizer: bool,
+    #[serde(default)]
+    pub auto_switch_scenes: HashMap<String, bool>,
 }
 
 impl Default for AppPreferences {
@@ -40,6 +43,7 @@ impl Default for AppPreferences {
             controls_overlay_color: default_controls_overlay_color(),
             controls_overlay_custom: None,
             audio_visualizer: false,
+            auto_switch_scenes: HashMap::new(),
         }
     }
 }
@@ -361,4 +365,40 @@ pub fn set_audio_visualizer_emit(app: tauri::AppHandle, emit: bool) -> Result<()
     crate::audio_viz::set_emit_frames(emit);
     crate::audio_viz::sync(&app, audio_visualizer_enabled(&app));
     Ok(())
+}
+
+pub fn auto_switch_enabled(app: &tauri::AppHandle, scene_id: &str) -> bool {
+    preferences_path(app)
+        .and_then(|path| load_preferences(&path))
+        .map(|preferences| auto_switch_from_map(&preferences.auto_switch_scenes, scene_id))
+        .unwrap_or(true)
+}
+
+fn auto_switch_from_map(map: &HashMap<String, bool>, scene_id: &str) -> bool {
+    map.get(scene_id).copied().unwrap_or(true)
+}
+
+#[tauri::command]
+pub fn get_auto_switch_scenes(app: tauri::AppHandle) -> Result<HashMap<String, bool>, String> {
+    Ok(load_preferences(&preferences_path(&app)?)?.auto_switch_scenes)
+}
+
+#[tauri::command]
+pub fn set_auto_switch_scene(
+    app: tauri::AppHandle,
+    scene_id: String,
+    enabled: bool,
+) -> Result<HashMap<String, bool>, String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    let id = scene_id.trim();
+    if id.is_empty() {
+        return Err("Scene id is required".to_string());
+    }
+    preferences
+        .auto_switch_scenes
+        .insert(id.to_string(), enabled);
+    save_preferences(&path, &preferences)?;
+    let _ = app.emit("auto-switch-scenes-changed", &preferences.auto_switch_scenes);
+    Ok(preferences.auto_switch_scenes)
 }

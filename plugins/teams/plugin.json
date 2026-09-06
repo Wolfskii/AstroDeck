@@ -4,7 +4,8 @@
   "description": "Reactions and in-call controls for meetings.",
   "priority": 100,
   "triggers": {
-    "processGlob": "*teams*"
+    "windowTitlesAny": ["*Microsoft Teams*", "* | Microsoft Teams"],
+    "excludeWindowTitles": ["*notification*", "*Update*"]
   },
   "layout": {
     "grid": [3, 3],

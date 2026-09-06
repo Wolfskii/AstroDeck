@@ -42,6 +42,8 @@ pub struct PluginTriggers {
     pub window_title_glob: Option<String>,
     #[serde(rename = "windowTitlesAny", default)]
     pub window_titles_any: Vec<String>,
+    #[serde(rename = "excludeWindowTitles", default)]
+    pub exclude_window_titles: Vec<String>,
 }
 
 impl PluginTriggers {
@@ -54,6 +56,7 @@ impl PluginTriggers {
             || self.window_title_contains.is_some()
             || self.window_title_glob.is_some()
             || !self.window_titles_any.is_empty()
+            || !self.exclude_window_titles.is_empty()
     }
 }
 

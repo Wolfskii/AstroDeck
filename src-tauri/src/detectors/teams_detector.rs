@@ -7,11 +7,8 @@ impl Detector for TeamsDetector {
     fn id(&self) -> &str {
         "teams"
     }
-
-    fn detect(&self, system: &System) -> bool {
-        system.processes().values().any(|p| {
-            let name = p.name().to_string_lossy().to_lowercase();
-            name.contains("teams") || name.contains("ms-teams")
-        })
+    fn detect(&self, _system: &System) -> bool {
+        // Teams is matched from a visible window title, not a background process.
+        false
     }
 }
