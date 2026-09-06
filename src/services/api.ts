@@ -134,6 +134,37 @@ export async function setSpotifyAuthMode(authMode: SpotifyAuthMode): Promise<voi
   return invoke("set_spotify_auth_mode", { authMode });
 }
 
+export interface SpotifyPlaylist {
+  id: string;
+  name: string;
+  uri: string;
+  imageUrl?: string | null;
+  trackCount: number;
+  ownerName?: string | null;
+}
+
+export interface SpotifyPlaylistPage {
+  items: SpotifyPlaylist[];
+  offset: number;
+  limit: number;
+  total: number;
+  nextOffset?: number | null;
+}
+
+export async function listSpotifyPlaylists(options?: {
+  offset?: number;
+  limit?: number;
+}): Promise<SpotifyPlaylistPage> {
+  return invoke<SpotifyPlaylistPage>("list_spotify_playlists", {
+    offset: options?.offset ?? 0,
+    limit: options?.limit ?? 50,
+  });
+}
+
+export async function playSpotifyPlaylist(playlist: string): Promise<void> {
+  return invoke("play_spotify_playlist", { playlist });
+}
+
 export async function setSpotifyVolume(volumePercent: number): Promise<number> {
   return invoke<number>("set_spotify_volume", { volumePercent });
 }
