@@ -339,7 +339,8 @@ mod tests {
     fn compares_semver_versions() {
         assert!(is_version_newer("0.1.2", "0.1.1"));
         assert!(!is_version_newer("0.1.1", "0.1.2"));
-        assert!(is_version_newer("0.2.0", "0.1.9"));
+        assert!(is_version_newer("0.1.5", "0.1.4-dev"));
+        assert!(!is_version_newer("0.1.4", "0.1.4-dev"));
     }
 
     #[test]

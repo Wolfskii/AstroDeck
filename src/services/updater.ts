@@ -1,3 +1,4 @@
+import packageJson from "../../package.json";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface AppUpdateInfo {
@@ -16,7 +17,7 @@ const isTauri =
   !!(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
 
 export async function getAppVersion(): Promise<string> {
-  if (!isTauri) return "0.0.0";
+  if (!isTauri) return packageJson.version;
   return invoke<string>("get_app_version");
 }
 
@@ -24,7 +25,7 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo> {
   if (!isTauri) {
     return {
       available: false,
-      currentVersion: "0.0.0",
+      currentVersion: packageJson.version,
       latestVersion: null,
       releaseName: null,
       releaseNotes: null,

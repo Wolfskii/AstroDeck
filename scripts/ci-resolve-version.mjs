@@ -13,7 +13,7 @@ if (channel !== "develop" && channel !== "production") {
 }
 
 function parseSemver(value) {
-  const match = value.trim().match(/^(\d+)\.(\d+)\.(\d+)$/);
+  const match = value.trim().match(/^(\d+)\.(\d+)\.(\d+)(?:-dev)?$/);
   if (!match) return null;
   return {
     major: Number(match[1]),

@@ -255,8 +255,10 @@
         <div class="settings-card-toolbar">
           <div>
             <p class="setting-title">Software updates</p>
+            <p class="settings-version">
+              Current version <strong>{appVersion || "Unknown"}</strong>
+            </p>
             <p class="setting-desc">
-              {#if appVersion}Current version {appVersion}. {/if}
               AstroDeck checks GitHub for a newer installer when it starts.
             </p>
           </div>
@@ -711,6 +713,16 @@
     color: var(--md-muted);
     font-size: 0.88rem;
     line-height: 1.45;
+  }
+
+  .settings-version {
+    margin: 6px 0 0;
+    color: var(--md-ink);
+    font-size: 0.95rem;
+  }
+
+  .settings-version strong {
+    font-weight: 600;
   }
 
   .setting-desc code {

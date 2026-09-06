@@ -228,6 +228,11 @@ function main() {
   }
 
   ensureDependenciesInstalled();
+
+  if (process.env.GITHUB_ACTIONS !== "true" && process.env.ASTRODECK_IN_DOCKER !== "1") {
+    run("node", ["scripts/sync-version.mjs", "--bump-dev"]);
+  }
+
   run("npm", ["run", "build"]);
 
   const tauriArgs = ["tauri", "build"];

@@ -1128,6 +1128,13 @@
       updateDebugTitle();
       logInfo("Browser mode: loaded builtin default layout", "Browser");
       markSceneSeen("default");
+      void getAppVersion()
+        .then((version) => {
+          appVersion = version;
+        })
+        .catch(() => {
+          appVersion = "";
+        });
 
       // Connect to the Rust WebSocket log bus to receive live logs from the Tauri window
       let retryTimer: ReturnType<typeof setTimeout> | null = null;

@@ -74,7 +74,9 @@ Build for the current OS:
 task deploy
 ```
 
-This runs the packaging script in `scripts/package-app.mjs`, builds the frontend, runs `tauri build`, and copies the resulting native bundle files into:
+This runs the packaging script in `scripts/package-app.mjs`. Local `task deploy` / `task deploy:windows` (and the other host package commands) bump the patch version and append `-dev` (for example `0.1.3` → `0.1.4-dev`) before building, so each local installer shows a distinct version in Settings → Updates. CI releases keep the GitHub versioning rules below.
+
+It then builds the frontend, runs `tauri build`, and copies the resulting native bundle files into:
 
 ```text
 .artifacts/<platform>/

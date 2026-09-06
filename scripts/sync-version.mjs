@@ -4,11 +4,49 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
-const versionArg = process.argv[2]?.trim();
+const args = process.argv.slice(2).filter(Boolean);
+const bumpDev = args.includes("--bump-dev");
+const versionArg = args.find((arg) => arg !== "--bump-dev")?.trim();
 const versionPath = path.join(rootDir, "VERSION");
-const version = versionArg || readFileSync(versionPath, "utf8").trim();
+const versionPattern = /^(\d+)\.(\d+)\.(\d+)(?:-dev)?$/;
 
-if (!/^\d+\.\d+\.\d+$/.test(version)) {
+function parseVersion(raw) {
+  const match = raw.trim().match(versionPattern);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: raw.trim().endsWith("-dev"),
+  };
+}
+
+function formatDevVersion(parsed) {
+  return `${parsed.major}.${parsed.minor}.${parsed.patch}-dev`;
+}
+
+function bumpLocalDevVersion(raw) {
+  const parsed = parseVersion(raw);
+  if (!parsed) return null;
+  return formatDevVersion({
+    ...parsed,
+    patch: parsed.patch + 1,
+  });
+}
+
+let version = versionArg || readFileSync(versionPath, "utf8").trim();
+
+if (bumpDev) {
+  const next = bumpLocalDevVersion(version);
+  if (!next) {
+    console.error(`[sync-version] Invalid semver for local bump: ${version}`);
+    process.exit(1);
+  }
+  console.log(`[sync-version] Local deploy bump ${version} → ${next}`);
+  version = next;
+}
+
+if (!versionPattern.test(version)) {
   console.error(`[sync-version] Invalid semver: ${version}`);
   process.exit(1);
 }
