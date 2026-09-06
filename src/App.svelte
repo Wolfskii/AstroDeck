@@ -10,6 +10,7 @@
   import DeckGrid from "./components/DeckGrid.svelte";
   import MediaPlayerView from "./components/MediaPlayerView.svelte";
   import ReleaseNotes from "./components/ReleaseNotes.svelte";
+  import SettingsPanel from "./components/SettingsPanel.svelte";
   import appIconUrl from "./assets/app-icon.png";
   import {
     executeActionValue,
@@ -26,7 +27,6 @@
   import {
     getBuiltinLayout,
     getBuiltinSceneIds,
-    getBuiltinSceneMeta,
   } from "./layouts/layouts";
   import { logs, logInfo, logError, pushExternal, type LogEntry } from "./services/logger";
   import {
@@ -1255,16 +1255,12 @@
   });
 </script>
 
-<div class="app">
-  {#if !isMediaDeckView}
+<div class="app" class:app-settings={isSettingsWindow}>
+  {#if !isMediaDeckView && !isSettingsWindow}
     <header class="app-header">
       <div class="app-header-left">
         <h1 class="app-title">AstroDeck</h1>
-        {#if isTauri && viewMode === "settings"}
-          <button type="button" class="back-to-deck" onclick={() => (viewMode = "deck")}>
-            ← Back to deck
-          </button>
-        {:else if isTauri && !isSettingsWindow}
+        {#if isTauri && !isSettingsWindow}
           <span class="scene-badge">{sceneId}</span>
         {/if}
       </div>
@@ -1331,329 +1327,43 @@
 
   <main class="app-main">
     {#if isSettingsWindow}
-      <div class="settings-root">
-        <section class="settings-section">
-          <h2>AstroDeck Settings</h2>
-          {#if isTauri}
-            <div class="settings-block">
-              <h3>Startup</h3>
-              <p class="settings-help">
-                Choose whether AstroDeck stays in the tray on launch, or opens on the last display
-                with the last position, size, and maximized or fullscreen state.
-              </p>
-              <label class="settings-switch" for="start-on-boot">
-                <input
-                  id="start-on-boot"
-                  type="checkbox"
-                  checked={startOnBoot}
-                  disabled={startOnBootBusy}
-                  onchange={onStartOnBootChange}
-                />
-                <span class="settings-switch-ui" aria-hidden="true"></span>
-                <span class="settings-switch-label">Start AstroDeck when this computer starts</span>
-              </label>
-              <label class="settings-switch" for="start-minimized">
-                <input
-                  id="start-minimized"
-                  type="checkbox"
-                  checked={startMinimized}
-                  disabled={startMinimizedBusy}
-                  onchange={onStartMinimizedChange}
-                />
-                <span class="settings-switch-ui" aria-hidden="true"></span>
-                <span class="settings-switch-label">Start minimized in the system tray</span>
-              </label>
-              {#if startOnBootError}
-                <p class="settings-error">{startOnBootError}</p>
-              {/if}
-            </div>
-            <div class="settings-block">
-              <div class="settings-update-heading">
-                <div>
-                  <h3>Updates</h3>
-                  <p class="settings-help">
-                    {#if appVersion}
-                      Current version {appVersion}.
-                    {/if}
-                    AstroDeck checks GitHub for a newer installer when it starts.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  class="settings-secondary-btn"
-                  disabled={appUpdateChecking}
-                  onclick={() => void checkForUpdates()}
-                >
-                  {appUpdateChecking ? "Checking…" : "Check for updates"}
-                </button>
-              </div>
-              {#if appUpdateError}
-                <p class="settings-error">{appUpdateError}</p>
-              {/if}
-              {#if installableUpdate && appUpdate}
-                <div class="update-details" role="status">
-                  <strong>
-                    Version {appUpdate.latestVersion} is available.
-                  </strong>
-                  <ReleaseNotes body={appUpdate.releaseNotes} />
-                  <button
-                    type="button"
-                    class="settings-primary-btn"
-                    disabled={appUpdateBusy}
-                    onclick={() => void installAppUpdate()}
-                  >
-                    {appUpdateBusy ? "Installing…" : "Update now"}
-                  </button>
-                </div>
-              {:else}
-                <p class="settings-status" role="status">
-                  {appUpdateChecking ? "Checking for updates…" : "No update is currently available."}
-                </p>
-              {/if}
-              <label class="settings-switch" for="show-update-popups">
-                <input
-                  id="show-update-popups"
-                  type="checkbox"
-                  checked={showUpdatePopups}
-                  disabled={showUpdatePopupsBusy}
-                  onchange={onShowUpdatePopupsChange}
-                />
-                <span class="settings-switch-ui" aria-hidden="true"></span>
-                <span class="settings-switch-label">Show update popups</span>
-              </label>
-            </div>
-          {/if}
-          <div class="settings-block spotify-block">
-            <div class="spotify-header">
-              <div>
-                <h3>Spotify Integration</h3>
-                <p class="settings-help">
-                  Connect Spotify once to enable track liking and Spotify-only volume control.
-                </p>
-                {#if isTauri}
-                  <div class="spotify-client-block">
-                    <label class="spotify-client-label" for="spotify-client-id">Spotify Client ID</label>
-                    <p class="settings-help spotify-client-help">
-                      Create a Spotify app, add redirect URI <code>http://127.0.0.1:43821/callback</code>,
-                      then paste the Client ID here (saved on this PC). Or set <code>SPOTIFY_CLIENT_ID</code> in
-                      the environment instead.
-                    </p>
-                    <div class="spotify-client-row">
-                      <input
-                        id="spotify-client-id"
-                        class="spotify-client-input"
-                        type="text"
-                        autocomplete="off"
-                        spellcheck="false"
-                        placeholder="Your Spotify app Client ID"
-                        bind:value={spotifyClientIdDraft}
-                        disabled={spotifyClientLockedByEnv || spotifySavingClientId}
-                      />
-                      <button
-                        type="button"
-                        class="spotify-dashboard-btn"
-                        onclick={openSpotifyDeveloperDashboard}
-                      >
-                        Open dashboard
-                      </button>
-                      <button
-                        type="button"
-                        class="spotify-save-client-btn"
-                        onclick={saveSpotifyClientId}
-                        disabled={spotifyClientLockedByEnv || spotifySavingClientId}
-                      >
-                        {spotifySavingClientId ? "Saving…" : "Save"}
-                      </button>
-                    </div>
-                    {#if spotifyClientLockedByEnv}
-                      <p class="spotify-env-note">
-                        Using <code>SPOTIFY_CLIENT_ID</code> from the environment; unset it to edit the saved
-                        Client ID here.
-                      </p>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-              <div class="spotify-actions">
-                <button class="spotify-connect" onclick={connectSpotify} disabled={spotifyBusy}>
-                  {#if spotifyBusy}
-                    Connecting...
-                  {:else if spotifyStatus?.isAuthenticated}
-                    Reconnect Spotify
-                  {:else}
-                    Connect Spotify
-                  {/if}
-                </button>
-                <button
-                  class="spotify-disconnect"
-                  onclick={disconnectSpotify}
-                  disabled={spotifyBusy || !spotifyStatus?.isAuthenticated}
-                >
-                  Disconnect
-                </button>
-              </div>
-            </div>
-            {#if isTauri && spotifyAuthHint}
-              <p
-                class="spotify-auth-hint"
-                class:spotify-auth-hint--ok={spotifyAuthHint.startsWith("Finish")}
-              >
-                {spotifyAuthHint}
-              </p>
-            {/if}
-            <div class="spotify-status-card">
-              {#if spotifyStatus?.currentCoverArtUrl || spotifyStatus?.currentTrackName}
-                <div class="spotify-now-playing">
-                  {#if spotifyStatus?.currentCoverArtUrl}
-                    <img
-                      class="spotify-cover-art"
-                      src={spotifyStatus.currentCoverArtUrl}
-                      alt={spotifyStatus?.currentTrackName ?? "Current cover art"}
-                    />
-                  {/if}
-                  <div class="spotify-now-playing-meta">
-                    <div class="spotify-playback-state">
-                      {spotifyStatus?.playbackState ?? "stopped"}
-                    </div>
-                    <div class="spotify-track-title">
-                      {spotifyStatus?.currentTrackName ?? "Nothing active"}
-                    </div>
-                    <div class="spotify-track-artist">
-                      {spotifyStatus?.currentArtistName ?? "No artist information"}
-                    </div>
-                  </div>
-                </div>
-              {/if}
-              <div class="spotify-status-top">
-                <span
-                  class:connected={spotifyStatus?.isAuthenticated}
-                  class="spotify-status-dot"
-                ></span>
-                <span class="spotify-status-text">
-                  {spotifyStatus?.message ?? "Waiting for Spotify status..."}
-                </span>
-              </div>
-              <div class="spotify-status-grid">
-                <div class="spotify-stat">
-                  <span class="spotify-stat-label">Auth</span>
-                  <span class="spotify-stat-value">
-                    {spotifyStatus?.isAuthenticated ? "Connected" : "Not connected"}
-                  </span>
-                </div>
-                <div class="spotify-stat">
-                  <span class="spotify-stat-label">Device</span>
-                  <span class="spotify-stat-value">
-                    {spotifyStatus?.activeDeviceName ?? "No active device"}
-                  </span>
-                </div>
-                <div class="spotify-stat">
-                  <span class="spotify-stat-label">Playback</span>
-                  <span class="spotify-stat-value">
-                    {spotifyStatus?.playbackState ?? "stopped"}
-                  </span>
-                </div>
-                <div class="spotify-stat">
-                  <span class="spotify-stat-label">Track</span>
-                  <span class="spotify-stat-value">
-                    {spotifyStatus?.currentTrackName ?? "Nothing active"}
-                  </span>
-                </div>
-                <div class="spotify-stat">
-                  <span class="spotify-stat-label">Volume</span>
-                  <span class="spotify-stat-value">
-                    {spotifyStatus?.currentVolumePercent != null
-                      ? `${spotifyStatus.currentVolumePercent}%`
-                      : "Unavailable"}
-                  </span>
-                </div>
-                <div class="spotify-stat">
-                  <span class="spotify-stat-label">Item Type</span>
-                  <span class="spotify-stat-value">
-                    {spotifyStatus?.currentItemType ?? "Unknown"}
-                  </span>
-                </div>
-                <div class="spotify-stat">
-                  <span class="spotify-stat-label">Saved</span>
-                  <span class="spotify-stat-value">
-                    {spotifyStatus?.isCurrentTrackSaved == null
-                      ? "Unavailable"
-                      : spotifyStatus.isCurrentTrackSaved
-                        ? "Saved"
-                        : "Not saved"}
-                  </span>
-                </div>
-                <div class="spotify-stat spotify-stat-wide">
-                  <span class="spotify-stat-label">Item Id</span>
-                  <span class="spotify-stat-value spotify-selectable">
-                    {spotifyStatus?.currentItemId ?? "Unavailable"}
-                  </span>
-                </div>
-              </div>
-              <div class="spotify-scopes">
-                {#if spotifyStatus?.grantedScopes?.length}
-                  {#each spotifyStatus.grantedScopes as scope}
-                    <span class="spotify-scope-pill spotify-selectable">{scope}</span>
-                  {/each}
-                {:else}
-                  <span class="spotify-scope-pill muted">No scopes granted yet</span>
-                {/if}
-              </div>
-            </div>
-          </div>
-          <div class="settings-scenes">
-            <h3>Available scenes</h3>
-            <p class="settings-help">Choose a scene to manually override the active desktop deck.</p>
-            {#if settingsSceneIds.length === 0}
-              <p class="settings-empty">No scenes loaded yet.</p>
-            {:else}
-              <div class="scene-grid">
-                {#each settingsSceneIds as id}
-                  {@const plugin = pluginsById.get(id)}
-                  {@const meta = getBuiltinSceneMeta(id)}
-                  {@const title = plugin?.name ?? meta?.name ?? id}
-                  {@const description =
-                    plugin?.description ??
-                    meta?.description ??
-                    "Manual scene override for this plugin layout."}
-                  {@const accent = meta?.accent ?? "#8b5cf6"}
-                  {@const grid = plugin?.layout.grid ?? meta?.layout.grid ?? [0, 0]}
-                  {@const buttonCount = plugin?.layout.buttons.length ?? meta?.layout.buttons.length ?? 0}
-                  <button
-                    class:active={id === sceneId}
-                    class="scene-card"
-                    onclick={() => selectScene(id)}
-                    aria-pressed={id === sceneId}
-                    style={`--scene-accent: ${accent}`}
-                  >
-                    <div class="scene-card-top">
-                      <span class="scene-name">{title}</span>
-                      {#if id === sceneId}
-                        <span class="scene-tag current">current</span>
-                      {:else if seenScenes.includes(id)}
-                        <span class="scene-tag">seen</span>
-                      {:else}
-                        <span class="scene-tag">manual</span>
-                      {/if}
-                    </div>
-                    <div class="scene-id">{id}</div>
-                    <p class="scene-description">
-                      {description}
-                    </p>
-                    <div class="scene-card-footer">
-                      <span class="scene-metrics">
-                        {grid[0]}x{grid[1]}
-                      </span>
-                      <span class="scene-metrics">
-                        {buttonCount} buttons
-                      </span>
-                    </div>
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        </section>
-      </div>
+      <SettingsPanel
+        isTauri={isTauri}
+        onBackToDeck={isTauri ? () => (viewMode = "deck") : undefined}
+        startOnBoot={startOnBoot}
+        startOnBootBusy={startOnBootBusy}
+        startMinimized={startMinimized}
+        startMinimizedBusy={startMinimizedBusy}
+        startupError={startOnBootError}
+        onStartOnBootChange={onStartOnBootChange}
+        onStartMinimizedChange={onStartMinimizedChange}
+        appVersion={appVersion}
+        appUpdate={appUpdate}
+        appUpdateChecking={appUpdateChecking}
+        appUpdateBusy={appUpdateBusy}
+        appUpdateError={appUpdateError}
+        installableUpdate={installableUpdate}
+        showUpdatePopups={showUpdatePopups}
+        showUpdatePopupsBusy={showUpdatePopupsBusy}
+        onCheckUpdates={() => void checkForUpdates()}
+        onInstallUpdate={() => void installAppUpdate()}
+        onShowUpdatePopupsChange={onShowUpdatePopupsChange}
+        spotifyStatus={spotifyStatus}
+        spotifyBusy={spotifyBusy}
+        spotifyAuthHint={spotifyAuthHint}
+        bind:spotifyClientIdDraft
+        spotifyClientLockedByEnv={spotifyClientLockedByEnv}
+        spotifySavingClientId={spotifySavingClientId}
+        onSaveSpotifyClientId={() => void saveSpotifyClientId()}
+        onOpenSpotifyDashboard={openSpotifyDeveloperDashboard}
+        onConnectSpotify={() => void connectSpotify()}
+        onDisconnectSpotify={() => void disconnectSpotify()}
+        sceneIds={settingsSceneIds}
+        pluginsById={pluginsById}
+        sceneId={sceneId}
+        seenScenes={seenScenes}
+        onSelectScene={selectScene}
+      />
     {:else}
       {#if loading}
         <div class="loading">Detecting environment...</div>
@@ -1818,6 +1528,10 @@
     background: var(--bg-primary);
   }
 
+  .app.app-settings {
+    background: #eceef2;
+  }
+
   .app-header {
     display: flex;
     align-items: center;
@@ -1945,20 +1659,6 @@
     font-weight: 600;
   }
 
-  .back-to-deck {
-    font-size: 0.85rem;
-    padding: 6px 12px;
-    border-radius: 6px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    cursor: pointer;
-  }
-
-  .back-to-deck:hover {
-    background: var(--bg-secondary);
-  }
-
   .app-main {
     flex: 1 1 auto;
     min-height: 0;
@@ -1975,165 +1675,10 @@
     font-size: 0.9rem;
   }
 
-  .settings-root {
-    flex: 1 1 auto;
-    min-height: 0;
-    display: flex;
-    padding: 16px 20px 24px;
-    gap: 16px;
-    overflow-x: hidden;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-  }
-
-  .settings-section {
-    width: 100%;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .settings-section h2 {
-    margin: 0;
-    font-size: 1.8rem;
-    font-weight: 700;
-  }
-
-  .settings-section h3 {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-secondary);
-    margin: 0 0 6px;
-  }
-
-  .settings-help {
-    margin: 0 0 12px;
-    color: var(--text-secondary);
-    font-size: 0.95rem;
-  }
-
-  .settings-block {
-    border: 1px solid var(--border-subtle);
-    border-radius: 18px;
-    background: rgba(255, 255, 255, 0.03);
-    padding: 16px;
-  }
-
-  .settings-switch {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    cursor: pointer;
-    user-select: none;
-    max-width: 40rem;
-  }
-
-  .settings-switch input {
-    position: absolute;
-    opacity: 0;
-    width: 1px;
-    height: 1px;
-    pointer-events: none;
-  }
-
-  .settings-switch-ui {
-    position: relative;
-    flex: 0 0 auto;
-    width: 42px;
-    height: 24px;
-    border-radius: 999px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border-subtle);
-    transition: background 0.15s ease, border-color 0.15s ease;
-  }
-
-  .settings-switch-ui::after {
-    content: "";
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: var(--text-secondary);
-    transition: transform 0.15s ease, background 0.15s ease;
-  }
-
-  .settings-switch input:checked + .settings-switch-ui {
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-
-  .settings-switch input:checked + .settings-switch-ui::after {
-    transform: translateX(18px);
-    background: white;
-  }
-
-  .settings-switch input:disabled + .settings-switch-ui {
-    opacity: 0.55;
-  }
-
-  .settings-switch:has(input:focus-visible) .settings-switch-ui {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
-  .settings-switch:has(input:disabled) {
-    cursor: default;
-  }
-
-  .settings-switch-label {
-    font-size: 0.98rem;
-    font-weight: 600;
-  }
-
   .settings-error {
     margin: 10px 0 0;
     color: #fca5a5;
     font-size: 0.9rem;
-  }
-
-  .settings-update-heading {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-
-  .settings-update-heading .settings-help {
-    margin-bottom: 0;
-  }
-
-  .settings-status {
-    margin: 12px 0 0;
-    color: var(--text-secondary);
-    font-size: 0.95rem;
-  }
-
-  .update-details {
-    display: grid;
-    gap: 12px;
-    margin: 14px 0 0;
-    padding: 14px;
-    border: 1px solid var(--border-subtle);
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.02);
-  }
-
-  .update-details strong {
-    color: var(--text-primary);
-    font-size: 0.98rem;
-  }
-
-  .settings-block > .settings-switch {
-    margin-top: 14px;
-  }
-
-  .settings-block > .settings-switch + .settings-switch {
-    margin-top: 12px;
   }
 
   .settings-primary-btn,
@@ -2239,397 +1784,6 @@
     justify-content: flex-end;
     gap: 10px;
     margin-top: 16px;
-  }
-
-  .spotify-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-  }
-
-  .spotify-client-block {
-    margin-top: 14px;
-    max-width: 52rem;
-  }
-
-  .spotify-client-label {
-    display: block;
-    font-size: 0.8rem;
-    font-weight: 600;
-    margin-bottom: 6px;
-    color: var(--text-secondary);
-  }
-
-  .spotify-client-help {
-    margin-top: 0;
-    margin-bottom: 10px;
-  }
-
-  .spotify-client-help code {
-    font-size: 0.78em;
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-primary);
-  }
-
-  .spotify-client-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    align-items: center;
-  }
-
-  .spotify-client-input {
-    flex: 1 1 220px;
-    min-width: 0;
-    padding: 10px 12px;
-    border-radius: 8px;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font-size: 0.9rem;
-  }
-
-  .spotify-client-input:disabled {
-    opacity: 0.65;
-  }
-
-  .spotify-dashboard-btn,
-  .spotify-save-client-btn {
-    padding: 10px 14px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 0.85rem;
-    cursor: pointer;
-    border: 1px solid var(--border-subtle);
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-  }
-
-  .spotify-save-client-btn {
-    background: rgba(59, 130, 246, 0.2);
-    border-color: rgba(59, 130, 246, 0.35);
-    color: #bfdbfe;
-  }
-
-  .spotify-dashboard-btn:hover,
-  .spotify-save-client-btn:hover:not(:disabled) {
-    filter: brightness(1.08);
-  }
-
-  .spotify-dashboard-btn:disabled,
-  .spotify-save-client-btn:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .spotify-env-note {
-    margin: 10px 0 0;
-    font-size: 0.82rem;
-    color: var(--text-secondary);
-  }
-
-  .spotify-env-note code {
-    font-size: 0.85em;
-  }
-
-  .spotify-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .spotify-auth-hint {
-    margin: 10px 0 0;
-    font-size: 0.85rem;
-    line-height: 1.4;
-    color: #fecaca;
-    max-width: 52ch;
-  }
-
-  .spotify-auth-hint--ok {
-    color: #a7f3d0;
-  }
-
-  .spotify-connect {
-    border: 1px solid rgba(34, 197, 94, 0.35);
-    background: rgba(34, 197, 94, 0.16);
-    color: #dcfce7;
-    border-radius: 999px;
-    padding: 10px 14px;
-    font-weight: 700;
-    cursor: pointer;
-  }
-
-  .spotify-connect:disabled {
-    opacity: 0.65;
-    cursor: progress;
-  }
-
-  .spotify-disconnect {
-    border: 1px solid rgba(248, 113, 113, 0.3);
-    background: rgba(248, 113, 113, 0.12);
-    color: #fecaca;
-    border-radius: 999px;
-    padding: 10px 14px;
-    font-weight: 700;
-    cursor: pointer;
-  }
-
-  .spotify-disconnect:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .spotify-status-card {
-    margin-top: 12px;
-    padding: 14px;
-    border-radius: 14px;
-    background: rgba(15, 23, 42, 0.6);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    user-select: text;
-    -webkit-user-select: text;
-  }
-
-  .spotify-now-playing {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    margin-bottom: 14px;
-  }
-
-  .spotify-cover-art {
-    width: 86px;
-    height: 86px;
-    border-radius: 16px;
-    object-fit: cover;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.24);
-  }
-
-  .spotify-now-playing-meta {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .spotify-playback-state {
-    display: inline-flex;
-    align-self: flex-start;
-    padding: 4px 10px;
-    border-radius: 999px;
-    background: rgba(34, 197, 94, 0.16);
-    color: #bbf7d0;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-size: 0.72rem;
-    font-weight: 800;
-  }
-
-  .spotify-track-title {
-    font-size: 1.08rem;
-    font-weight: 800;
-    color: var(--text-primary);
-  }
-
-  .spotify-track-artist {
-    color: var(--text-secondary);
-    font-size: 0.96rem;
-  }
-
-  .spotify-status-top {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 12px;
-  }
-
-  .spotify-status-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    background: #f59e0b;
-    box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
-  }
-
-  .spotify-status-dot.connected {
-    background: #22c55e;
-    box-shadow: 0 0 10px rgba(34, 197, 94, 0.55);
-  }
-
-  .spotify-status-text {
-    font-size: 0.95rem;
-    color: var(--text-secondary);
-  }
-
-  .spotify-status-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 10px;
-  }
-
-  .spotify-stat {
-    padding: 10px 12px;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.04);
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .spotify-stat-wide {
-    grid-column: 1 / -1;
-  }
-
-  .spotify-stat-label {
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-secondary);
-  }
-
-  .spotify-stat-value {
-    font-size: 0.95rem;
-    color: var(--text-primary);
-    font-weight: 600;
-  }
-
-  .spotify-selectable {
-    user-select: text;
-    -webkit-user-select: text;
-    cursor: text;
-    word-break: break-all;
-  }
-
-  .spotify-artist {
-    margin-top: 10px;
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-  }
-
-  .spotify-scopes {
-    margin-top: 12px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .spotify-scope-pill {
-    font-size: 0.75rem;
-    padding: 5px 9px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.06);
-    color: var(--text-secondary);
-    user-select: text;
-    -webkit-user-select: text;
-  }
-
-  .spotify-scope-pill.muted {
-    opacity: 0.7;
-  }
-
-  .scene-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 14px;
-  }
-
-  .scene-card {
-    appearance: none;
-    border: 1px solid color-mix(in srgb, var(--scene-accent) 38%, var(--border-subtle));
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--scene-accent) 12%, transparent), transparent 55%),
-      var(--bg-surface);
-    border-radius: 16px;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    text-align: left;
-    color: var(--text-primary);
-    cursor: pointer;
-    transition:
-      transform 120ms ease,
-      border-color 120ms ease,
-      box-shadow 120ms ease,
-      background 120ms ease;
-  }
-
-  .scene-card:hover {
-    transform: translateY(-1px);
-    border-color: var(--scene-accent);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
-  }
-
-  .scene-card.active {
-    border-color: var(--scene-accent);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--scene-accent) 55%, transparent),
-      0 10px 30px rgba(0, 0, 0, 0.35);
-  }
-
-  .settings-empty {
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-  }
-
-  .scene-card-top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .scene-name {
-    font-size: 1rem;
-    font-weight: 700;
-  }
-
-  .scene-id {
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: color-mix(in srgb, var(--scene-accent) 78%, white);
-  }
-
-  .scene-description {
-    margin: 0;
-    min-height: 2.6em;
-    font-size: 0.92rem;
-    line-height: 1.4;
-    color: var(--text-secondary);
-  }
-
-  .scene-card-footer {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: auto;
-  }
-
-  .scene-metrics {
-    font-size: 0.78rem;
-    padding: 4px 8px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.06);
-    color: var(--text-secondary);
-  }
-
-  .scene-tag {
-    font-size: 0.72rem;
-    padding: 3px 8px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-weight: 700;
-  }
-
-  .scene-tag.current {
-    background: color-mix(in srgb, var(--scene-accent) 24%, transparent);
-    color: white;
   }
 
   .logs-panel {
