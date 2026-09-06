@@ -13,6 +13,15 @@
   --button-min-size: 120px;
   --transition-fast: 120ms ease;
   --transition-normal: 200ms ease;
+  --settings-page-bg: #eceef2;
+}
+
+html[data-settings-theme="dark"] {
+  --settings-page-bg: #0b0c10;
+}
+
+html[data-settings-theme="light"] {
+  --settings-page-bg: #eceef2;
 }
 
 *,

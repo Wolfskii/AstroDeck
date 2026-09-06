@@ -2114,7 +2114,12 @@
   }
 
   .app.app-settings {
-    background: #eceef2;
+    background: var(--settings-page-bg);
+    color-scheme: light;
+  }
+
+  :global(html[data-settings-theme="dark"]) .app.app-settings {
+    color-scheme: dark;
   }
 
   .app-header {

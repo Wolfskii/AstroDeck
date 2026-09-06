@@ -1,6 +1,8 @@
 import * as THREE from "three";
+import { get } from "svelte/store";
 import type { SceneBackgroundId } from "./sceneBackgrounds";
 import { getOsAudioFrame } from "./osAudioViz";
+import { audioVisualizerEnabled } from "../stores/appearance";
 import {
   setupBokeh,
   setupEmbers,
@@ -561,7 +563,11 @@ export function createThreeBackground(
         scene.fog.color.copy(fogScratch);
       }
     }
-    if (playing) lastBands = getOsAudioFrame()?.bands ?? lastBands;
+    if (playing && get(audioVisualizerEnabled)) {
+      lastBands = getOsAudioFrame()?.bands ?? lastBands;
+    } else {
+      lastBands = null;
+    }
     for (const tick of tickers) tick(dt, animElapsed, colors, 0, playing, lastBands);
     renderer.render(scene, camera);
     raf = requestAnimationFrame(frame);

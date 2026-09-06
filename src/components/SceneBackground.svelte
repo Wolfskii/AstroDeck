@@ -5,6 +5,7 @@
   import { usesCoverImage, usesThreeBackground, type SceneBackgroundId } from "../lib/sceneBackgrounds";
   import { createThreeBackground, type ThreeBackgroundHandle } from "../lib/threeBackground";
   import { acquireOsAudioFrames, releaseOsAudioFrames } from "../lib/osAudioViz";
+  import { audioVisualizerEnabled } from "../stores/appearance";
   import {
     fragmentForStyle,
     lerpPaletteUniforms,
@@ -99,8 +100,20 @@
   });
 
   onMount(() => {
-    acquireOsAudioFrames();
-    return () => releaseOsAudioFrames();
+    let acquired = false;
+    const stop = audioVisualizerEnabled.subscribe((enabled) => {
+      if (enabled && !acquired) {
+        acquireOsAudioFrames();
+        acquired = true;
+      } else if (!enabled && acquired) {
+        releaseOsAudioFrames();
+        acquired = false;
+      }
+    });
+    return () => {
+      stop();
+      if (acquired) releaseOsAudioFrames();
+    };
   });
 
   $effect(() => {

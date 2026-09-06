@@ -424,7 +424,7 @@ export function uniformsForStyle(
         speed: 1,
         uniforms: {
           ...sizing("cover"),
-          u_dithering: 0.0228,
+          u_dithering: 0.01,
           u_speed: 0.48 + rng * 0.42,
           u_seed: 2 + rng * 94,
           u_colorBase: vividRgb(base, 0.4 + rng * 0.1, 0.52),
@@ -473,10 +473,7 @@ export function paletteUniformsForStyle(
   const { uniforms } = uniformsForStyle(style, palette, image);
   const next: ShaderMountUniforms = {};
   for (const [key, value] of Object.entries(uniforms)) {
-    if (
-      !(PALETTE_UNIFORM_KEY.test(key) || key === "u_seed" || key === "u_speed") ||
-      value instanceof HTMLImageElement
-    ) {
+    if (!PALETTE_UNIFORM_KEY.test(key) || value instanceof HTMLImageElement) {
       continue;
     }
     next[key] = value;

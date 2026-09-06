@@ -26,6 +26,8 @@ pub struct AppPreferences {
     pub controls_overlay_custom: Option<bool>,
     #[serde(default)]
     pub audio_visualizer: bool,
+    #[serde(default = "default_settings_theme")]
+    pub settings_theme: String,
     #[serde(default)]
     pub auto_switch_scenes: HashMap<String, bool>,
 }
@@ -43,6 +45,7 @@ impl Default for AppPreferences {
             controls_overlay_color: default_controls_overlay_color(),
             controls_overlay_custom: None,
             audio_visualizer: false,
+            settings_theme: default_settings_theme(),
             auto_switch_scenes: HashMap::new(),
         }
     }
@@ -70,6 +73,17 @@ fn default_controls_transparency() -> u8 {
 
 fn default_controls_overlay_color() -> String {
     "#000000".to_string()
+}
+
+fn default_settings_theme() -> String {
+    "system".to_string()
+}
+
+fn parse_settings_theme(value: &str) -> String {
+    match value {
+        "light" | "dark" | "system" => value.to_string(),
+        _ => default_settings_theme(),
+    }
 }
 
 fn parse_transparency(value: u8) -> u8 {
@@ -358,6 +372,23 @@ pub fn get_audio_visualizer_status(
     app: tauri::AppHandle,
 ) -> Result<crate::audio_viz::AudioVisualizerStatus, String> {
     Ok(crate::audio_viz::status(audio_visualizer_enabled(&app)))
+}
+
+#[tauri::command]
+pub fn get_settings_theme(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(parse_settings_theme(
+        &load_preferences(&preferences_path(&app)?)?.settings_theme,
+    ))
+}
+
+#[tauri::command]
+pub fn set_settings_theme(app: tauri::AppHandle, theme: String) -> Result<String, String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.settings_theme = parse_settings_theme(&theme);
+    save_preferences(&path, &preferences)?;
+    let _ = app.emit("settings-theme-changed", &preferences.settings_theme);
+    Ok(preferences.settings_theme)
 }
 
 #[tauri::command]

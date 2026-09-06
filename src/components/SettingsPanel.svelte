@@ -15,12 +15,16 @@
     persistControlsTransparency,
     persistSceneBackground,
     persistAudioVisualizerEnabled,
+    persistSettingsTheme,
     previewControlsOverlayColor,
     sceneBackgroundId,
     audioVisualizerEnabled,
     audioVisualizerSupported,
     audioVisualizerError,
+    settingsTheme,
+    settingsDark,
   } from "../stores/appearance";
+  import type { SettingsThemeId } from "../services/prefs";
   import type { PluginConfig } from "../types";
   import type { AppUpdateInfo } from "../services/updater";
   import type { SpotifyStatus } from "../services/api";
@@ -131,9 +135,15 @@
   };
 
   const updateBadge = $derived(installableUpdate ? "1" : null);
+
+  const THEME_OPTIONS: { id: SettingsThemeId; label: string }[] = [
+    { id: "system", label: "System" },
+    { id: "light", label: "Light" },
+    { id: "dark", label: "Dark" },
+  ];
 </script>
 
-<div class="settings-shell">
+<div class="settings-shell" class:theme-dark={$settingsDark}>
   <aside class="settings-nav">
     <div class="settings-brand">
       <img class="settings-brand-icon" src={appIconUrl} alt="" />
@@ -314,6 +324,29 @@
         <p class="settings-error">{startupError}</p>
       {/if}
     {:else if activeSection === "appearance"}
+      <div class="settings-card">
+        <div class="setting-row setting-row-theme">
+          <div class="setting-copy">
+            <span class="setting-title">Settings theme</span>
+            <span class="setting-desc">
+              Follow this computer's light or dark mode, or lock Settings to Light or Dark.
+            </span>
+          </div>
+          <div class="theme-seg" role="radiogroup" aria-label="Settings theme">
+            {#each THEME_OPTIONS as option (option.id)}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={$settingsTheme === option.id}
+                class:active={$settingsTheme === option.id}
+                onclick={() => persistSettingsTheme(option.id)}
+              >
+                {option.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+      </div>
       <p class="settings-lead">
         Backgrounds pick colors from the current cover art. They apply to the Spotify player
         first; other views will follow later.
@@ -719,8 +752,45 @@
     --md-sidebar-muted: #a3a3a3;
     --md-sidebar-hover: #1a1a1a;
     --md-sidebar-active: #262626;
+    --md-sidebar-strong: #fff;
     --md-blue: #2563eb;
+    --md-blue-hover: #1d4ed8;
+    --md-blue-soft: rgba(37, 99, 235, 0.16);
     --md-danger: #dc2626;
+    --md-row-hover: #f6f7f9;
+    --md-chip: #e8eaee;
+    --md-chip-hover: #d7dbe3;
+    --md-slider-track: #d5d9e1;
+    --md-slider-fill: #111827;
+    --md-slider-thumb: #fff;
+    --md-slider-thumb-border: #111827;
+    --md-check-border: #9aa3b2;
+    --md-check-border-hover: #64748b;
+    --md-check-bg: #fff;
+    --md-code-bg: #f3f4f6;
+    --md-btn: #c5cad3;
+    --md-btn-hover: #b4bac4;
+    --md-btn-primary: #111111;
+    --md-btn-primary-ink: #fff;
+    --md-btn-primary-hover: #2a2a2a;
+    --md-input-border: #c5cad3;
+    --md-input-border-hover: #9aa3b2;
+    --md-input-bg: #fff;
+    --md-input-disabled: #f8f9fb;
+    --md-error: #b91c1c;
+    --md-ok: #15803d;
+    --md-scene-border: #c5cad3;
+    --md-scene-hover: #f7f8fa;
+    --md-scene-active: #eef0f3;
+    --md-scene-active-hover: #e7eaee;
+    --md-tag-bg: #94a3b8;
+    --md-tag-ink: #0f172a;
+    --md-tag-current: #111111;
+    --md-tag-current-ink: #fff;
+    --md-inset: #f3f4f6;
+    --md-ease: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+      box-shadow 0.15s ease, transform 0.15s ease;
+    color-scheme: light;
     flex: 1 1 auto;
     min-height: 0;
     display: grid;
@@ -729,6 +799,57 @@
     color: var(--md-ink);
     user-select: text;
     -webkit-user-select: text;
+  }
+
+  .settings-shell.theme-dark {
+    --md-bg: #0b0c10;
+    --md-surface: #16171d;
+    --md-ink: #e8e8f0;
+    --md-muted: #a8aec0;
+    --md-line: rgba(255, 255, 255, 0.1);
+    --md-shadow: 0 1px 2px rgba(0, 0, 0, 0.24), 0 14px 40px rgba(0, 0, 0, 0.32);
+    --md-sidebar: #08090c;
+    --md-sidebar-text: #c5c8d4;
+    --md-sidebar-muted: #8b90a0;
+    --md-sidebar-hover: #15161c;
+    --md-sidebar-active: #22232c;
+    --md-sidebar-strong: #fff;
+    --md-blue: #3b82f6;
+    --md-blue-hover: #2563eb;
+    --md-blue-soft: rgba(59, 130, 246, 0.22);
+    --md-danger: #f87171;
+    --md-row-hover: rgba(255, 255, 255, 0.04);
+    --md-chip: #1e1f27;
+    --md-chip-hover: #2a2b35;
+    --md-slider-track: #2a2c36;
+    --md-slider-fill: #e8e8f0;
+    --md-slider-thumb: #111318;
+    --md-slider-thumb-border: #e8e8f0;
+    --md-check-border: #6b7280;
+    --md-check-border-hover: #9ca3af;
+    --md-check-bg: #1a1b22;
+    --md-code-bg: #22232c;
+    --md-btn: #2a2c36;
+    --md-btn-hover: #363846;
+    --md-btn-primary: #e8e8f0;
+    --md-btn-primary-ink: #111318;
+    --md-btn-primary-hover: #f4f4f8;
+    --md-input-border: #3a3d4a;
+    --md-input-border-hover: #525566;
+    --md-input-bg: #1a1b22;
+    --md-input-disabled: #121318;
+    --md-error: #fca5a5;
+    --md-ok: #4ade80;
+    --md-scene-border: #3a3d4a;
+    --md-scene-hover: #1e1f27;
+    --md-scene-active: #25262f;
+    --md-scene-active-hover: #2c2d38;
+    --md-tag-bg: #4b5563;
+    --md-tag-ink: #f8fafc;
+    --md-tag-current: #e8e8f0;
+    --md-tag-current-ink: #111318;
+    --md-inset: #121318;
+    color-scheme: dark;
   }
 
   .settings-nav {
@@ -757,7 +878,7 @@
     display: block;
     font-size: 1rem;
     font-weight: 600;
-    color: #fff;
+    color: var(--md-sidebar-strong);
   }
 
   .settings-brand span {
@@ -798,12 +919,12 @@
 
   .settings-nav-item:hover {
     background: var(--md-sidebar-hover);
-    color: #fff;
+    color: var(--md-sidebar-strong);
   }
 
   .settings-nav-item.active {
     background: var(--md-sidebar-active);
-    color: #fff;
+    color: var(--md-sidebar-strong);
   }
 
   .settings-nav-badge {
@@ -812,7 +933,7 @@
     padding: 1px 6px;
     border-radius: 6px;
     background: var(--md-blue);
-    color: #fff;
+    color: var(--md-sidebar-strong);
     font-size: 0.72rem;
     font-weight: 600;
     text-align: center;
@@ -833,7 +954,7 @@
 
   .settings-back:hover {
     background: var(--md-sidebar-active);
-    color: #fff;
+    color: var(--md-sidebar-strong);
   }
 
   .settings-main {
@@ -866,7 +987,7 @@
     padding: 10px 14px;
     border: none;
     border-radius: 8px;
-    background: #e8eaee;
+    background: var(--md-chip);
     color: var(--md-ink);
     font-weight: 500;
     cursor: pointer;
@@ -874,7 +995,7 @@
   }
 
   .settings-back-inline:hover {
-    background: #d7dbe3;
+    background: var(--md-chip-hover);
   }
 
   .settings-lead {
@@ -915,7 +1036,7 @@
   }
 
   .setting-row:hover:not(:has(input:disabled)) {
-    background: #f6f7f9;
+    background: var(--md-row-hover);
   }
 
   .setting-row + .setting-row {
@@ -945,6 +1066,43 @@
     gap: 16px;
     width: 100%;
     cursor: pointer;
+  }
+
+  .setting-row-theme {
+    flex-wrap: wrap;
+    gap: 14px 18px;
+  }
+
+  .theme-seg {
+    display: flex;
+    flex: 0 0 auto;
+    padding: 4px;
+    border-radius: 10px;
+    background: var(--md-chip);
+    border: 1px solid var(--md-line);
+  }
+
+  .theme-seg button {
+    min-height: 36px;
+    padding: 8px 14px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--md-muted);
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--md-ease);
+  }
+
+  .theme-seg button:hover {
+    color: var(--md-ink);
+  }
+
+  .theme-seg button.active {
+    background: var(--md-surface);
+    color: var(--md-ink);
+    box-shadow: 0 1px 2px rgba(17, 24, 39, 0.12);
   }
 
   .md-slider {
@@ -981,12 +1139,12 @@
 
   .md-slider-track {
     right: 0;
-    background: #d5d9e1;
+    background: var(--md-slider-track);
     box-shadow: inset 0 1px 2px rgba(17, 24, 39, 0.12);
   }
 
   .md-slider-fill {
-    background: #111827;
+    background: var(--md-slider-fill);
   }
 
   .md-slider-ui input[type="range"] {
@@ -1021,8 +1179,8 @@
     height: 22px;
     margin-top: -7px;
     border-radius: 50%;
-    background: #fff;
-    border: 2px solid #111827;
+    background: var(--md-slider-thumb);
+    border: 2px solid var(--md-slider-thumb-border);
     box-shadow: 0 2px 8px rgba(17, 24, 39, 0.22);
   }
 
@@ -1036,8 +1194,8 @@
     width: 22px;
     height: 22px;
     border-radius: 50%;
-    background: #fff;
-    border: 2px solid #111827;
+    background: var(--md-slider-thumb);
+    border: 2px solid var(--md-slider-thumb-border);
     box-shadow: 0 2px 8px rgba(17, 24, 39, 0.22);
   }
 
@@ -1075,7 +1233,7 @@
     font-size: 0.8em;
     padding: 1px 5px;
     border-radius: 4px;
-    background: #f3f4f6;
+    background: var(--md-code-bg);
   }
 
   .setting-row input[type="checkbox"] {
@@ -1092,13 +1250,13 @@
     width: 32px;
     height: 32px;
     border-radius: 8px;
-    border: 2px solid #9aa3b2;
-    background: #fff;
+    border: 2px solid var(--md-check-border);
+    background: var(--md-check-bg);
     transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   }
 
   .setting-row:hover:not(:has(input:disabled)) .md-check {
-    border-color: #64748b;
+    border-color: var(--md-check-border-hover);
     box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
   }
 
@@ -1119,8 +1277,8 @@
   }
 
   .setting-row:hover:not(:has(input:disabled)) input:checked + .md-check {
-    background: #1d4ed8;
-    border-color: #1d4ed8;
+    background: var(--md-blue-hover);
+    border-color: var(--md-blue-hover);
   }
 
   .setting-row input[type="checkbox"]:checked + .md-check::after {
@@ -1145,7 +1303,7 @@
     padding: 12px 18px;
     border-radius: 8px;
     border: none;
-    background: #c5cad3;
+    background: var(--md-btn);
     color: var(--md-ink);
     font-size: 0.95rem;
     font-weight: 500;
@@ -1154,7 +1312,7 @@
   }
 
   .md-btn:hover:not(:disabled) {
-    background: #b4bac4;
+    background: var(--md-btn-hover);
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(17, 24, 39, 0.08);
   }
@@ -1165,23 +1323,24 @@
   }
 
   .md-btn-primary {
-    background: #111111;
-    color: #fff;
+    background: var(--md-btn-primary);
+    color: var(--md-btn-primary-ink);
   }
 
   .md-btn-primary:hover:not(:disabled) {
-    background: #2a2a2a;
+    background: var(--md-btn-primary-hover);
     box-shadow: 0 6px 16px rgba(17, 24, 39, 0.22);
   }
 
   .md-btn-danger {
-    background: #ef4444;
+    background: var(--md-danger);
     color: #fff;
   }
 
   .md-btn-danger:hover:not(:disabled) {
-    background: #dc2626;
+    background: var(--md-danger);
     color: #fff;
+    filter: brightness(1.08);
   }
 
   .md-btn:disabled {
@@ -1196,8 +1355,8 @@
     min-width: 0;
     padding: 12px 14px;
     border-radius: 8px;
-    border: 1px solid #c5cad3;
-    background: #fff;
+    border: 1px solid var(--md-input-border);
+    background: var(--md-input-bg);
     color: var(--md-ink);
     font-size: 0.95rem;
     min-height: 44px;
@@ -1205,18 +1364,18 @@
   }
 
   .md-input:hover:not(:disabled) {
-    border-color: #9aa3b2;
+    border-color: var(--md-input-border-hover);
   }
 
   .md-input:focus {
     outline: none;
     border-color: var(--md-blue);
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+    box-shadow: 0 0 0 3px var(--md-blue-soft);
   }
 
   .md-input:disabled {
     cursor: not-allowed;
-    background: #f8f9fb;
+    background: var(--md-input-disabled);
   }
 
   .settings-field-row,
@@ -1230,7 +1389,7 @@
 
   .settings-error {
     margin: 10px 0 0;
-    color: #b91c1c;
+    color: var(--md-error);
     font-size: 0.9rem;
   }
 
@@ -1242,7 +1401,7 @@
 
   .settings-hint {
     margin: 10px 0 0;
-    color: #b91c1c;
+    color: var(--md-error);
     font-size: 0.88rem;
   }
 
@@ -1259,7 +1418,7 @@
   }
 
   .settings-hint.ok {
-    color: #15803d;
+    color: var(--md-ok);
   }
 
   .update-available {
@@ -1268,11 +1427,11 @@
     margin-top: 16px;
     padding-top: 16px;
     box-shadow: inset 0 1px 0 var(--md-line);
-    --text-primary: #111827;
-    --text-secondary: #1e293b;
-    --bg-primary: #f3f4f6;
-    --border-subtle: rgba(17, 24, 39, 0.08);
-    --accent: #2563eb;
+    --text-primary: var(--md-ink);
+    --text-secondary: var(--md-muted);
+    --bg-primary: var(--md-inset);
+    --border-subtle: var(--md-line);
+    --accent: var(--md-blue);
   }
 
   .spotify-status-line {
@@ -1356,7 +1515,7 @@
     flex-direction: column;
     gap: 8px;
     padding: 18px;
-    border: 1px solid #c5cad3;
+    border: 1px solid var(--md-scene-border);
     border-radius: 10px;
     background: var(--md-surface);
     text-align: left;
@@ -1389,8 +1548,8 @@
   }
 
   .scene-card:hover {
-    background: #f7f8fa;
-    border-color: #9aa3b2;
+    background: var(--md-scene-hover);
+    border-color: var(--md-input-border-hover);
     transform: translateY(-2px);
     box-shadow: 0 8px 20px rgba(17, 24, 39, 0.08);
   }
@@ -1401,12 +1560,12 @@
   }
 
   .scene-card.active {
-    background: #eef0f3;
-    border-color: #9aa3b2;
+    background: var(--md-scene-active);
+    border-color: var(--md-input-border-hover);
   }
 
   .scene-card.active:hover {
-    background: #e7eaee;
+    background: var(--md-scene-active-hover);
   }
 
   .scene-card-top {
@@ -1446,15 +1605,15 @@
     font-size: 0.78rem;
     padding: 7px 14px;
     border-radius: 999px;
-    background: #94a3b8;
-    color: #0f172a;
+    background: var(--md-tag-bg);
+    color: var(--md-tag-ink);
     font-weight: 600;
     line-height: 1.2;
   }
 
   .scene-tag.current {
-    background: #111111;
-    color: #fff;
+    background: var(--md-tag-current);
+    color: var(--md-tag-current-ink);
   }
 
   @media (max-width: 720px) {
@@ -1482,9 +1641,18 @@
     .fact + .fact {
       box-shadow: inset 0 1px 0 var(--md-line);
     }
+
+    .theme-seg {
+      width: 100%;
+    }
+
+    .theme-seg button {
+      flex: 1 1 0;
+    }
   }
 
   .md-btn:focus-visible,
+  .theme-seg button:focus-visible,
   .scene-card:focus-visible,
   .settings-nav-item:focus-visible,
   .settings-back:focus-visible,
@@ -1497,6 +1665,8 @@
     .settings-nav-item,
     .settings-back,
     .settings-back-inline,
+    .theme-seg,
+    .theme-seg button,
     .md-btn,
     .md-input,
     .md-check,

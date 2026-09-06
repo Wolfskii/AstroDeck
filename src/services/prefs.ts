@@ -239,6 +239,40 @@ export async function setAudioVisualizerEmit(emit: boolean): Promise<void> {
   await invoke("set_audio_visualizer_emit", { emit });
 }
 
+export type SettingsThemeId = "system" | "light" | "dark";
+
+export const DEFAULT_SETTINGS_THEME: SettingsThemeId = "system";
+export const SETTINGS_THEME_KEY = "astrodeck:settingsTheme";
+
+export function parseSettingsTheme(value: unknown): SettingsThemeId {
+  if (value === "light" || value === "dark" || value === "system") return value;
+  return DEFAULT_SETTINGS_THEME;
+}
+
+export async function getSettingsTheme(): Promise<SettingsThemeId> {
+  if (!isTauri) {
+    try {
+      return parseSettingsTheme(window.localStorage.getItem(SETTINGS_THEME_KEY));
+    } catch {
+      return DEFAULT_SETTINGS_THEME;
+    }
+  }
+  return parseSettingsTheme(await invoke<string>("get_settings_theme"));
+}
+
+export async function setSettingsTheme(theme: SettingsThemeId): Promise<SettingsThemeId> {
+  const next = parseSettingsTheme(theme);
+  if (!isTauri) {
+    try {
+      window.localStorage.setItem(SETTINGS_THEME_KEY, next);
+    } catch {
+      // ignore
+    }
+    return next;
+  }
+  return parseSettingsTheme(await invoke<string>("set_settings_theme", { theme: next }));
+}
+
 export async function getAutoSwitchScenes(): Promise<Record<string, boolean>> {
   if (!isTauri) return {};
   return invoke<Record<string, boolean>>("get_auto_switch_scenes");

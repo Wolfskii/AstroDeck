@@ -171,7 +171,7 @@ vec3 renderAtmosphericLights(vec3 camOrg, vec3 camDir, float noiseShift) {
   }
 
   float marchStep = traceLen / float(RAY_ITERATIONS);
-  startTrace += marchStep * (noiseShift * 0.25);
+  startTrace += marchStep * (noiseShift * 0.08);
   vec3 currentPos = camOrg + startTrace * camDir;
   float currentDist = startTrace;
   vec3 lightAccum = vec3(0.0);
@@ -236,7 +236,7 @@ void main() {
   mat3 viewTransform = buildCameraFrame(gazePoint, vec3(0.0, 1.0, 0.0));
   sightVec = normalize(viewTransform * sightVec);
 
-  float ditherShift = generateRandomFloat(fragCoord + vec2(u_time * 13.0, u_time * 27.0));
+  float ditherShift = generateRandomFloat(fragCoord);
   vec3 finalOutput = paintBackdrop(sightVec);
 
   float screenY = fragCoord.y / max(res.y, 1.0);
@@ -250,7 +250,7 @@ void main() {
 
   finalOutput = applyToneMapping(finalOutput);
   finalOutput = pow(finalOutput, vec3(0.4545));
-  float cleanNoise = generateRandomFloat(fragCoord + vec2(u_time * 17.0, -u_time * 11.0));
+  float cleanNoise = generateRandomFloat(fragCoord);
   finalOutput += (cleanNoise - 0.5) * u_dithering;
 
   fragColor = vec4(finalOutput, 1.0);

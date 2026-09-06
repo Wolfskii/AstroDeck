@@ -4,6 +4,25 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <title>AstroDeck</title>
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("astrodeck:settingsTheme");
+          var theme = stored === "light" || stored === "dark" ? stored : "system";
+          var dark =
+            theme === "dark" ||
+            (theme !== "light" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.dataset.settingsTheme = dark ? "dark" : "light";
+        } catch (e) {
+          document.documentElement.dataset.settingsTheme =
+            window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="/src/app.css" />
   </head>
   <body>
