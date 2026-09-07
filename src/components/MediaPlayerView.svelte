@@ -126,15 +126,17 @@
     localVolume = volumePercent;
   });
 
-  const PROGRESS_SYNC_SLACK_MS = 2000;
+  const PROGRESS_SYNC_SLACK_MS = 4000;
+  const PROGRESS_SEEK_BACK_MS = 5000;
 
   $effect(() => {
     if (progressDragging || progressMs == null) return;
     const incoming = progressMs;
-    const trackStamp = `${title ?? ""}\0${albumName ?? ""}\0${durationMs ?? 0}`;
+    const trackStamp = `${title ?? ""}\0${albumName ?? ""}`;
     const displayed = untrack(() => playbackDisplayMs);
     const hold = untrack(() => seekHoldMs);
     const previousStamp = untrack(() => progressTrackStamp);
+    const playingNow = untrack(() => isPlaying);
 
     if (previousStamp !== trackStamp) {
       progressTrackStamp = trackStamp;
@@ -156,7 +158,16 @@
       playbackDisplayMs = incoming;
       return;
     }
-    if (Math.abs(incoming - displayed) <= PROGRESS_SYNC_SLACK_MS) return;
+
+    const delta = incoming - displayed;
+    if (playingNow) {
+      if (delta >= PROGRESS_SYNC_SLACK_MS || delta <= -PROGRESS_SEEK_BACK_MS) {
+        playbackDisplayMs = incoming;
+      }
+      return;
+    }
+
+    if (Math.abs(delta) <= PROGRESS_SYNC_SLACK_MS) return;
     playbackDisplayMs = incoming;
   });
 

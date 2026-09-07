@@ -28,6 +28,7 @@
   } = $props();
 
   const PALETTE_FADE_MS = 700;
+  const PLAYING_OFF_DELAY_MS = 350;
 
   let host = $state<HTMLDivElement | null>(null);
 
@@ -65,10 +66,14 @@
     applyPalette: (palette: string[]) => void;
     applyImage: (image: HTMLImageElement) => void;
     setPlaying: (next: boolean) => void;
+    getFrameMs: () => number;
   };
 
   let live: LiveShader | null = null;
   let pendingPalette = [...colors];
+  let animFrameMs = 0;
+  let animStyle: SceneBackgroundId | null = null;
+  let renderPlaying = $state(playing);
 
   $effect(() => {
     pendingPalette = [...colors];
@@ -76,7 +81,18 @@
   });
 
   $effect(() => {
-    const isPlaying = playing;
+    if (playing) {
+      renderPlaying = true;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      renderPlaying = false;
+    }, PLAYING_OFF_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  });
+
+  $effect(() => {
+    const isPlaying = renderPlaying;
     untrack(() => live)?.setPlaying(isPlaying);
   });
 
@@ -116,6 +132,13 @@
     };
   });
 
+  function prepareAnimClock(nextStyle: SceneBackgroundId) {
+    if (animStyle !== nextStyle) {
+      animStyle = nextStyle;
+      animFrameMs = 0;
+    }
+  }
+
   $effect(() => {
     const el = host;
     const currentStyle = style;
@@ -124,19 +147,27 @@
     if (usesThreeBackground(currentStyle)) {
       let three: ThreeBackgroundHandle | null = null;
       try {
-        three = createThreeBackground(el, currentStyle, untrack(() => pendingPalette));
-        three.setPlaying(untrack(() => playing));
+        prepareAnimClock(currentStyle);
+        three = createThreeBackground(
+          el,
+          currentStyle,
+          untrack(() => pendingPalette),
+          animFrameMs / 1000
+        );
+        three.setPlaying(untrack(() => renderPlaying));
         live = {
           style: currentStyle,
           applyPalette: (palette) => three?.applyPalette(palette),
           applyImage: () => {},
           setPlaying: (next) => three?.setPlaying(next),
+          getFrameMs: () => (three ? three.getElapsed() * 1000 : animFrameMs),
         };
       } catch {
         el.replaceChildren();
         live = null;
       }
       return () => {
+        if (three) animFrameMs = three.getElapsed() * 1000;
         if (live?.style === currentStyle) live = null;
         three?.dispose();
       };
@@ -218,20 +249,47 @@
       }
       if (disposed || !el.isConnected) return;
       const alpha = currentStyle === "pulsing-border";
-      let shaderPlaying = untrack(() => playing);
+      prepareAnimClock(currentStyle);
+      let shaderPlaying = untrack(() => renderPlaying);
       try {
+        // Always mount paused: we own u_time so song position / SMTC jitter
+        // cannot rewind or pulse the shader.
         mount = new ShaderMount(
           el,
           fragment,
           uniforms,
           { alpha, premultipliedAlpha: !alpha, antialias: false },
-          shaderPlaying ? speed : 0,
           0,
+          animFrameMs,
           1
         );
       } catch {
         return;
       }
+
+      function applyFluted(tSec: number) {
+        if (currentStyle !== "fluted-glass" || !mount) return;
+        mount.setUniforms({
+          u_shift: Math.sin(tSec * 0.45) * 0.22,
+          u_angle: 10 + Math.sin(tSec * 0.18) * 14,
+        });
+      }
+
+      applyFluted(animFrameMs / 1000);
+
+      let clockLast = performance.now();
+      const tickClock = (now: number) => {
+        if (disposed || !mount) return;
+        const dt = Math.min(50, now - clockLast);
+        clockLast = now;
+        if (shaderPlaying) {
+          animFrameMs += dt * speed;
+          mount.setFrame(animFrameMs);
+          applyFluted(animFrameMs / 1000);
+        }
+        raf = requestAnimationFrame(tickClock);
+      };
+      raf = requestAnimationFrame(tickClock);
 
       live = {
         style: currentStyle,
@@ -239,36 +297,18 @@
         applyImage,
         setPlaying(next) {
           shaderPlaying = next;
-          mount?.setSpeed(next ? speed : 0);
         },
+        getFrameMs: () => (mount ? mount.getCurrentFrame() : animFrameMs),
       };
       const latest = untrack(() => pendingPalette);
       if (!palettesEqual(latest, displayed)) {
         applyPalette(latest);
       }
-
-      if (currentStyle === "fluted-glass") {
-        let t = 0;
-        let last = performance.now();
-        const tick = (now: number) => {
-          if (disposed || !mount) return;
-          const dt = now - last;
-          last = now;
-          if (shaderPlaying) {
-            t += dt / 1000;
-            mount.setUniforms({
-              u_shift: Math.sin(t * 0.45) * 0.22,
-              u_angle: 10 + Math.sin(t * 0.18) * 14,
-            });
-          }
-          raf = requestAnimationFrame(tick);
-        };
-        raf = requestAnimationFrame(tick);
-      }
     })();
 
     return () => {
       disposed = true;
+      if (mount) animFrameMs = mount.getCurrentFrame();
       if (live?.style === currentStyle) live = null;
       cancelAnimationFrame(raf);
       cancelAnimationFrame(lerpRaf);
