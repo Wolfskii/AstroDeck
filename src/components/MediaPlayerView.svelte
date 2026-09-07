@@ -1323,16 +1323,6 @@
     background: transparent;
   }
 
-  .car-thing--shader .car-fader-slot::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: 12px;
-    background: rgba(12, 12, 12, 0.96);
-    z-index: 0;
-    pointer-events: none;
-  }
-
   .car-fader-track-line {
     position: absolute;
     top: var(--fader-thumb-half);
