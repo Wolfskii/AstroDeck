@@ -30,14 +30,38 @@
   ${EndIf}
 !macroend
 
+!macro UninstallQuotedNsis UninstallString InstallLocation
+  ${If} "${UninstallString}" != ""
+    ${If} "${InstallLocation}" != ""
+      ExecWait '${UninstallString} /S _?=${InstallLocation}' $2
+    ${Else}
+      ExecWait '${UninstallString} /S' $2
+    ${EndIf}
+  ${EndIf}
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
-  ; Reuse a previous install directory (AstroDeck or legacy TapTapDeck).
+  ; Remove a previous per-user AppData install so this per-machine setup
+  ; can live in Program Files instead of installing beside it.
+  ReadRegStr $R0 HKCU "${UNINSTKEY}" "UninstallString"
+  ReadRegStr $R1 HKCU "${UNINSTKEY}" "InstallLocation"
+  ${If} $R1 == ""
+    ReadRegStr $R1 HKCU "${MANUPRODUCTKEY}" ""
+  ${EndIf}
+  !insertmacro UninstallQuotedNsis "$R0" "$R1"
+
+  ; Reuse a previous Program Files directory (AstroDeck or legacy TapTapDeck).
+  ; Do not follow AppData\Local paths from the old per-user installer.
   ReadRegStr $R4 SHCTX "${MANUPRODUCTKEY}" ""
   ${If} $R4 == ""
     ReadRegStr $R4 HKCU "Software\taptapdeck\TapTapDeck" ""
   ${EndIf}
   ${If} $R4 != ""
-    StrCpy $INSTDIR $R4
+    StrLen $R7 "$LOCALAPPDATA"
+    StrCpy $R8 $R4 $R7
+    ${If} $R8 != "$LOCALAPPDATA"
+      StrCpy $INSTDIR $R4
+    ${EndIf}
   ${EndIf}
 
   ; Replace legacy TapTapDeck NSIS installs instead of installing side-by-side.
@@ -48,7 +72,6 @@
       ReadRegStr $R1 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TapTapDeck" "InstallLocation"
     ${EndIf}
     ${If} $R1 != ""
-      StrCpy $INSTDIR $R1
       ExecWait '$R0 /S _?=$R1' $2
     ${Else}
       ExecWait '$R0 /S' $2
