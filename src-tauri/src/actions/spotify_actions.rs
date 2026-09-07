@@ -148,85 +148,59 @@ fn handle_unsupported(command: &str) -> Result<(), String> {
 
 /// Handle Spotify-related actions.
 pub fn handle(command: &str, spotify: &crate::spotify::SpotifyState) -> Result<(), String> {
+    match command {
+        "volumeUp" => {
+            let next = crate::spotify::adjust_volume(spotify, 6)?;
+            log::info!("Spotify: set device volume to {}%", next);
+            Ok(())
+        }
+        "volumeDown" => {
+            let next = crate::spotify::adjust_volume(spotify, -6)?;
+            log::info!("Spotify: set device volume to {}%", next);
+            Ok(())
+        }
+        "like" => {
+            log::info!("Spotify: invoking track library toggle");
+            let now_saved = crate::spotify::toggle_current_track_saved(spotify)?;
+            log::info!(
+                "Spotify: current track is now {} the library",
+                if now_saved { "saved to" } else { "removed from" }
+            );
+            Ok(())
+        }
+        "toggleShuffle" => {
+            let next = crate::spotify::toggle_shuffle(spotify)?;
+            log::info!("Spotify: shuffle {}", if next { "on" } else { "off" });
+            Ok(())
+        }
+        "togglePlay" | "nextTrack" | "prevTrack" => {
+            if !crate::spotify::uses_web_api(spotify) {
+                crate::spotify_desktop::handle_transport(spotify, command)?;
+                log::info!("Spotify: {command} via AstroDeck player");
+                return Ok(());
+            }
+            let result = os_media_transport(command);
+            if result.is_ok() {
+                crate::spotify::invalidate_playback_cache(spotify);
+            }
+            result
+        }
+        _ => Err(format!("Unknown Spotify command: {command}")),
+    }
+}
+
+fn os_media_transport(command: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
-        match command {
-            "volumeUp" => {
-                let next = crate::spotify::adjust_volume(spotify, 6)?;
-                log::info!("Spotify: set device volume to {}%", next);
-                return Ok(());
-            }
-            "volumeDown" => {
-                let next = crate::spotify::adjust_volume(spotify, -6)?;
-                log::info!("Spotify: set device volume to {}%", next);
-                return Ok(());
-            }
-            "like" => {
-                log::info!("Spotify: invoking track library toggle");
-                let now_saved = crate::spotify::toggle_current_track_saved(spotify)?;
-                log::info!(
-                    "Spotify: current track is now {} the library",
-                    if now_saved { "saved to" } else { "removed from" }
-                );
-                return Ok(());
-            }
-            "toggleShuffle" => {
-                let next = crate::spotify::toggle_shuffle(spotify)?;
-                log::info!("Spotify: shuffle {}", if next { "on" } else { "off" });
-                return Ok(());
-            }
-            "togglePlay" | "nextTrack" | "prevTrack" => {
-                let result = handle_windows(command);
-                if result.is_ok() {
-                    crate::spotify::invalidate_playback_cache(spotify);
-                }
-                return result;
-            }
-            _ => return handle_windows(command),
-        }
+        return handle_windows(command);
     }
-
     #[cfg(target_os = "macos")]
     {
-        match command {
-            "volumeUp" => {
-                let next = crate::spotify::adjust_volume(spotify, 6)?;
-                log::info!("Spotify: set device volume to {}%", next);
-                return Ok(());
-            }
-            "volumeDown" => {
-                let next = crate::spotify::adjust_volume(spotify, -6)?;
-                log::info!("Spotify: set device volume to {}%", next);
-                return Ok(());
-            }
-            "like" => {
-                log::info!("Spotify: invoking track library toggle");
-                let now_saved = crate::spotify::toggle_current_track_saved(spotify)?;
-                log::info!(
-                    "Spotify: current track is now {} the library",
-                    if now_saved { "saved to" } else { "removed from" }
-                );
-                return Ok(());
-            }
-            "toggleShuffle" => {
-                let next = crate::spotify::toggle_shuffle(spotify)?;
-                log::info!("Spotify: shuffle {}", if next { "on" } else { "off" });
-                return Ok(());
-            }
-            "togglePlay" | "nextTrack" | "prevTrack" => {
-                let result = handle_macos(command);
-                if result.is_ok() {
-                    crate::spotify::invalidate_playback_cache(spotify);
-                }
-                return result;
-            }
-            _ => return handle_macos(command),
-        }
+        return handle_macos(command);
     }
-
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        return handle_unsupported(command);
+        handle_unsupported(command)
     }
 }
 
