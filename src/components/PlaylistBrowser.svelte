@@ -346,7 +346,7 @@
   .playlist-list {
     list-style: none;
     margin: 0;
-    padding: 0;
+    padding: 0 16px 0 0;
     overflow: auto;
     display: flex;
     flex-direction: column;
@@ -354,12 +354,12 @@
     min-height: 0;
     flex: 1 1 auto;
     overscroll-behavior: contain;
-    scrollbar-width: auto;
+    scrollbar-width: thick;
     scrollbar-color: #77808d #242424;
   }
 
   .playlist-list::-webkit-scrollbar {
-    width: 18px;
+    width: 56px;
   }
 
   .playlist-list::-webkit-scrollbar-track {
@@ -369,8 +369,8 @@
   }
 
   .playlist-list::-webkit-scrollbar-thumb {
-    min-height: 72px;
-    border: 4px solid #242424;
+    min-height: 88px;
+    border: 5px solid #242424;
     border-radius: 999px;
     background: #77808d;
   }

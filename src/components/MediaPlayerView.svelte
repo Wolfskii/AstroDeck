@@ -65,7 +65,7 @@
     durationMs = null,
     volumeAction = null,
     seekAction = null,
-    volumePercent = 50,
+    volumePercent = 80,
     volumeBusy = false,
     volumeEnabled = true,
     seekEnabled = true,
@@ -81,7 +81,7 @@
     playlistsEnabled = false,
   }: Props = $props();
 
-  let localVolume = $state(50);
+  let localVolume = $state(80);
   let playbackDisplayMs = $state(0);
   let scrubMs = $state(0);
   let progressDragging = $state(false);
@@ -568,26 +568,64 @@
 
     <section class="car-now-playing" class:car-now-playing--lyrics={lyricsOpen}>
       {#if lyricsOpen}
-        <div class="car-lyrics" aria-live="polite">
-          {#if lyricsBusy}
-            <p class="car-lyrics-status">Loading lyrics…</p>
-          {:else if !lyricsDoc?.available}
-            <p class="car-lyrics-status">{lyricsError ?? "Lyrics aren't available for this track"}</p>
-          {:else}
-            <div class="car-lyrics-stage">
-              {#each lyricWindow as line (line.key)}
-                <p
-                  class="car-lyrics-line"
-                  class:car-lyrics-line--exit={line.role === "exit"}
-                  class:car-lyrics-line--prev={line.role === "prev"}
-                  class:car-lyrics-line--current={line.role === "current"}
-                  class:car-lyrics-line--next={line.role === "next"}
-                >
-                  {line.words}
-                </p>
-              {/each}
+        <div class="car-now-playing-inner car-lyrics-layout">
+          <div class="car-art-column">
+            <div class="car-art-frame" class:car-art-frame--glow={showArtBorder}>
+              {#if showArtBorder}
+                <SceneBackground
+                  style="pulsing-border"
+                  colors={shaderColors}
+                  placement="artwork"
+                  playing={isPlaying}
+                />
+              {/if}
+              <div class="car-art-plate">
+                {#if artShown}
+                  <img class="car-artwork" src={artShown} alt={title ?? "Album art"} />
+                {:else}
+                  <div class="car-artwork car-artwork-placeholder" aria-hidden="true">♪</div>
+                {/if}
+                {#if artIncoming}
+                  <img
+                    class="car-artwork car-artwork-incoming"
+                    class:car-artwork-incoming--in={artIncomingReady}
+                    src={artIncoming}
+                    alt=""
+                    aria-hidden="true"
+                    ontransitionend={settleIncomingArtwork}
+                  />
+                {/if}
+              </div>
             </div>
-          {/if}
+          </div>
+
+          <div class="car-lyrics-column">
+            <div class="car-lyrics-meta">
+              <h2>{title ?? "Nothing playing"}</h2>
+              <p>{subtitle ?? "No artist information"}</p>
+            </div>
+            <div class="car-lyrics" aria-live="polite">
+              {#if lyricsBusy}
+                <p class="car-lyrics-status">Loading lyrics…</p>
+              {:else if !lyricsDoc?.available}
+                <p class="car-lyrics-status">{lyricsError ?? "Lyrics aren't available for this track"}</p>
+              {:else}
+                <div class="car-lyrics-stage">
+                  {#each lyricWindow as line (line.key)}
+                    <p
+                      class="car-lyrics-line"
+                      class:car-lyrics-line--exit={line.role === "exit"}
+                      class:car-lyrics-line--prev={line.role === "prev"}
+                      class:car-lyrics-line--current={line.role === "current"}
+                      class:car-lyrics-line--next={line.role === "next"}
+                    >
+                      {line.words}
+                    </p>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
         </div>
       {:else}
       <div class="car-now-playing-inner">
@@ -977,8 +1015,8 @@
   }
 
   .car-now-playing--lyrics {
-    justify-content: center;
-    padding: 0 20px 28px;
+    justify-content: flex-start;
+    padding: 0 20px 44px clamp(172px, 19vw, 300px);
   }
 
   .car-thing-body--has-icon .car-now-playing--lyrics {
@@ -992,28 +1030,82 @@
     height: 100%;
     display: flex;
     align-items: center;
+    justify-content: flex-start;
+    padding: 0;
+  }
+
+  .car-lyrics-layout {
+    column-gap: 72px;
+  }
+
+  .car-lyrics-column {
+    display: flex;
+    flex-direction: column;
     justify-content: center;
-    padding: 0 8px;
+    min-width: 0;
+    height: 100%;
+    transform: translateY(-10px);
+  }
+
+  .car-lyrics-meta {
+    min-width: 0;
+    margin: 0 0 34px;
+    padding: 0 12px;
+    text-align: left;
+    transform: translateY(-6px);
+  }
+
+  .car-lyrics-meta h2,
+  .car-lyrics-meta p {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .car-lyrics-meta h2 {
+    color: #fff;
+    font-size: clamp(1.35rem, 2.8vw, 2rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+
+  .car-lyrics-meta p {
+    margin-top: 4px;
+    color: rgba(255, 255, 255, 0.78);
+    font-size: clamp(1rem, 2vw, 1.35rem);
+    font-weight: 600;
+  }
+
+  .car-lyrics-column .car-lyrics {
+    height: auto;
+    flex: 0 0 auto;
   }
 
   .car-lyrics-stage {
     position: relative;
-    width: min(52rem, 100%);
-    height: 10rem;
+    width: min(60rem, 100%);
+    display: grid;
+    grid-template-rows: repeat(3, auto);
+    gap: 0.45rem;
+    align-content: center;
+    height: auto;
+    max-height: 100%;
     overflow: hidden;
   }
 
   .car-lyrics-line {
-    position: absolute;
-    left: 0;
-    right: 0;
     margin: 0;
     padding: 0 12px;
-    text-align: center;
-    line-height: 1.25;
+    text-align: left;
+    line-height: 1.15;
     overflow-wrap: break-word;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
     transition:
-      top 0.5s cubic-bezier(0.22, 1, 0.36, 1),
       opacity 0.45s ease,
       color 0.35s ease,
       font-size 0.45s cubic-bezier(0.22, 1, 0.36, 1),
@@ -1021,7 +1113,7 @@
   }
 
   .car-lyrics-line--exit {
-    top: -1.2rem;
+    display: none;
     opacity: 0;
     color: rgba(255, 255, 255, 0.28);
     font-size: clamp(1.05rem, 2.2vw, 1.45rem);
@@ -1030,27 +1122,27 @@
   }
 
   .car-lyrics-line--prev {
-    top: 0.25rem;
-    opacity: 0.42;
+    grid-row: 1;
+    opacity: 0.56;
     color: rgba(232, 232, 232, 0.58);
-    font-size: clamp(1.2rem, 2.8vw, 1.85rem);
+    font-size: clamp(1.15rem, 2.5vw, 1.7rem);
     font-weight: 600;
   }
 
   .car-lyrics-line--current {
-    top: 2.9rem;
+    grid-row: 2;
     opacity: 1;
     color: #fff;
-    font-size: clamp(1.85rem, 4.4vw, 2.85rem);
+    font-size: clamp(1.7rem, 3.5vw, 2.45rem);
     font-weight: 800;
     letter-spacing: -0.02em;
   }
 
   .car-lyrics-line--next {
-    top: 6.6rem;
-    opacity: 0.38;
+    grid-row: 3;
+    opacity: 0.5;
     color: rgba(232, 232, 232, 0.5);
-    font-size: clamp(1.2rem, 2.8vw, 1.85rem);
+    font-size: clamp(1.15rem, 2.5vw, 1.7rem);
     font-weight: 600;
   }
 
@@ -1059,7 +1151,7 @@
     color: rgba(255, 255, 255, 0.62);
     font-size: clamp(1.2rem, 2.4vw, 1.7rem);
     font-weight: 600;
-    text-align: center;
+    text-align: left;
   }
 
   .car-thing-body--has-icon .car-now-playing {
@@ -1397,8 +1489,15 @@
   }
 
   .car-lyrics-icon {
+    width: 48px;
+    height: 48px;
     object-fit: contain;
     filter: brightness(0) invert(1);
+  }
+
+  .car-transport-lyrics-on .car-lyrics-icon {
+    filter: brightness(0) saturate(100%) invert(56%) sepia(91%) saturate(1175%)
+      hue-rotate(94deg) brightness(91%) contrast(82%);
   }
 
   .car-transport-icon-center {
