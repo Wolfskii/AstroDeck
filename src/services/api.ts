@@ -95,6 +95,7 @@ export interface SpotifyStatus {
   grantedScopes?: string[];
   nextTrackPreview?: SpotifyTrackPreview | null;
   prevTrackPreview?: SpotifyTrackPreview | null;
+  usesWebApi?: boolean;
   message: string;
 }
 

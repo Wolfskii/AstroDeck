@@ -7,6 +7,7 @@ mod os_media;
 mod plugin_engine;
 mod prefs;
 mod spotify;
+mod spotify_desktop;
 mod updater;
 mod websocket;
 mod window_prefs;

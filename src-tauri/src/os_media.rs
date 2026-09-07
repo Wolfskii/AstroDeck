@@ -349,6 +349,11 @@ pub fn get_output_volume() -> Result<u8, String> {
     }
 }
 
+pub fn seek_to(position_ms: u64) -> Result<(), String> {
+    control_playback(ControlOp::Seek(position_ms as i64))?;
+    Ok(())
+}
+
 pub fn set_output_volume(percent: u8) -> Result<(), String> {
     #[cfg(windows)]
     {

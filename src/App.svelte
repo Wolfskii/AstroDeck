@@ -1132,7 +1132,8 @@
   }
 
   async function commitSceneVolume(action: string, value: number) {
-    if (action.startsWith("media.")) {
+    const useOsVolume = action.startsWith("media.") || (isSpotifyScene && !usesSpotifyWebApi);
+    if (useOsVolume) {
       osVolumePercent = value;
       osVolumeTarget = value;
       try {
@@ -1304,6 +1305,7 @@
   let loading = $state(true);
   const isSpotifyScene = $derived(sceneId === "spotify");
   const isOsMediaScene = $derived(sceneId === "media");
+  const usesSpotifyWebApi = $derived(spotifyStatus?.usesWebApi === true);
   const mediaPlayerTitle = $derived.by(() => {
     if (isSpotifyScene) {
       return (
@@ -2087,8 +2089,8 @@
           previous={currentMediaView.previous}
           playPause={currentMediaView.playPause}
           next={currentMediaView.next}
-          like={isOsMediaScene ? null : currentMediaView.like}
-          shuffle={isOsMediaScene ? null : currentMediaView.shuffle}
+          like={isOsMediaScene || (isSpotifyScene && !usesSpotifyWebApi) ? null : currentMediaView.like}
+          shuffle={isOsMediaScene || (isSpotifyScene && !usesSpotifyWebApi) ? null : currentMediaView.shuffle}
           shuffleActive={isSpotifyScene ? effectiveSpotifyShuffle : false}
           trackSaved={isSpotifyScene ? effectiveSpotifySaved : null}
           title={mediaPlayerTitle}
@@ -2120,8 +2122,8 @@
               : null}
           volumeAction={currentMediaView.volumeAction}
           seekAction={currentMediaView.seekAction}
-          volumePercent={isOsMediaScene ? osVolumePercent : spotifyVolumePercent}
-          volumeBusy={isOsMediaScene ? osVolumeBusy : spotifyVolumeBusy}
+          volumePercent={isOsMediaScene || (isSpotifyScene && !usesSpotifyWebApi) ? osVolumePercent : spotifyVolumePercent}
+          volumeBusy={isOsMediaScene || (isSpotifyScene && !usesSpotifyWebApi) ? osVolumeBusy : spotifyVolumeBusy}
           volumeEnabled={isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
           seekEnabled={isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
           source={`${sceneId} window`}
