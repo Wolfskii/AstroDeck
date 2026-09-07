@@ -37,7 +37,7 @@ librespot-core = { git = "https://github.com/nolight132/librespot", rev = "e7eb9
 librespot-protocol = { git = "https://github.com/nolight132/librespot", rev = "e7eb953d5848fd97bacd00e6c0e33500765eaa63" }
 librespot-metadata = { git = "https://github.com/nolight132/librespot", rev = "e7eb953d5848fd97bacd00e6c0e33500765eaa63", default-features = false, features = ["rustls-tls-native-roots"] }
 librespot-playback = { git = "https://github.com/nolight132/librespot", rev = "e7eb953d5848fd97bacd00e6c0e33500765eaa63", default-features = false, features = ["rodio-backend", "rustls-tls-native-roots"] }
-librespot-connect = { git = "https://github.com/nolight132/librespot", rev = "e7eb953d5848fd97bacd00e6c0e33500765eaa63", default-features = false, features = ["rustls-tls-native-roots"] }
+http = "1.3"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

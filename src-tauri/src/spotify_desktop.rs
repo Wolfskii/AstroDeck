@@ -1,15 +1,17 @@
-use librespot_connect::{ConnectConfig, LoadRequest, LoadRequestOptions, Spirc};
+use http::Method;
 use librespot_core::authentication::Credentials;
 use librespot_core::cache::Cache;
-use librespot_core::config::{DeviceType, SessionConfig};
+use librespot_core::config::SessionConfig;
 use librespot_core::session::Session;
+use librespot_core::{SpotifyId, SpotifyUri};
 use librespot_metadata::audio::UniqueFields;
 use librespot_playback::audio_backend;
 use librespot_playback::config::{AudioFormat, PlayerConfig, VolumeCtrl};
-use librespot_playback::mixer::{self, MixerConfig};
+use librespot_playback::mixer::{self, Mixer, MixerConfig};
 use librespot_playback::player::{Player, PlayerEvent};
 use librespot_protocol::playlist4_external::SelectedListContent;
 use protobuf::Message;
+use rand::seq::SliceRandom;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -22,8 +24,10 @@ use crate::spotify::{
 };
 
 const ROOTLIST_LIMIT: usize = 500;
+const PLAYLIST_PAGE: usize = 200;
 const IMAGE_CDN: &str = "https://i.scdn.co/image/";
 pub const OFFICIAL_DEVICE_NAME: &str = "AstroDeck";
+const PREV_RESTART_MS: u64 = 3_000;
 
 fn runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -74,10 +78,90 @@ impl Default for OfficialPlayback {
     }
 }
 
+#[derive(Clone, Default)]
+pub struct PlayQueue {
+    tracks: Vec<SpotifyUri>,
+    order: Vec<usize>,
+    position: usize,
+}
+
+impl PlayQueue {
+    fn replace(&mut self, tracks: Vec<SpotifyUri>, shuffle: bool) {
+        self.tracks = tracks;
+        self.order = (0..self.tracks.len()).collect();
+        self.position = 0;
+        if shuffle {
+            self.shuffle_rest();
+        }
+    }
+
+    fn current(&self) -> Option<&SpotifyUri> {
+        let index = *self.order.get(self.position)?;
+        self.tracks.get(index)
+    }
+
+    fn matches_current(&self, uri: &SpotifyUri) -> bool {
+        self.current() == Some(uri)
+    }
+
+    fn peek_next(&self) -> Option<&SpotifyUri> {
+        let index = *self.order.get(self.position + 1)?;
+        self.tracks.get(index)
+    }
+
+    fn advance(&mut self) -> Option<&SpotifyUri> {
+        if self.position + 1 >= self.order.len() {
+            return None;
+        }
+        self.position += 1;
+        self.current()
+    }
+
+    fn step_next(&mut self) -> Option<&SpotifyUri> {
+        self.advance()
+    }
+
+    fn step_prev(&mut self) -> Option<&SpotifyUri> {
+        if self.position == 0 {
+            return self.current();
+        }
+        self.position -= 1;
+        self.current()
+    }
+
+    fn set_shuffle(&mut self, shuffle: bool) {
+        let current = self.current().cloned();
+        self.order = (0..self.tracks.len()).collect();
+        if let Some(current) = current {
+            if let Some(index) = self.tracks.iter().position(|track| track == &current) {
+                self.position = index;
+            }
+        }
+        if shuffle {
+            self.shuffle_rest();
+        }
+    }
+
+    fn shuffle_rest(&mut self) {
+        if self.position + 1 >= self.order.len() {
+            return;
+        }
+        self.order[self.position + 1..].shuffle(&mut rand::thread_rng());
+    }
+}
+
 pub fn drop_session(spotify: &SpotifyState) {
-    shutdown_player(spotify);
+    let player = take_player(spotify);
+    let _mixer = take_mixer(spotify);
+    if let Ok(mut queue) = spotify.desktop_queue.lock() {
+        *queue = PlayQueue::default();
+    }
+    drop(player);
     if let Ok(mut guard) = spotify.desktop_session.lock() {
         *guard = None;
+    }
+    if let Ok(mut playback) = spotify.desktop_playback.lock() {
+        *playback = OfficialPlayback::default();
     }
 }
 
@@ -101,7 +185,8 @@ pub fn ensure_session(spotify: &SpotifyState) -> Result<Session, String> {
         }
         *guard = None;
     }
-    shutdown_player(spotify);
+    let _ = take_player(spotify);
+    let _ = take_mixer(spotify);
 
     let cache = open_cache(spotify);
     if let Some(stored) = cache.as_ref().and_then(|cache| cache.credentials()) {
@@ -130,54 +215,33 @@ fn player_start_lock() -> &'static Mutex<()> {
 
 pub fn ensure_player(spotify: &SpotifyState) -> Result<(), String> {
     let _start = player_start_lock().lock().map_err(|e| e.to_string())?;
-    {
-        let session_ok = spotify
-            .desktop_session
-            .lock()
-            .ok()
-            .and_then(|guard| guard.as_ref().map(|session| !session.is_invalid()))
-            .unwrap_or(false);
-        let spirc_ok = spotify
-            .desktop_spirc
-            .lock()
-            .ok()
-            .map(|guard| guard.is_some())
-            .unwrap_or(false);
-        if session_ok && spirc_ok {
-            return Ok(());
-        }
+    if session_is_live(spotify) && player_is_live(spotify) {
+        mark_player_ready(spotify);
+        return Ok(());
     }
 
-    // Spirc::new calls Session::connect itself. Reusing a session that playlist
-    // listing already connected aborts with "request was already handled".
-    drop_session(spotify);
-    let playback = spotify.desktop_playback.clone();
-    let (spirc, session) = start_player_session(spotify, playback)?;
-    store_session(spotify, session);
-    *spotify.desktop_spirc.lock().map_err(|e| e.to_string())? = Some(spirc);
-    if let Ok(mut playback) = spotify.desktop_playback.lock() {
-        playback.player_ready = true;
+    if !session_is_live(spotify) {
+        let player = take_player(spotify);
+        let _mixer = take_mixer(spotify);
+        drop(player);
     }
+
+    let session = ensure_session(spotify)?;
+    if player_is_live(spotify) {
+        mark_player_ready(spotify);
+        return Ok(());
+    }
+
+    let volume_percent = spotify
+        .desktop_playback
+        .lock()
+        .map(|playback| playback.volume_percent)
+        .unwrap_or(50);
+    let (player, mixer) = start_player(session, spotify, volume_percent)?;
+    *spotify.desktop_player.lock().map_err(|e| e.to_string())? = Some(player);
+    *spotify.desktop_mixer.lock().map_err(|e| e.to_string())? = Some(mixer);
+    mark_player_ready(spotify);
     Ok(())
-}
-
-fn start_player_session(
-    spotify: &SpotifyState,
-    playback: Arc<Mutex<OfficialPlayback>>,
-) -> Result<(Spirc, Session), String> {
-    let cache = open_cache(spotify);
-    let credentials = player_credentials(spotify, cache.as_ref())?;
-    match start_spirc(credentials, cache, playback.clone()) {
-        Ok(started) => Ok(started),
-        Err(err) if is_double_connect_error(&err) => {
-            log::warn!("Spotify player hit a connected session; retrying with a fresh login: {err}");
-            drop_session(spotify);
-            let cache = open_cache(spotify);
-            let credentials = player_credentials(spotify, cache.as_ref())?;
-            start_spirc(credentials, cache, playback)
-        }
-        Err(err) => Err(err),
-    }
 }
 
 pub fn playback_snapshot(spotify: &SpotifyState) -> OfficialPlayback {
@@ -198,31 +262,49 @@ pub fn should_show_spotify_scene(spotify: &SpotifyState) -> bool {
 
 pub fn play_context_uri(spotify: &SpotifyState, context_uri: &str) -> Result<(), String> {
     ensure_player(spotify)?;
-    with_spirc(spotify, |spirc| {
-        spirc.activate().map_err(player_command_error)?;
-        spirc
-            .load(LoadRequest::from_context_uri(
-                context_uri.to_string(),
-                LoadRequestOptions {
-                    start_playing: true,
-                    ..LoadRequestOptions::default()
-                },
-            ))
-            .map_err(player_command_error)?;
-        spirc.play().map_err(player_command_error)
-    })?;
+    let session = ensure_session(spotify)?;
+    let tracks = fetch_context_tracks(&session, context_uri)?;
+    if tracks.is_empty() {
+        return Err("This playlist has no playable tracks.".to_string());
+    }
+
+    let shuffle = spotify
+        .desktop_playback
+        .lock()
+        .map(|playback| playback.shuffle)
+        .unwrap_or(false);
+    {
+        let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+        queue.replace(tracks, shuffle);
+    }
+
+    load_current(spotify, true)?;
     log::info!("Spotify desktop: streaming {context_uri} in AstroDeck");
     Ok(())
 }
 
 pub fn handle_transport(spotify: &SpotifyState, command: &str) -> Result<(), String> {
     ensure_player(spotify)?;
-    with_spirc(spotify, |spirc| match command {
-        "togglePlay" => spirc.play_pause().map_err(player_command_error),
-        "nextTrack" => spirc.next().map_err(player_command_error),
-        "prevTrack" => spirc.prev().map_err(player_command_error),
+    match command {
+        "togglePlay" => {
+            let playing = spotify
+                .desktop_playback
+                .lock()
+                .map(|playback| playback.is_playing)
+                .unwrap_or(false);
+            with_player(spotify, |player| {
+                if playing {
+                    player.pause();
+                } else {
+                    player.play();
+                }
+                Ok(())
+            })
+        }
+        "nextTrack" => play_next(spotify),
+        "prevTrack" => play_prev(spotify),
         other => Err(format!("Unknown Spotify player command: {other}")),
-    })
+    }
 }
 
 pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
@@ -231,23 +313,27 @@ pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
         let playback = spotify.desktop_playback.lock().map_err(|e| e.to_string())?;
         !playback.shuffle
     };
-    with_spirc(spotify, |spirc| {
-        spirc.shuffle(next).map_err(player_command_error)
-    })?;
+    {
+        let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+        queue.set_shuffle(next);
+    }
     if let Ok(mut playback) = spotify.desktop_playback.lock() {
         playback.shuffle = next;
     }
+    preload_next(spotify);
     Ok(next)
 }
 
 pub fn set_volume(spotify: &SpotifyState, volume_percent: u8) -> Result<u8, String> {
     ensure_player(spotify)?;
     let volume_percent = volume_percent.min(100);
-    with_spirc(spotify, |spirc| {
-        spirc
-            .set_volume(percent_to_volume(volume_percent))
-            .map_err(player_command_error)
-    })?;
+    let mixer = {
+        let guard = spotify.desktop_mixer.lock().map_err(|e| e.to_string())?;
+        guard
+            .clone()
+            .ok_or_else(|| "Spotify player is not running in AstroDeck".to_string())?
+    };
+    mixer.set_volume(percent_to_volume(volume_percent));
     if let Ok(mut playback) = spotify.desktop_playback.lock() {
         playback.volume_percent = volume_percent;
     }
@@ -266,8 +352,9 @@ pub fn adjust_volume(spotify: &SpotifyState, delta: i32) -> Result<u8, String> {
 pub fn seek(spotify: &SpotifyState, position_ms: u64) -> Result<(), String> {
     ensure_player(spotify)?;
     let position = u32::try_from(position_ms).unwrap_or(u32::MAX);
-    with_spirc(spotify, |spirc| {
-        spirc.set_position_ms(position).map_err(player_command_error)
+    with_player(spotify, |player| {
+        player.seek(position);
+        Ok(())
     })?;
     if let Ok(mut playback) = spotify.desktop_playback.lock() {
         playback.progress_ms = Some(position_ms);
@@ -276,14 +363,43 @@ pub fn seek(spotify: &SpotifyState, position_ms: u64) -> Result<(), String> {
     Ok(())
 }
 
-fn shutdown_player(spotify: &SpotifyState) {
-    if let Ok(mut guard) = spotify.desktop_spirc.lock() {
-        if let Some(spirc) = guard.take() {
-            let _ = spirc.shutdown();
-        }
-    }
+fn take_player(spotify: &SpotifyState) -> Option<Arc<Player>> {
+    spotify
+        .desktop_player
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.take())
+}
+
+fn take_mixer(spotify: &SpotifyState) -> Option<Arc<dyn Mixer>> {
+    spotify
+        .desktop_mixer
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.take())
+}
+
+fn session_is_live(spotify: &SpotifyState) -> bool {
+    spotify
+        .desktop_session
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|session| !session.is_invalid()))
+        .unwrap_or(false)
+}
+
+fn player_is_live(spotify: &SpotifyState) -> bool {
+    spotify
+        .desktop_player
+        .lock()
+        .ok()
+        .map(|guard| guard.as_ref().map(|player| !player.is_invalid()).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+fn mark_player_ready(spotify: &SpotifyState) {
     if let Ok(mut playback) = spotify.desktop_playback.lock() {
-        *playback = OfficialPlayback::default();
+        playback.player_ready = true;
     }
 }
 
@@ -338,79 +454,141 @@ fn connect_session(credentials: Credentials, cache: Option<Cache>) -> Result<Ses
     })
 }
 
-fn player_credentials(
+fn start_player(
+    session: Session,
     spotify: &SpotifyState,
-    cache: Option<&Cache>,
-) -> Result<Credentials, String> {
-    if let Some(stored) = cache.and_then(|cache| cache.credentials()) {
-        return Ok(stored);
-    }
-    if token_has_streaming_scope(spotify)? == Some(false) {
-        return Err(reconnect_for_desktop_session_error());
-    }
-    Ok(Credentials::with_access_token(get_access_token(spotify)?))
-}
+    volume_percent: u8,
+) -> Result<(Arc<Player>, Arc<dyn Mixer>), String> {
+    let mixer_builder = mixer::find(None).ok_or_else(|| "Spotify audio mixer is unavailable".to_string())?;
+    let mixer = mixer_builder(MixerConfig::default())
+        .map_err(|e| format!("Spotify mixer failed: {e}"))?;
+    mixer.set_volume(percent_to_volume(volume_percent));
 
-fn start_spirc(
-    credentials: Credentials,
-    cache: Option<Cache>,
-    playback: Arc<Mutex<OfficialPlayback>>,
-) -> Result<(Spirc, Session), String> {
-    runtime().block_on(async {
-        // Must be unconnected: Spirc::new logs in. play_connect.rs does the same.
-        let session = Session::new(session_config(), cache);
+    let sink_builder = audio_backend::find(None)
+        .ok_or_else(|| "Spotify audio output is unavailable".to_string())?;
+    let audio_format = AudioFormat::default();
+    let mut player_config = PlayerConfig::default();
+    player_config.position_update_interval = Some(Duration::from_secs(1));
 
-        let mixer_builder = mixer::find(None)
-            .ok_or_else(|| "Spotify audio mixer is unavailable".to_string())?;
-        let mixer = mixer_builder(MixerConfig::default())
-            .map_err(|e| format!("Spotify mixer failed: {e}"))?;
+    let player = Player::new(
+        player_config,
+        session,
+        mixer.get_soft_volume(),
+        move || sink_builder(None, audio_format),
+    );
+    let mut events = player.get_player_event_channel();
+    let playback = spotify.desktop_playback.clone();
+    let queue = spotify.desktop_queue.clone();
+    let player_slot = spotify.desktop_player.clone();
 
-        let sink_builder = audio_backend::find(None)
-            .ok_or_else(|| "Spotify audio output is unavailable".to_string())?;
-        let audio_format = AudioFormat::default();
-        let mut player_config = PlayerConfig::default();
-        player_config.position_update_interval = Some(Duration::from_secs(1));
-
-        let player = Player::new(
-            player_config,
-            session.clone(),
-            mixer.get_soft_volume(),
-            move || sink_builder(None, audio_format),
-        );
-        let mut events = player.get_player_event_channel();
-
-        let connect_config = ConnectConfig {
-            name: OFFICIAL_DEVICE_NAME.to_string(),
-            device_type: DeviceType::Computer,
-            ..ConnectConfig::default()
-        };
-
-        let (spirc, spirc_task) =
-            Spirc::new(connect_config, session.clone(), credentials, player, mixer)
-                .await
-                .map_err(player_start_error)?;
-
-        tokio::spawn(spirc_task);
-        tokio::spawn(async move {
-            while let Some(event) = events.recv().await {
-                apply_player_event(&playback, event);
+    runtime().spawn(async move {
+        while let Some(event) = events.recv().await {
+            let finished = match &event {
+                PlayerEvent::EndOfTrack { track_id, .. }
+                | PlayerEvent::Unavailable { track_id, .. } => Some(track_id.clone()),
+                _ => None,
+            };
+            apply_player_event(&playback, event);
+            if let Some(track_id) = finished {
+                continue_if_current(&player_slot, &queue, &track_id);
             }
-        });
+        }
+    });
 
-        spirc.activate().map_err(player_command_error)?;
-        Ok((spirc, session))
-    })
+    Ok((player, mixer))
 }
 
-fn with_spirc<R>(
+fn with_player<R>(
     spotify: &SpotifyState,
-    f: impl FnOnce(&Spirc) -> Result<R, String>,
+    f: impl FnOnce(&Player) -> Result<R, String>,
 ) -> Result<R, String> {
-    let guard = spotify.desktop_spirc.lock().map_err(|e| e.to_string())?;
-    let spirc = guard
+    let guard = spotify.desktop_player.lock().map_err(|e| e.to_string())?;
+    let player = guard
         .as_ref()
         .ok_or_else(|| "Spotify player is not running in AstroDeck".to_string())?;
-    f(spirc)
+    f(player)
+}
+
+fn load_current(spotify: &SpotifyState, start_playing: bool) -> Result<(), String> {
+    let uri = {
+        let queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+        queue
+            .current()
+            .cloned()
+            .ok_or_else(|| "Spotify queue is empty".to_string())?
+    };
+    with_player(spotify, |player| {
+        player.load(uri, start_playing, 0);
+        Ok(())
+    })?;
+    preload_next(spotify);
+    Ok(())
+}
+
+fn preload_next(spotify: &SpotifyState) {
+    let Some(uri) = spotify
+        .desktop_queue
+        .lock()
+        .ok()
+        .and_then(|queue| queue.peek_next().cloned())
+    else {
+        return;
+    };
+    let _ = with_player(spotify, |player| {
+        player.preload(uri);
+        Ok(())
+    });
+}
+
+fn play_next(spotify: &SpotifyState) -> Result<(), String> {
+    {
+        let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+        if queue.step_next().is_none() {
+            return Ok(());
+        }
+    }
+    load_current(spotify, true)
+}
+
+fn play_prev(spotify: &SpotifyState) -> Result<(), String> {
+    let progress = interpolated_progress(&playback_snapshot(spotify)).unwrap_or(0);
+    if progress > PREV_RESTART_MS {
+        return seek(spotify, 0);
+    }
+    {
+        let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+        queue.step_prev();
+    }
+    load_current(spotify, true)
+}
+
+fn continue_if_current(
+    player_slot: &Mutex<Option<Arc<Player>>>,
+    queue: &Mutex<PlayQueue>,
+    ended: &SpotifyUri,
+) {
+    let next = {
+        let Ok(mut queue) = queue.lock() else {
+            return;
+        };
+        if !queue.matches_current(ended) {
+            return;
+        }
+        queue.advance().cloned()
+    };
+    let Some(next) = next else {
+        return;
+    };
+    let Ok(guard) = player_slot.lock() else {
+        return;
+    };
+    let Some(player) = guard.as_ref() else {
+        return;
+    };
+    player.load(next, true, 0);
+    if let Some(following) = queue.lock().ok().and_then(|queue| queue.peek_next().cloned()) {
+        player.preload(following);
+    }
 }
 
 fn apply_player_event(playback: &Mutex<OfficialPlayback>, event: PlayerEvent) {
@@ -443,7 +621,7 @@ fn apply_player_event(playback: &Mutex<OfficialPlayback>, event: PlayerEvent) {
         PlayerEvent::PositionChanged { position_ms, .. } => {
             set_progress(&mut playback, position_ms);
         }
-        PlayerEvent::Stopped { .. } => {
+        PlayerEvent::Stopped { .. } | PlayerEvent::EndOfTrack { .. } => {
             playback.is_playing = false;
         }
         PlayerEvent::VolumeChanged { volume } => {
@@ -454,6 +632,9 @@ fn apply_player_event(playback: &Mutex<OfficialPlayback>, event: PlayerEvent) {
         }
         PlayerEvent::Unavailable { track_id, denied, .. } => {
             log::warn!("Spotify track unavailable ({track_id:?}, denied={denied})");
+            if denied {
+                playback.is_playing = false;
+            }
         }
         _ => {}
     }
@@ -525,11 +706,6 @@ fn desktop_session_login_error(err: String) -> String {
     }
 }
 
-fn is_double_connect_error(err: &str) -> bool {
-    let lower = err.to_ascii_lowercase();
-    lower.contains("already handled") || lower.contains("already connected")
-}
-
 fn player_start_error(err: impl std::fmt::Display) -> String {
     let message = err.to_string();
     let lower = message.to_ascii_lowercase();
@@ -541,10 +717,6 @@ fn player_start_error(err: impl std::fmt::Display) -> String {
     } else {
         format!("Spotify player failed to start: {message}")
     }
-}
-
-fn player_command_error(err: impl std::fmt::Display) -> String {
-    format!("Spotify player command failed: {err}")
 }
 
 pub fn list_playlists(
@@ -570,6 +742,58 @@ pub fn list_playlists(
             })
         }
     }
+}
+
+fn fetch_context_tracks(session: &Session, context_uri: &str) -> Result<Vec<SpotifyUri>, String> {
+    let playlist_id = context_uri
+        .strip_prefix("spotify:playlist:")
+        .ok_or_else(|| format!("Unsupported Spotify context: {context_uri}"))?;
+    let playlist_id = SpotifyId::from_base62(playlist_id)
+        .map_err(|e| format!("Spotify playlist id is invalid: {e}"))?;
+
+    runtime().block_on(async {
+        let mut tracks = Vec::new();
+        let mut from = 0usize;
+        loop {
+            let endpoint = format!(
+                "/playlist/v2/playlist/{}?from={from}&length={PLAYLIST_PAGE}",
+                playlist_id
+                    .to_base62()
+                    .map_err(|e| format!("Spotify playlist id is invalid: {e}"))?
+            );
+            let body = tokio::time::timeout(
+                Duration::from_secs(20),
+                session
+                    .spclient()
+                    .request(&Method::GET, &endpoint, None, None),
+            )
+            .await
+            .map_err(|_| "Spotify playlist timed out".to_string())?
+            .map_err(|e| format!("Spotify playlist could not be loaded: {e}"))?;
+
+            let content = SelectedListContent::parse_from_bytes(&body)
+                .map_err(|e| format!("Spotify playlist could not be decoded: {e}"))?;
+            let Some(contents) = content.contents.as_ref() else {
+                break;
+            };
+            let page_len = contents.items.len();
+            for item in &contents.items {
+                let uri = item.uri();
+                if !uri.starts_with("spotify:track:") {
+                    continue;
+                }
+                match SpotifyUri::from_uri(uri) {
+                    Ok(parsed) => tracks.push(parsed),
+                    Err(err) => log::debug!("Skipping unreadable playlist item {uri}: {err}"),
+                }
+            }
+            if page_len == 0 || !contents.truncated() {
+                break;
+            }
+            from += page_len;
+        }
+        Ok(tracks)
+    })
 }
 
 fn fetch_rootlist_page(
@@ -691,6 +915,16 @@ fn image_url(file_id: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn track(n: u8) -> SpotifyUri {
+        let ids = [
+            "4uLU6hMCjMI75M1A2tKUQC",
+            "0VjIjW4GlUZAMYd2vXMi3b",
+            "7qiZfU4dY1lWllzX7mPBI3",
+        ];
+        let id = ids[(n.saturating_sub(1) as usize).min(ids.len() - 1)];
+        SpotifyUri::from_uri(&format!("spotify:track:{id}")).expect("track uri")
+    }
+
     #[test]
     fn bad_credentials_asks_to_reconnect() {
         let message = desktop_session_login_error(
@@ -733,10 +967,21 @@ mod tests {
     }
 
     #[test]
-    fn already_handled_is_a_double_connect() {
-        assert!(is_double_connect_error(
-            "Spotify player failed to start: Operation aborted { request was already handled }"
-        ));
-        assert!(!is_double_connect_error("Spotify mixer failed"));
+    fn queue_advances_only_for_the_current_track() {
+        let mut queue = PlayQueue::default();
+        queue.replace(vec![track(1), track(2), track(3)], false);
+        assert!(queue.matches_current(&track(1)));
+        assert_eq!(queue.advance(), Some(&track(2)));
+        assert!(!queue.matches_current(&track(1)));
+        assert!(queue.matches_current(&track(2)));
+    }
+
+    #[test]
+    fn queue_prev_stays_on_first_track() {
+        let mut queue = PlayQueue::default();
+        queue.replace(vec![track(1), track(2)], false);
+        assert_eq!(queue.step_prev(), Some(&track(1)));
+        assert_eq!(queue.step_next(), Some(&track(2)));
+        assert_eq!(queue.step_prev(), Some(&track(1)));
     }
 }

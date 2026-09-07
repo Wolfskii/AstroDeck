@@ -138,7 +138,9 @@ pub struct SpotifyState {
     playlist_fetch: Mutex<()>,
     playback_history: Mutex<PlaybackHistory>,
     pub(crate) desktop_session: Mutex<Option<librespot_core::session::Session>>,
-    pub(crate) desktop_spirc: Mutex<Option<librespot_connect::Spirc>>,
+    pub(crate) desktop_player: Arc<Mutex<Option<Arc<librespot_playback::player::Player>>>>,
+    pub(crate) desktop_mixer: Mutex<Option<Arc<dyn librespot_playback::mixer::Mixer>>>,
+    pub(crate) desktop_queue: Arc<Mutex<crate::spotify_desktop::PlayQueue>>,
     pub(crate) desktop_playback: Arc<Mutex<crate::spotify_desktop::OfficialPlayback>>,
 }
 
@@ -1608,11 +1610,8 @@ pub fn complete_auth_via_callback(spotify: &SpotifyState) -> Result<(), String> 
         }
     } else {
         crate::spotify_desktop::clear_credentials(spotify);
-        if let Err(err) = crate::spotify_desktop::ensure_player(spotify) {
-            log::info!("Spotify player after login skipped: {err}");
-            if let Err(err) = crate::spotify_desktop::ensure_session(spotify) {
-                log::info!("Spotify desktop session after login skipped: {err}");
-            }
+        if let Err(err) = crate::spotify_desktop::ensure_session(spotify) {
+            log::info!("Spotify desktop session after login skipped: {err}");
         }
         if let Err(err) = crate::spotify_desktop::list_playlists(spotify, 0, 50) {
             log::info!("Spotify desktop playlist cache warm after login skipped: {err}");
