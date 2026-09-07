@@ -1,4 +1,5 @@
-use http::Method;
+use http::header::{HeaderValue, CONTENT_TYPE};
+use http::{HeaderMap, Method};
 use librespot_core::authentication::Credentials;
 use librespot_core::cache::Cache;
 use librespot_core::config::SessionConfig;
@@ -12,10 +13,12 @@ use librespot_playback::player::{Player, PlayerEvent};
 use librespot_protocol::playlist4_external::SelectedListContent;
 use protobuf::Message;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::Manager;
 use tokio::runtime::Runtime;
 
 use crate::spotify::{
@@ -28,6 +31,9 @@ const PLAYLIST_PAGE: usize = 200;
 const IMAGE_CDN: &str = "https://i.scdn.co/image/";
 pub const OFFICIAL_DEVICE_NAME: &str = "AstroDeck";
 const PREV_RESTART_MS: u64 = 3_000;
+const METADATA_WAIT: Duration = Duration::from_millis(2_000);
+const COLLECTION_SET: &str = "collection";
+const COLLECTION_CONTENT_TYPE: &str = "application/vnd.collection-v2.spotify.proto";
 
 fn runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -56,6 +62,7 @@ pub struct OfficialPlayback {
     pub volume_percent: u8,
     pub shuffle: bool,
     pub player_ready: bool,
+    pub metadata_epoch: u64,
 }
 
 impl Default for OfficialPlayback {
@@ -74,6 +81,7 @@ impl Default for OfficialPlayback {
             volume_percent: 50,
             shuffle: false,
             player_ready: false,
+            metadata_epoch: 0,
         }
     }
 }
@@ -278,9 +286,47 @@ pub fn play_context_uri(spotify: &SpotifyState, context_uri: &str) -> Result<(),
         queue.replace(tracks, shuffle);
     }
 
+    let epoch = playback_snapshot(spotify).metadata_epoch;
     load_current(spotify, true)?;
+    wait_for_metadata(spotify, epoch);
+    crate::spotify::publish_status(spotify);
     log::info!("Spotify desktop: streaming {context_uri} in AstroDeck");
     Ok(())
+}
+
+pub fn set_track_saved(
+    spotify: &SpotifyState,
+    track_id: &str,
+    saved: bool,
+) -> Result<(), String> {
+    let session = ensure_session(spotify)?;
+    let username = session.username();
+    if username.trim().is_empty() {
+        return Err("Spotify liked-songs collection is not ready yet.".to_string());
+    }
+    let uri = format!("spotify:track:{track_id}");
+    let added_at = if saved { unix_now_i32() } else { 0 };
+    let body = encode_collection_write(
+        &username,
+        &uri,
+        saved,
+        added_at,
+        &random_client_update_id(),
+    );
+    collection_post(&session, "/collection/v2/write", &body)?;
+    Ok(())
+}
+
+pub fn is_track_saved(spotify: &SpotifyState, track_id: &str) -> Result<Option<bool>, String> {
+    let session = ensure_session(spotify)?;
+    let username = session.username();
+    if username.trim().is_empty() {
+        return Ok(None);
+    }
+    let uri = format!("spotify:track:{track_id}");
+    let body = encode_collection_contains(&username, &uri);
+    let response = collection_post(&session, "/collection/v2/contains", &body)?;
+    Ok(parse_contains_response(&response))
 }
 
 pub fn handle_transport(spotify: &SpotifyState, command: &str) -> Result<(), String> {
@@ -480,6 +526,11 @@ fn start_player(
     let playback = spotify.desktop_playback.clone();
     let queue = spotify.desktop_queue.clone();
     let player_slot = spotify.desktop_player.clone();
+    let app_handle = spotify
+        .app_handle
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone());
 
     runtime().spawn(async move {
         while let Some(event) = events.recv().await {
@@ -488,7 +539,11 @@ fn start_player(
                 | PlayerEvent::Unavailable { track_id, .. } => Some(track_id.clone()),
                 _ => None,
             };
+            let publish = player_event_publishes_status(&event);
             apply_player_event(&playback, event);
+            if publish {
+                publish_status_from_app(app_handle.clone());
+            }
             if let Some(track_id) = finished {
                 continue_if_current(&player_slot, &queue, &track_id);
             }
@@ -517,12 +572,59 @@ fn load_current(spotify: &SpotifyState, start_playing: bool) -> Result<(), Strin
             .cloned()
             .ok_or_else(|| "Spotify queue is empty".to_string())?
     };
+    seed_playback_from_uri(spotify, &uri, start_playing);
     with_player(spotify, |player| {
         player.load(uri, start_playing, 0);
         Ok(())
     })?;
     preload_next(spotify);
     Ok(())
+}
+
+fn seed_playback_from_uri(spotify: &SpotifyState, uri: &SpotifyUri, start_playing: bool) {
+    let Ok(mut playback) = spotify.desktop_playback.lock() else {
+        return;
+    };
+    if let Ok(id) = uri.to_id() {
+        playback.item_id = Some(id);
+        playback.item_type = Some("track".to_string());
+    }
+    playback.is_playing = start_playing;
+    playback.progress_ms = Some(0);
+    playback.progress_at = Some(Instant::now());
+}
+
+fn wait_for_metadata(spotify: &SpotifyState, epoch_before: u64) {
+    let deadline = Instant::now() + METADATA_WAIT;
+    while Instant::now() < deadline {
+        if playback_snapshot(spotify).metadata_epoch != epoch_before {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+}
+
+fn player_event_publishes_status(event: &PlayerEvent) -> bool {
+    matches!(
+        event,
+        PlayerEvent::TrackChanged { .. }
+            | PlayerEvent::Playing { .. }
+            | PlayerEvent::Paused { .. }
+            | PlayerEvent::Stopped { .. }
+            | PlayerEvent::Seeked { .. }
+            | PlayerEvent::VolumeChanged { .. }
+            | PlayerEvent::ShuffleChanged { .. }
+    )
+}
+
+fn publish_status_from_app(app: Option<tauri::AppHandle>) {
+    let Some(app) = app else {
+        return;
+    };
+    std::thread::spawn(move || {
+        let state = app.state::<crate::AppState>();
+        crate::spotify::publish_status(&state.spotify);
+    });
 }
 
 fn preload_next(spotify: &SpotifyState) {
@@ -605,6 +707,7 @@ fn apply_player_event(playback: &Mutex<OfficialPlayback>, event: PlayerEvent) {
             playback.artist_name = artist;
             playback.album_name = album;
             playback.item_type = Some(item_type.to_string());
+            playback.metadata_epoch = playback.metadata_epoch.wrapping_add(1);
         }
         PlayerEvent::Playing { position_ms, .. }
         | PlayerEvent::PositionCorrection { position_ms, .. } => {
@@ -899,6 +1002,191 @@ fn playlist_cover(
         .or_else(|| image_url(attributes.picture()))
 }
 
+fn collection_post(session: &Session, endpoint: &str, body: &[u8]) -> Result<Vec<u8>, String> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static(COLLECTION_CONTENT_TYPE),
+    );
+    runtime().block_on(async {
+        let bytes = tokio::time::timeout(
+            Duration::from_secs(20),
+            session
+                .spclient()
+                .request(&Method::POST, endpoint, Some(headers), Some(body)),
+        )
+        .await
+        .map_err(|_| "Spotify collection request timed out".to_string())?
+        .map_err(|e| format!("Spotify liked-songs update failed: {e}"))?;
+        Ok(bytes.to_vec())
+    })
+}
+
+fn unix_now_i32() -> i32 {
+    i32::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    )
+    .unwrap_or(0)
+}
+
+fn random_client_update_id() -> String {
+    let mut rng = rand::thread_rng();
+    format!("{:016x}{:016x}", rng.gen::<u64>(), rng.gen::<u64>())
+}
+
+fn encode_varint(out: &mut Vec<u8>, mut value: u64) {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+}
+
+fn encode_key(out: &mut Vec<u8>, field: u32, wire: u8) {
+    encode_varint(out, u64::from((field << 3) | u32::from(wire)));
+}
+
+fn encode_string_field(out: &mut Vec<u8>, field: u32, value: &str) {
+    encode_key(out, field, 2);
+    encode_varint(out, value.len() as u64);
+    out.extend_from_slice(value.as_bytes());
+}
+
+fn encode_int32_field(out: &mut Vec<u8>, field: u32, value: i32) {
+    encode_key(out, field, 0);
+    encode_varint(out, u64::from(value as u32));
+}
+
+fn encode_bool_field(out: &mut Vec<u8>, field: u32, value: bool) {
+    encode_key(out, field, 0);
+    out.push(u8::from(value));
+}
+
+fn encode_collection_item(uri: &str, saved: bool, added_at: i32) -> Vec<u8> {
+    let mut item = Vec::new();
+    encode_string_field(&mut item, 1, uri);
+    if saved && added_at != 0 {
+        encode_int32_field(&mut item, 2, added_at);
+    }
+    if !saved {
+        encode_bool_field(&mut item, 3, true);
+    }
+    item
+}
+
+fn encode_collection_write(
+    username: &str,
+    uri: &str,
+    saved: bool,
+    added_at: i32,
+    client_update_id: &str,
+) -> Vec<u8> {
+    let item = encode_collection_item(uri, saved, added_at);
+    let mut body = Vec::new();
+    encode_string_field(&mut body, 1, username);
+    encode_string_field(&mut body, 2, COLLECTION_SET);
+    encode_key(&mut body, 3, 2);
+    encode_varint(&mut body, item.len() as u64);
+    body.extend_from_slice(&item);
+    encode_string_field(&mut body, 4, client_update_id);
+    body
+}
+
+fn encode_collection_contains(username: &str, uri: &str) -> Vec<u8> {
+    let mut body = Vec::new();
+    encode_string_field(&mut body, 1, username);
+    encode_string_field(&mut body, 2, COLLECTION_SET);
+    encode_string_field(&mut body, 3, uri);
+    body
+}
+
+fn parse_contains_response(bytes: &[u8]) -> Option<bool> {
+    let mut index = 0usize;
+    let mut first = None;
+    while index < bytes.len() {
+        let (tag, next) = read_varint(bytes, index)?;
+        index = next;
+        let field = (tag >> 3) as u32;
+        let wire = (tag & 7) as u8;
+        if field == 1 && wire == 0 {
+            let (value, next) = read_varint(bytes, index)?;
+            index = next;
+            if first.is_none() {
+                first = Some(value != 0);
+            }
+        } else if field == 1 && wire == 2 {
+            let (len, next) = read_varint(bytes, index)?;
+            index = next;
+            let end = index.saturating_add(len as usize);
+            if end > bytes.len() {
+                return None;
+            }
+            if first.is_none() && index < end {
+                first = Some(bytes[index] != 0);
+            }
+            index = end;
+        } else if !skip_field(bytes, &mut index, wire) {
+            return None;
+        }
+    }
+    first
+}
+
+fn read_varint(bytes: &[u8], mut index: usize) -> Option<(u64, usize)> {
+    let mut value = 0u64;
+    let mut shift = 0u32;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        index += 1;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Some((value, index));
+        }
+        shift += 7;
+        if shift > 63 {
+            return None;
+        }
+    }
+    None
+}
+
+fn skip_field(bytes: &[u8], index: &mut usize, wire: u8) -> bool {
+    match wire {
+        0 => {
+            let Some((_, next)) = read_varint(bytes, *index) else {
+                return false;
+            };
+            *index = next;
+            true
+        }
+        1 => {
+            *index = index.saturating_add(8);
+            *index <= bytes.len()
+        }
+        2 => {
+            let Some((len, next)) = read_varint(bytes, *index) else {
+                return false;
+            };
+            *index = next.saturating_add(len as usize);
+            *index <= bytes.len()
+        }
+        5 => {
+            *index = index.saturating_add(4);
+            *index <= bytes.len()
+        }
+        _ => false,
+    }
+}
+
 fn image_url(file_id: &[u8]) -> Option<String> {
     if file_id.is_empty() {
         return None;
@@ -983,5 +1271,37 @@ mod tests {
         assert_eq!(queue.step_prev(), Some(&track(1)));
         assert_eq!(queue.step_next(), Some(&track(2)));
         assert_eq!(queue.step_prev(), Some(&track(1)));
+    }
+
+    #[test]
+    fn collection_write_encodes_like_and_unlike() {
+        let liked = encode_collection_write(
+            "alice",
+            "spotify:track:abc",
+            true,
+            1_700_000_000,
+            "cid",
+        );
+        assert!(payload_contains(&liked, "alice"));
+        assert!(payload_contains(&liked, "collection"));
+        assert!(payload_contains(&liked, "spotify:track:abc"));
+        assert!(payload_contains(&liked, "cid"));
+        assert!(!liked.windows(2).any(|window| window == [0x18, 0x01]));
+
+        let unliked = encode_collection_write("alice", "spotify:track:abc", false, 0, "cid");
+        assert!(unliked.windows(2).any(|window| window == [0x18, 0x01]));
+    }
+
+    #[test]
+    fn collection_contains_response_reads_bool_and_packed() {
+        assert_eq!(parse_contains_response(&[0x08, 0x01]), Some(true));
+        assert_eq!(parse_contains_response(&[0x08, 0x00]), Some(false));
+        assert_eq!(parse_contains_response(&[0x0a, 0x01, 0x01]), Some(true));
+        assert_eq!(parse_contains_response(&[]), None);
+    }
+
+    fn payload_contains(bytes: &[u8], value: &str) -> bool {
+        let needle = value.as_bytes();
+        bytes.windows(needle.len()).any(|window| window == needle)
     }
 }
