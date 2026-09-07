@@ -84,7 +84,7 @@
   let spotifyBusy = $state(false);
   let spotifyVolumeBusy = $state(false);
   let spotifySeekTargetMs = $state<number | null>(null);
-  let spotifyVolumePercent = $state(50);
+  let spotifyVolumePercent = $state(80);
   let spotifyAuthHint = $state<string | null>(null);
   let spotifyClientIdDraft = $state("");
   let spotifyAuthMode = $state<SpotifyAuthMode>("official");

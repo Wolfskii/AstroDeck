@@ -29,6 +29,8 @@ const SPOTIFY_RECENTLY_PLAYED_URL: &str =
     "https://api.spotify.com/v1/me/player/recently-played?limit=1";
 const SPOTIFY_COLOR_LYRICS_URL: &str = "https://spclient.wg.spotify.com/color-lyrics/v2/track";
 const SPOTIFY_LAST_PLAYBACK_FILE: &str = "spotify_last_playback.json";
+const SPOTIFY_VOLUME_FILE: &str = "spotify_volume.json";
+pub(crate) const DEFAULT_SPOTIFY_VOLUME_PERCENT: u8 = 80;
 #[derive(Serialize)]
 struct LibraryUrisBody {
     uris: Vec<String>,
@@ -467,6 +469,7 @@ pub struct SpotifyConfig {
     /// Librespot reusable credentials (`credentials.json`) for official desktop login.
     pub desktop_cache_path: Option<PathBuf>,
     pub last_playback_path: Option<PathBuf>,
+    pub volume_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -893,6 +896,23 @@ pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String
         config.client_store_path = Some(client_store_path);
         config.desktop_cache_path = Some(desktop_cache_path);
         config.last_playback_path = Some(base.join(SPOTIFY_LAST_PLAYBACK_FILE));
+        config.volume_path = Some(base.join(SPOTIFY_VOLUME_FILE));
+    }
+
+    if let Some(path) = spotify
+        .config
+        .lock()
+        .map_err(|e| e.to_string())?
+        .volume_path
+        .clone()
+    {
+        if let Ok(contents) = fs::read_to_string(path) {
+            if let Ok(volume) = contents.trim().parse::<u8>() {
+                if let Ok(mut playback) = spotify.desktop_playback.lock() {
+                    playback.volume_percent = volume.min(100);
+                }
+            }
+        }
     }
 
     {
@@ -916,6 +936,20 @@ pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String
     }
 
     Ok(())
+}
+
+pub(crate) fn persist_volume(spotify: &SpotifyState, volume_percent: u8) {
+    let path = spotify
+        .config
+        .lock()
+        .ok()
+        .and_then(|config| config.volume_path.clone());
+    let Some(path) = path else {
+        return;
+    };
+    if let Err(err) = fs::write(path, volume_percent.min(100).to_string()) {
+        log::warn!("Failed to persist Spotify volume: {err}");
+    }
 }
 
 pub fn get_client_config_for_ui(spotify: &SpotifyState) -> SpotifyClientConfigResponse {
@@ -1197,6 +1231,13 @@ fn maybe_enrich_idle_status(spotify: &SpotifyState, status: &mut SpotifyStatus, 
     if let Some(display) = idle_playback_display(spotify, fresh) {
         apply_idle_playback(status, &display);
     }
+}
+
+pub(crate) fn last_played_track_id(spotify: &SpotifyState) -> Option<String> {
+    let display = idle_playback_display(spotify, false)?;
+    (display.item_type.as_deref() == Some("track"))
+        .then(|| display.item_id)
+        .flatten()
 }
 
 fn persist_active_playback_snapshot(spotify: &SpotifyState) {
@@ -2460,6 +2501,7 @@ pub fn set_volume(spotify: &SpotifyState, volume_percent: u8, device_id: Option<
         update_playback_cache_fields(spotify, |summary| {
             summary.volume_percent = volume_percent;
         });
+        persist_volume(spotify, volume_percent);
         Ok(volume_percent)
     } else {
         let status = response.status();

@@ -82,7 +82,7 @@ impl Default for OfficialPlayback {
             progress_ms: None,
             progress_at: None,
             is_playing: false,
-            volume_percent: 50,
+            volume_percent: crate::spotify::DEFAULT_SPOTIFY_VOLUME_PERCENT,
             shuffle: false,
             player_ready: false,
             metadata_epoch: 0,
@@ -435,14 +435,26 @@ pub fn handle_transport(spotify: &SpotifyState, command: &str) -> Result<(), Str
                 .lock()
                 .map(|playback| playback.is_playing)
                 .unwrap_or(false);
-            with_player(spotify, |player| {
-                if playing {
+            if playing {
+                with_player(spotify, |player| {
                     player.pause();
+                    Ok(())
+                })
+            } else {
+                let queue_has_current = spotify
+                    .desktop_queue
+                    .lock()
+                    .map(|queue| queue.current().is_some())
+                    .unwrap_or(false);
+                if queue_has_current {
+                    with_player(spotify, |player| {
+                        player.play();
+                        Ok(())
+                    })
                 } else {
-                    player.play();
+                    resume_last_played(spotify)
                 }
-                Ok(())
-            })
+            }
         }
         "nextTrack" => play_next(spotify),
         "prevTrack" => play_prev(spotify),
@@ -480,6 +492,7 @@ pub fn set_volume(spotify: &SpotifyState, volume_percent: u8) -> Result<u8, Stri
     if let Ok(mut playback) = spotify.desktop_playback.lock() {
         playback.volume_percent = volume_percent;
     }
+    crate::spotify::persist_volume(spotify, volume_percent);
     Ok(volume_percent)
 }
 
@@ -488,7 +501,7 @@ pub fn adjust_volume(spotify: &SpotifyState, delta: i32) -> Result<u8, String> {
         .desktop_playback
         .lock()
         .map(|playback| playback.volume_percent)
-        .unwrap_or(50) as i32;
+        .unwrap_or(crate::spotify::DEFAULT_SPOTIFY_VOLUME_PERCENT) as i32;
     set_volume(spotify, (current + delta).clamp(0, 100) as u8)
 }
 
@@ -676,6 +689,23 @@ fn load_current(spotify: &SpotifyState, start_playing: bool) -> Result<(), Strin
     })?;
     preload_next(spotify);
     Ok(())
+}
+
+fn resume_last_played(spotify: &SpotifyState) -> Result<(), String> {
+    let track_id = crate::spotify::last_played_track_id(spotify)
+        .ok_or_else(|| "No last played Spotify track is available to resume.".to_string())?;
+    let uri = SpotifyUri::from_uri(&format!("spotify:track:{track_id}"))
+        .map_err(|e| format!("Last played Spotify track is invalid: {e}"))?;
+    let shuffle = spotify
+        .desktop_playback
+        .lock()
+        .map(|playback| playback.shuffle)
+        .unwrap_or(false);
+    {
+        let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+        queue.replace(vec![uri], shuffle);
+    }
+    load_current(spotify, true)
 }
 
 fn seed_playback_from_uri(spotify: &SpotifyState, uri: &SpotifyUri, start_playing: bool) {
@@ -1002,43 +1032,53 @@ fn fetch_rootlist_page(
     limit: u32,
 ) -> Result<SpotifyPlaylistPage, String> {
     runtime().block_on(async {
-        let body = tokio::time::timeout(
-            Duration::from_secs(20),
-            session.spclient().get_rootlist(0, Some(ROOTLIST_LIMIT)),
-        )
-        .await
-        .map_err(|_| "Spotify desktop playlist list timed out".to_string())?
-        .map_err(|e| format!("Spotify desktop playlist list failed: {e}"))?;
+        let username = session.username();
+        let mut items = Vec::new();
+        let mut from = 0usize;
 
-        let root = SelectedListContent::parse_from_bytes(&body)
-            .map_err(|e| format!("Spotify desktop playlist list could not be decoded: {e}"))?;
-        Ok(page_from_rootlist(&root, offset, limit))
+        loop {
+            let body = tokio::time::timeout(
+                Duration::from_secs(20),
+                session.spclient().get_rootlist(from, Some(ROOTLIST_LIMIT)),
+            )
+            .await
+            .map_err(|_| "Spotify desktop playlist list timed out".to_string())?
+            .map_err(|e| format!("Spotify desktop playlist list failed: {e}"))?;
+
+            let root = SelectedListContent::parse_from_bytes(&body)
+                .map_err(|e| format!("Spotify desktop playlist list could not be decoded: {e}"))?;
+            let page_len = root
+                .contents
+                .as_ref()
+                .map(|contents| contents.items.len())
+                .unwrap_or(0);
+            items.extend(playlists_from_rootlist(&root, &username));
+
+            let truncated = root
+                .contents
+                .as_ref()
+                .map(|contents| contents.truncated())
+                .unwrap_or(false);
+            if page_len == 0 || !truncated {
+                break;
+            }
+            from += page_len;
+        }
+
+        Ok(page_from_playlists(items, offset, limit))
     })
 }
 
-fn page_from_rootlist(
-    root: &SelectedListContent,
-    offset: u32,
-    limit: u32,
-) -> SpotifyPlaylistPage {
+fn playlists_from_rootlist(root: &SelectedListContent, username: &str) -> Vec<SpotifyPlaylist> {
     let Some(contents) = root.contents.as_ref() else {
-        return SpotifyPlaylistPage {
-            items: Vec::new(),
-            offset,
-            limit,
-            total: 0,
-            next_offset: None,
-        };
+        return Vec::new();
     };
     let meta = &contents.meta_items;
     let mut items = Vec::new();
     for (index, item) in contents.items.iter().enumerate() {
-        let Some(id) = item.uri().strip_prefix("spotify:playlist:") else {
+        let Some(id) = playlist_id_from_uri(item.uri()) else {
             continue;
         };
-        if id.is_empty() {
-            continue;
-        }
         let meta = meta.get(index);
         let name = meta
             .map(|entry| entry.attributes.name())
@@ -1048,7 +1088,13 @@ fn page_from_rootlist(
         let owner_name = meta
             .map(|entry| entry.owner_username())
             .filter(|owner| !owner.is_empty())
-            .map(str::to_string);
+            .map(|owner| {
+                if owner == username {
+                    "You".to_string()
+                } else {
+                    owner.to_string()
+                }
+            });
         items.push(SpotifyPlaylist {
             id: id.to_string(),
             name,
@@ -1060,7 +1106,21 @@ fn page_from_rootlist(
             owner_name,
         });
     }
+    items
+}
 
+fn playlist_id_from_uri(uri: &str) -> Option<&str> {
+    let id = uri
+        .strip_prefix("spotify:playlist:")
+        .or_else(|| uri.rsplit_once(":playlist:").map(|(_, id)| id))?;
+    (!id.is_empty() && !id.contains(':')).then_some(id)
+}
+
+fn page_from_playlists(
+    items: Vec<SpotifyPlaylist>,
+    offset: u32,
+    limit: u32,
+) -> SpotifyPlaylistPage {
     let total = items.len() as u32;
     let start = (offset as usize).min(items.len());
     let end = (start + limit as usize).min(items.len());
