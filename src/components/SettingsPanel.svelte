@@ -592,8 +592,8 @@
       <div class="settings-card settings-card-pad">
         <p class="setting-title">Login method</p>
         <p class="setting-desc">
-          Desktop login is the default and does not use Spotify's Web API. Playback streams in
-          AstroDeck. Switch to a developer app if you want like-song through the API.
+          Desktop login is the default. Playback, playlists, and likes stream in AstroDeck without
+          a developer app. Switch to a developer app if you need Web API device control.
         </p>
         <div class="auth-mode-list" role="radiogroup" aria-label="Spotify login method">
           <button
@@ -610,7 +610,7 @@
               <span class="scene-tag current">default</span>
             </div>
             <p class="setting-desc">
-              Sign in with your Spotify account. Playlists, transport, volume, and seek stream in
+              Sign in with your Spotify account. Playlists, likes, transport, volume, and seek stream in
               AstroDeck — not api.spotify.com and not Spotify.exe. Requires Spotify Premium.
             </p>
           </button>
