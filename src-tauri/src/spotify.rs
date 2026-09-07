@@ -25,6 +25,7 @@ const SPOTIFY_LIBRARY_CONTAINS_URL: &str = "https://api.spotify.com/v1/me/librar
 const SPOTIFY_QUEUE_URL: &str = "https://api.spotify.com/v1/me/player/queue";
 const SPOTIFY_PLAYLISTS_URL: &str = "https://api.spotify.com/v1/me/playlists";
 const SPOTIFY_PLAY_URL: &str = "https://api.spotify.com/v1/me/player/play";
+const SPOTIFY_COLOR_LYRICS_URL: &str = "https://spclient.wg.spotify.com/color-lyrics/v2/track";
 #[derive(Serialize)]
 struct LibraryUrisBody {
     uris: Vec<String>,
@@ -145,6 +146,7 @@ pub struct SpotifyState {
     pub(crate) desktop_queue: Arc<Mutex<crate::spotify_desktop::PlayQueue>>,
     pub(crate) desktop_playback: Arc<Mutex<crate::spotify_desktop::OfficialPlayback>>,
     pub(crate) app_handle: Mutex<Option<tauri::AppHandle>>,
+    lyrics_cache: Mutex<Option<SpotifyTrackLyrics>>,
 }
 
 pub fn invalidate_playback_cache(spotify: &SpotifyState) {
@@ -571,6 +573,33 @@ pub struct SpotifyStatus {
     #[serde(rename = "prevTrackPreview", skip_serializing_if = "Option::is_none")]
     pub prev_track_preview: Option<TrackPreview>,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotifyLyricLine {
+    pub start_time_ms: u64,
+    pub words: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotifyTrackLyrics {
+    pub track_id: String,
+    pub sync_type: String,
+    pub available: bool,
+    pub lines: Vec<SpotifyLyricLine>,
+}
+
+impl SpotifyTrackLyrics {
+    fn unavailable(track_id: &str) -> Self {
+        Self {
+            track_id: track_id.to_string(),
+            sync_type: "UNSYNCED".to_string(),
+            available: false,
+            lines: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2571,6 +2600,135 @@ pub fn list_playlists(
     }
 }
 
+pub fn get_track_lyrics(
+    spotify: &SpotifyState,
+    track_id: &str,
+) -> Result<SpotifyTrackLyrics, String> {
+    let track_id = track_id.trim();
+    if track_id.is_empty() {
+        return Err("Spotify has no current track for lyrics".to_string());
+    }
+
+    {
+        let cache = spotify.lyrics_cache.lock().map_err(|e| e.to_string())?;
+        if let Some(cached) = cache.as_ref() {
+            if cached.track_id == track_id {
+                return Ok(cached.clone());
+            }
+        }
+    }
+
+    let lyrics = if uses_web_api(spotify) {
+        match fetch_lyrics_http(spotify, track_id) {
+            Ok(lyrics) => lyrics,
+            Err(err) => {
+                log::info!("Spotify HTTP lyrics failed, trying desktop session: {err}");
+                crate::spotify_desktop::fetch_lyrics(spotify, track_id)?
+            }
+        }
+    } else {
+        match crate::spotify_desktop::fetch_lyrics(spotify, track_id) {
+            Ok(lyrics) => lyrics,
+            Err(err) => {
+                log::info!("Spotify desktop lyrics failed, trying HTTP: {err}");
+                fetch_lyrics_http(spotify, track_id)?
+            }
+        }
+    };
+
+    if let Ok(mut cache) = spotify.lyrics_cache.lock() {
+        *cache = Some(lyrics.clone());
+    }
+    Ok(lyrics)
+}
+
+fn fetch_lyrics_http(
+    spotify: &SpotifyState,
+    track_id: &str,
+) -> Result<SpotifyTrackLyrics, String> {
+    let access_token = get_access_token(spotify)?;
+    let client = spotify_http_client()?;
+    let url = format!("{SPOTIFY_COLOR_LYRICS_URL}/{track_id}");
+    let response = client
+        .get(&url)
+        .bearer_auth(&access_token)
+        .header("App-Platform", "WebPlayer")
+        .header("Accept", "application/json")
+        .query(&[
+            ("format", "json"),
+            ("vocalRemoval", "false"),
+            ("market", "from_token"),
+        ])
+        .send()
+        .map_err(|e| format!("Spotify lyrics request failed: {e}"))?;
+
+    let status = response.status();
+    if status.as_u16() == 404 {
+        return Ok(SpotifyTrackLyrics::unavailable(track_id));
+    }
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        return Err(format!("Spotify lyrics request failed: {status} {body}"));
+    }
+
+    let bytes = response.bytes().map_err(|e| e.to_string())?;
+    parse_color_lyrics(track_id, &bytes)
+}
+
+pub(crate) fn parse_color_lyrics(track_id: &str, bytes: &[u8]) -> Result<SpotifyTrackLyrics, String> {
+    if bytes.is_empty() {
+        return Ok(SpotifyTrackLyrics::unavailable(track_id));
+    }
+    let value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|e| format!("Spotify lyrics could not be decoded: {e}"))?;
+    let Some(lyrics) = value.get("lyrics") else {
+        return Ok(SpotifyTrackLyrics::unavailable(track_id));
+    };
+    let sync_type = lyrics
+        .get("syncType")
+        .and_then(|value| value.as_str())
+        .unwrap_or("UNSYNCED")
+        .to_string();
+    let lines = lyrics
+        .get("lines")
+        .and_then(|value| value.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let words = row
+                        .get("words")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if words.is_empty() {
+                        return None;
+                    }
+                    Some(SpotifyLyricLine {
+                        start_time_ms: json_time_ms(row.get("startTimeMs")),
+                        words,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(SpotifyTrackLyrics {
+        track_id: track_id.to_string(),
+        available: !lines.is_empty(),
+        sync_type,
+        lines,
+    })
+}
+
+fn json_time_ms(value: Option<&serde_json::Value>) -> u64 {
+    match value {
+        Some(serde_json::Value::Number(number)) => number.as_u64().unwrap_or(0),
+        Some(serde_json::Value::String(text)) => text.parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
 pub fn play_playlist(spotify: &SpotifyState, playlist: &str) -> Result<(), String> {
     if !uses_web_api(spotify) {
         let context_uri = playlist_context_uri(playlist)?;
@@ -3028,5 +3186,32 @@ mod tests {
         assert_eq!(refreshed.access_token, "new");
         assert_eq!(refreshed.refresh_token, "refresh");
         assert_eq!(refreshed.scope, "streaming");
+    }
+
+    #[test]
+    fn color_lyrics_parse_line_synced_rows() {
+        let json = br#"{
+            "lyrics": {
+                "syncType": "LINE_SYNCED",
+                "lines": [
+                    {"startTimeMs": "0", "words": "First"},
+                    {"startTimeMs": 1500, "words": "Second"},
+                    {"startTimeMs": "2000", "words": "  "}
+                ]
+            }
+        }"#;
+        let lyrics = parse_color_lyrics("abc", json).unwrap();
+        assert!(lyrics.available);
+        assert_eq!(lyrics.sync_type, "LINE_SYNCED");
+        assert_eq!(lyrics.lines.len(), 2);
+        assert_eq!(lyrics.lines[0].words, "First");
+        assert_eq!(lyrics.lines[1].start_time_ms, 1500);
+    }
+
+    #[test]
+    fn color_lyrics_empty_payload_is_unavailable() {
+        let lyrics = parse_color_lyrics("abc", b"{}").unwrap();
+        assert!(!lyrics.available);
+        assert!(lyrics.lines.is_empty());
     }
 }

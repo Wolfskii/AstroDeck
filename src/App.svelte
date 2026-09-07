@@ -2102,6 +2102,8 @@
           shuffle={isOsMediaScene ? null : currentMediaView.shuffle}
           shuffleActive={isSpotifyScene ? effectiveSpotifyShuffle : false}
           trackSaved={isSpotifyScene ? effectiveSpotifySaved : null}
+          lyricsEnabled={isSpotifyScene}
+          trackId={isSpotifyScene ? spotifyStatus?.currentItemId ?? null : null}
           title={mediaPlayerTitle}
           subtitle={mediaPlayerSubtitle}
           albumName={isSpotifyScene
