@@ -294,6 +294,23 @@ fn play_spotify_playlist(
 }
 
 #[tauri::command]
+fn get_spotify_lyrics(
+    track_id: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<spotify::SpotifyTrackLyrics, String> {
+    let track_id = track_id
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .or_else(|| {
+            spotify::get_status(&state.spotify)
+                .ok()
+                .and_then(|status| status.current_item_id)
+        })
+        .ok_or_else(|| "Spotify has no current track for lyrics".to_string())?;
+    spotify::get_track_lyrics(&state.spotify, &track_id)
+}
+
+#[tauri::command]
 fn set_spotify_auth_mode(
     auth_mode: spotify::SpotifyAuthMode,
     state: tauri::State<AppState>,
@@ -394,6 +411,7 @@ pub fn run() {
             set_spotify_auth_mode,
             list_spotify_playlists,
             play_spotify_playlist,
+            get_spotify_lyrics,
             open_settings_window,
             persist_window_state,
             restore_window_show_state,
