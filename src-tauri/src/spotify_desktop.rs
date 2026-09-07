@@ -1,15 +1,19 @@
 use librespot_core::authentication::Credentials;
+use librespot_core::cache::Cache;
 use librespot_core::config::SessionConfig;
 use librespot_core::session::Session;
 use librespot_protocol::playlist4_external::SelectedListContent;
 use protobuf::Message;
+use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
 use crate::spotify::{
-    get_access_token, SpotifyPlaylist, SpotifyPlaylistPage, SpotifyState, OFFICIAL_CLIENT_ID,
+    get_access_token, token_has_streaming_scope, SpotifyPlaylist, SpotifyPlaylistPage,
+    SpotifyState, OFFICIAL_CLIENT_ID,
 };
 
 const ROOTLIST_LIMIT: usize = 500;
@@ -33,32 +37,104 @@ pub fn drop_session(spotify: &SpotifyState) {
     }
 }
 
+pub fn clear_credentials(spotify: &SpotifyState) {
+    drop_session(spotify);
+    if let Some(path) = cache_dir(spotify) {
+        let credentials = path.join("credentials.json");
+        if credentials.exists() {
+            let _ = fs::remove_file(credentials);
+        }
+    }
+}
+
 pub fn ensure_session(spotify: &SpotifyState) -> Result<Session, String> {
-    if let Ok(guard) = spotify.desktop_session.lock() {
+    {
+        let mut guard = spotify.desktop_session.lock().map_err(|e| e.to_string())?;
         if let Some(session) = guard.as_ref() {
-            return Ok(session.clone());
+            if !session.is_invalid() {
+                return Ok(session.clone());
+            }
+        }
+        *guard = None;
+    }
+
+    let cache = open_cache(spotify);
+    if let Some(stored) = cache.as_ref().and_then(|cache| cache.credentials()) {
+        match connect_session(stored, cache.clone()) {
+            Ok(session) => {
+                store_session(spotify, session.clone());
+                return Ok(session);
+            }
+            Err(err) => {
+                log::info!(
+                    "Spotify stored desktop credentials failed, trying access token: {err}"
+                );
+            }
         }
     }
 
-    let access_token = get_access_token(spotify)?;
-    let session = connect_session(access_token)?;
-    if let Ok(mut guard) = spotify.desktop_session.lock() {
-        *guard = Some(session.clone());
-    }
+    let session = connect_with_access_token(spotify, cache)?;
+    store_session(spotify, session.clone());
     Ok(session)
 }
 
-fn connect_session(access_token: String) -> Result<Session, String> {
+fn store_session(spotify: &SpotifyState, session: Session) {
+    if let Ok(mut guard) = spotify.desktop_session.lock() {
+        *guard = Some(session);
+    }
+}
+
+fn cache_dir(spotify: &SpotifyState) -> Option<PathBuf> {
+    spotify
+        .config
+        .lock()
+        .ok()?
+        .desktop_cache_path
+        .clone()
+}
+
+fn open_cache(spotify: &SpotifyState) -> Option<Cache> {
+    let path = cache_dir(spotify)?;
+    Cache::new(Some(path), None::<PathBuf>, None::<PathBuf>, None).ok()
+}
+
+fn connect_with_access_token(
+    spotify: &SpotifyState,
+    cache: Option<Cache>,
+) -> Result<Session, String> {
+    if token_has_streaming_scope(spotify)? == Some(false) {
+        return Err(reconnect_for_desktop_session_error());
+    }
+
+    let access_token = get_access_token(spotify)?;
+    connect_session(Credentials::with_access_token(access_token), cache)
+        .map_err(desktop_session_login_error)
+}
+
+fn connect_session(credentials: Credentials, cache: Option<Cache>) -> Result<Session, String> {
     runtime().block_on(async {
         let mut config = SessionConfig::default();
         config.client_id = OFFICIAL_CLIENT_ID.to_string();
-        let session = Session::new(config, None);
+        let session = Session::new(config, cache);
         session
-            .connect(Credentials::with_access_token(access_token), false)
+            .connect(credentials, true)
             .await
-            .map_err(|e| format!("Spotify desktop session failed: {e}"))?;
+            .map_err(|e| format!("{e}"))?;
         Ok(session)
     })
+}
+
+fn reconnect_for_desktop_session_error() -> String {
+    "Spotify desktop playlists need a fresh login. Disconnect and connect again so the browser prompt can grant desktop access.".to_string()
+}
+
+fn desktop_session_login_error(err: String) -> String {
+    let lower = err.to_ascii_lowercase();
+    if lower.contains("bad credentials") || lower.contains("login failed") {
+        reconnect_for_desktop_session_error()
+    } else {
+        format!("Spotify desktop session failed: {err}")
+    }
 }
 
 pub fn list_playlists(
@@ -227,5 +303,19 @@ pub fn open_spotify_uri(uri: &str) -> Result<(), String> {
             .status()
             .map_err(|e| format!("Failed to open {uri} in Spotify: {e}"))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bad_credentials_asks_to_reconnect() {
+        let message = desktop_session_login_error(
+            "Permission denied { Login failed with reason: Bad credentials }".to_string(),
+        );
+        assert!(message.contains("Disconnect and connect again"));
+        assert!(!message.contains("Bad credentials"));
     }
 }
