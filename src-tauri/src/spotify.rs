@@ -2623,21 +2623,29 @@ pub fn get_track_lyrics(
             Ok(lyrics) => lyrics,
             Err(err) => {
                 log::info!("Spotify HTTP lyrics failed, trying desktop session: {err}");
-                crate::spotify_desktop::fetch_lyrics(spotify, track_id)?
+                match crate::spotify_desktop::fetch_lyrics(spotify, track_id) {
+                    Ok(lyrics) => lyrics,
+                    Err(_) => return Err(friendly_lyrics_error(&err)),
+                }
             }
         }
     } else {
         match crate::spotify_desktop::fetch_lyrics(spotify, track_id) {
             Ok(lyrics) => lyrics,
             Err(err) => {
-                log::info!("Spotify desktop lyrics failed, trying HTTP: {err}");
-                fetch_lyrics_http(spotify, track_id)?
+                if lyrics_error_is_unavailable(&err) {
+                    SpotifyTrackLyrics::unavailable(track_id)
+                } else {
+                    return Err(friendly_lyrics_error(&err));
+                }
             }
         }
     };
 
-    if let Ok(mut cache) = spotify.lyrics_cache.lock() {
-        *cache = Some(lyrics.clone());
+    if lyrics.available {
+        if let Ok(mut cache) = spotify.lyrics_cache.lock() {
+            *cache = Some(lyrics.clone());
+        }
     }
     Ok(lyrics)
 }
@@ -2726,6 +2734,23 @@ fn json_time_ms(value: Option<&serde_json::Value>) -> u64 {
         Some(serde_json::Value::Number(number)) => number.as_u64().unwrap_or(0),
         Some(serde_json::Value::String(text)) => text.parse().unwrap_or(0),
         _ => 0,
+    }
+}
+
+fn lyrics_error_is_unavailable(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("404") || lower.contains("not found")
+}
+
+fn friendly_lyrics_error(err: &str) -> String {
+    let lower = err.to_lowercase();
+    if lower.contains("403")
+        || lower.contains("forbidden")
+        || lower.contains("permission denied")
+    {
+        "Spotify wouldn't share lyrics for this track.".to_string()
+    } else {
+        err.to_string()
     }
 }
 
@@ -3213,5 +3238,15 @@ mod tests {
         let lyrics = parse_color_lyrics("abc", b"{}").unwrap();
         assert!(!lyrics.available);
         assert!(lyrics.lines.is_empty());
+    }
+
+    #[test]
+    fn lyrics_forbidden_hides_raw_status() {
+        assert_eq!(
+            friendly_lyrics_error("Spotify lyrics request failed: 403 Forbidden"),
+            "Spotify wouldn't share lyrics for this track."
+        );
+        assert!(lyrics_error_is_unavailable("Spotify lyrics could not be loaded: 404"));
+        assert!(!lyrics_error_is_unavailable("403 Forbidden"));
     }
 }
