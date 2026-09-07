@@ -2454,7 +2454,7 @@ pub fn play_playlist(spotify: &SpotifyState, playlist: &str) -> Result<(), Strin
     if !uses_web_api(spotify) {
         let context_uri = playlist_context_uri(playlist)?;
         crate::spotify_desktop::open_spotify_uri(&context_uri)?;
-        log::info!("Spotify desktop: opened {context_uri} in the Spotify app");
+        log::info!("Spotify desktop: playing {context_uri} in the Spotify app");
         return Ok(());
     }
 
