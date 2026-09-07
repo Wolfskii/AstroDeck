@@ -1308,7 +1308,6 @@
   let loading = $state(true);
   const isSpotifyScene = $derived(sceneId === "spotify");
   const isOsMediaScene = $derived(sceneId === "media");
-  const usesSpotifyWebApi = $derived(spotifyStatus?.usesWebApi === true);
   const mediaPlayerTitle = $derived.by(() => {
     if (isSpotifyScene) {
       return (
@@ -1920,6 +1919,12 @@
       const unlistenOsNowPlaying = listen<OsNowPlaying>("os-now-playing", (event) => {
         applyOsNowPlaying(event.payload);
       });
+      const unlistenSpotifyStatus = listen<SpotifyStatus>("spotify-status", (event) => {
+        spotifyStatus = mergeSpotifyStatusFromServer(event.payload);
+        if (event.payload.isAuthenticated) {
+          spotifyAuthHint = null;
+        }
+      });
       const unlisten = listen<SceneState>("scene-changed", (event) => {
         sceneId = event.payload.activeSceneId;
         layout = event.payload.layout;
@@ -1952,6 +1957,7 @@
         window.removeEventListener("focus", onWindowFocus);
         unlisten.then((fn) => fn());
         unlistenOsNowPlaying.then((fn) => fn());
+        unlistenSpotifyStatus.then((fn) => fn());
         unlistenTerminal.then((fn) => fn());
         unlistenAutoSwitch.then((fn) => fn());
         window.removeEventListener("astrodeck-core-action", handleCoreAction as EventListener);
@@ -2092,7 +2098,7 @@
           previous={currentMediaView.previous}
           playPause={currentMediaView.playPause}
           next={currentMediaView.next}
-          like={isOsMediaScene || (isSpotifyScene && !usesSpotifyWebApi) ? null : currentMediaView.like}
+          like={isOsMediaScene ? null : currentMediaView.like}
           shuffle={isOsMediaScene ? null : currentMediaView.shuffle}
           shuffleActive={isSpotifyScene ? effectiveSpotifyShuffle : false}
           trackSaved={isSpotifyScene ? effectiveSpotifySaved : null}

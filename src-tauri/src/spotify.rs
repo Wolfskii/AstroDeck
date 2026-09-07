@@ -10,7 +10,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use url::Url;
 
 
@@ -32,8 +32,10 @@ struct LibraryUrisBody {
 const CUSTOM_SPOTIFY_SCOPES: &str =
     "user-library-modify user-library-read user-read-playback-state user-modify-playback-state playlist-read-private playlist-read-collaborative";
 /// Librespot's access-point login only accepts tokens that include `streaming`.
-/// Web API playlist/library scopes alone are rejected as "Bad credentials".
-const OFFICIAL_SPOTIFY_SCOPES: &str = "streaming";
+/// Library scopes let official login like/unlike via the Web API after reconnect;
+/// collection-v2 still works without them.
+const OFFICIAL_SPOTIFY_SCOPES: &str =
+    "streaming user-library-read user-library-modify";
 
 /// Spotify's official desktop / librespot "keymaster" client id. Already approved,
 /// with localhost `/login` redirects registered, so users do not create a developer app.
@@ -142,6 +144,7 @@ pub struct SpotifyState {
     pub(crate) desktop_mixer: Mutex<Option<Arc<dyn librespot_playback::mixer::Mixer>>>,
     pub(crate) desktop_queue: Arc<Mutex<crate::spotify_desktop::PlayQueue>>,
     pub(crate) desktop_playback: Arc<Mutex<crate::spotify_desktop::OfficialPlayback>>,
+    pub(crate) app_handle: Mutex<Option<tauri::AppHandle>>,
 }
 
 pub fn invalidate_playback_cache(spotify: &SpotifyState) {
@@ -819,6 +822,11 @@ pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String
         config.desktop_cache_path = Some(desktop_cache_path);
     }
 
+    {
+        let mut handle = spotify.app_handle.lock().map_err(|e| e.to_string())?;
+        *handle = Some(app.clone());
+    }
+
     if token_path.exists() {
         match fs::read_to_string(&token_path) {
             Ok(contents) => match serde_json::from_str::<SpotifyTokens>(&contents) {
@@ -1160,19 +1168,39 @@ pub fn apply_optimistic_skip(spotify: &SpotifyState, direction: &str) -> Option<
 
 pub fn get_status(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
     if !uses_web_api(spotify) {
-        return official_desktop_status(spotify);
+        return official_desktop_status(spotify, false);
     }
     build_status(spotify, false)
 }
 
 pub fn get_status_fresh(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
     if !uses_web_api(spotify) {
-        return official_desktop_status(spotify);
+        return official_desktop_status(spotify, true);
     }
     build_status(spotify, true)
 }
 
-fn official_desktop_status(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
+pub(crate) fn publish_status(spotify: &SpotifyState) {
+    let Ok(status) = get_status(spotify) else {
+        return;
+    };
+    let Ok(guard) = spotify.app_handle.lock() else {
+        return;
+    };
+    let Some(app) = guard.as_ref() else {
+        return;
+    };
+    let _ = app.emit("spotify-status", &status);
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        let payload = serde_json::json!({
+            "type": "spotifyStatus",
+            "payload": status,
+        });
+        let _ = state.log_bus.send(payload.to_string());
+    }
+}
+
+fn official_desktop_status(spotify: &SpotifyState, fresh: bool) -> Result<SpotifyStatus, String> {
     let stored_tokens = spotify.tokens.lock().map_err(|e| e.to_string())?.clone();
     let granted_scopes = stored_tokens
         .as_ref()
@@ -1235,9 +1263,16 @@ fn official_desktop_status(spotify: &SpotifyState) -> Result<SpotifyStatus, Stri
         playback_state: playback_state.to_string(),
         is_playing: playback.is_playing,
         current_volume_percent: Some(playback.volume_percent),
-        current_item_type: playback.item_type,
-        current_item_id: playback.item_id,
-        is_current_track_saved: None,
+        current_item_type: playback.item_type.clone(),
+        current_item_id: playback.item_id.clone(),
+        is_current_track_saved: if playback.item_type.as_deref() == Some("track") {
+            playback
+                .item_id
+                .as_deref()
+                .and_then(|track_id| resolve_official_saved_state(spotify, track_id, fresh))
+        } else {
+            None
+        },
         is_shuffle: playback.shuffle,
         granted_scopes,
         uses_web_api: false,
@@ -1246,7 +1281,7 @@ fn official_desktop_status(spotify: &SpotifyState) -> Result<SpotifyStatus, Stri
         message: if needs_desktop_reconnect {
             "Spotify desktop login needs a fresh connect for playlists. Disconnect and connect again so the browser prompt can grant desktop access.".to_string()
         } else if playback.player_ready {
-            "Spotify desktop login is connected. AstroDeck is the player — playlists, volume, seek, and transport stream here. The Spotify app is not required.".to_string()
+            "Spotify desktop login is connected. AstroDeck is the player — playlists, likes, volume, seek, and transport stream here. The Spotify app is not required.".to_string()
         } else {
             "Spotify desktop login is connected. Start a playlist to stream in AstroDeck — the Spotify app is not required.".to_string()
         },
@@ -1620,15 +1655,13 @@ pub fn complete_auth_via_callback(spotify: &SpotifyState) -> Result<(), String> 
     Ok(())
 }
 
-fn web_api_required(action: &str) -> String {
-    format!(
-        "{action} uses Spotify's Web API. Switch Login method to Your Spotify developer app."
-    )
-}
-
 pub fn toggle_current_track_saved(spotify: &SpotifyState) -> Result<bool, String> {
     if !uses_web_api(spotify) {
-        return Err(web_api_required("Like"));
+        let (item_id, item_type) = official_current_track(spotify)?;
+        ensure_official_track_like(&item_type)?;
+        let already_saved =
+            resolve_official_saved_state(spotify, &item_id, true).unwrap_or(false);
+        return apply_official_track_saved_state(spotify, &item_id, !already_saved);
     }
     ensure_scope(spotify, "user-library-modify")?;
     let playback = get_playback_for_mutation(spotify)?;
@@ -1655,7 +1688,9 @@ pub fn set_current_track_saved(
     should_save: bool,
 ) -> Result<bool, String> {
     if !uses_web_api(spotify) {
-        return Err(web_api_required("Like"));
+        let (item_id, item_type) = official_current_track(spotify)?;
+        ensure_official_track_like(&item_type)?;
+        return apply_official_track_saved_state(spotify, &item_id, should_save);
     }
     ensure_scope(spotify, "user-library-modify")?;
     let (item_id, item_type) = match cached_playback_item_id(spotify) {
@@ -1855,6 +1890,79 @@ fn send_library_track_update_json(
     request
         .send()
         .map_err(|e| format!("Spotify /me/library JSON request failed: {}", e))
+}
+
+fn official_current_track(spotify: &SpotifyState) -> Result<(String, String), String> {
+    let playback = crate::spotify_desktop::playback_snapshot(spotify);
+    let item_id = playback
+        .item_id
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "Spotify has no current item to save".to_string())?;
+    let item_type = playback
+        .item_type
+        .unwrap_or_else(|| "track".to_string());
+    Ok((item_id, item_type))
+}
+
+fn ensure_official_track_like(item_type: &str) -> Result<(), String> {
+    if item_type == "track" {
+        Ok(())
+    } else {
+        Err(format!(
+            "Spotify like/dislike currently supports tracks only, but the active item type is '{item_type}'"
+        ))
+    }
+}
+
+fn apply_official_track_saved_state(
+    spotify: &SpotifyState,
+    item_id: &str,
+    should_save: bool,
+) -> Result<bool, String> {
+    log::info!(
+        "Spotify desktop: attempting liked-songs update for item_id='{item_id}' should_save='{should_save}'"
+    );
+    crate::spotify_desktop::set_track_saved(spotify, item_id, should_save)?;
+    set_saved_track_cache(spotify, item_id, should_save);
+    publish_status(spotify);
+    Ok(should_save)
+}
+
+fn resolve_official_saved_state(
+    spotify: &SpotifyState,
+    track_id: &str,
+    force_refresh: bool,
+) -> Option<bool> {
+    if !force_refresh {
+        if let Some(saved) = stale_cached_saved_track_state(spotify, track_id) {
+            return Some(saved);
+        }
+
+        {
+            let cache = spotify.saved_track_cache.lock().unwrap();
+            if cache.saved_lookup_track_id.as_deref() == Some(track_id) {
+                return cache.saved;
+            }
+        }
+    }
+
+    match crate::spotify_desktop::is_track_saved(spotify, track_id) {
+        Ok(Some(saved)) => {
+            set_saved_track_cache(spotify, track_id, saved);
+            return Some(saved);
+        }
+        Ok(None) => {}
+        Err(err) => {
+            log::debug!("Spotify desktop liked-songs lookup skipped: {err}");
+        }
+    }
+
+    if has_scope(spotify, "user-library-read").unwrap_or(false) {
+        return resolve_display_saved_state(spotify, track_id, true);
+    }
+
+    mark_saved_lookup_attempted(spotify, track_id);
+    None
 }
 
 fn resolve_saved_track_state(spotify: &SpotifyState, track_id: &str) -> bool {
@@ -2725,10 +2833,35 @@ mod tests {
     #[test]
     fn official_status_describes_in_app_playback() {
         let spotify = SpotifyState::default();
-        let status = official_desktop_status(&spotify).unwrap();
+        let status = official_desktop_status(&spotify, false).unwrap();
         assert!(!status.uses_web_api);
         assert!(status.message.contains("AstroDeck streams playback"));
         assert!(!status.message.contains("OS media"));
+    }
+
+    #[test]
+    fn official_status_reports_cached_like_state() {
+        let spotify = SpotifyState::default();
+        {
+            let mut playback = spotify.desktop_playback.lock().unwrap();
+            playback.item_id = Some("4uLU6hMCjMI75M1A2tKUQC".to_string());
+            playback.item_type = Some("track".to_string());
+            playback.track_name = Some("Song".to_string());
+            playback.player_ready = true;
+        }
+        {
+            let mut tokens = spotify.tokens.lock().unwrap();
+            *tokens = Some(SpotifyTokens {
+                access_token: "token".to_string(),
+                refresh_token: "refresh".to_string(),
+                expires_at: u64::MAX,
+                scope: "streaming".to_string(),
+            });
+        }
+        set_saved_track_cache(&spotify, "4uLU6hMCjMI75M1A2tKUQC", true);
+        let status = official_desktop_status(&spotify, false).unwrap();
+        assert_eq!(status.is_current_track_saved, Some(true));
+        assert_eq!(status.current_track_name.as_deref(), Some("Song"));
     }
 
     #[test]
@@ -2860,8 +2993,13 @@ mod tests {
     }
 
     #[test]
-    fn official_oauth_requests_streaming_scope() {
-        assert_eq!(oauth_scopes(SpotifyAuthMode::Official), "streaming");
+    fn official_oauth_requests_streaming_and_library_scopes() {
+        let scopes: Vec<&str> = oauth_scopes(SpotifyAuthMode::Official)
+            .split_whitespace()
+            .collect();
+        assert!(scopes.contains(&"streaming"));
+        assert!(scopes.contains(&"user-library-read"));
+        assert!(scopes.contains(&"user-library-modify"));
         assert!(oauth_scopes(SpotifyAuthMode::Custom).contains("playlist-read-private"));
         assert!(!oauth_scopes(SpotifyAuthMode::Custom)
             .split_whitespace()
