@@ -492,10 +492,18 @@
     } catch (e) {
       lyricsDoc = null;
       lyricsTrackId = id;
-      lyricsError = String(e);
+      lyricsError = lyricsUserMessage(e);
     } finally {
       lyricsBusy = false;
     }
+  }
+
+  function lyricsUserMessage(error: unknown): string {
+    const text = String(error ?? "");
+    if (/403|forbidden|permission denied/i.test(text)) {
+      return "Spotify wouldn't share lyrics for this track.";
+    }
+    return text.replace(/^Error:\s*/i, "") || "Spotify lyrics could not be loaded";
   }
 
   function formatTime(ms: number): string {
