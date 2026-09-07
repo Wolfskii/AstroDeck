@@ -173,7 +173,7 @@
           detail: { action: "spotify.playPlaylist", label: playlist.name },
         })
       );
-      playingPlaylistId = null;
+      close();
     } catch (e) {
       playlistsError = String(e);
       playingPlaylistId = null;

@@ -104,8 +104,10 @@ pub fn download_and_install_update(download_url: String, app: tauri::AppHandle) 
     let client = http_client()?;
     let installer_path = download_installer(&client, &download_url)?;
     launch_installer(&installer_path)?;
-    app.exit(0);
-    #[allow(unreachable_code)]
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(750));
+        app.exit(0);
+    });
     Ok(())
 }
 

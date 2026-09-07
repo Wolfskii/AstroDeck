@@ -1428,9 +1428,11 @@
     appUpdateError = null;
     try {
       logInfo(`Downloading update from ${appUpdate.installerName ?? "release asset"}`, "Updater");
+      updatePopupOpen = false;
       await downloadAndInstallUpdate(appUpdate.downloadUrl);
     } catch (e) {
       appUpdateBusy = false;
+      updatePopupOpen = true;
       appUpdateError = String(e);
       logError(`Update install failed: ${String(e)}`, "Updater");
     }
