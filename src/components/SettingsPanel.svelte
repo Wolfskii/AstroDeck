@@ -611,8 +611,8 @@
             </div>
             <p class="setting-desc">
               Sign in with your Spotify account. Playback, playlists, volume, and seek go through
-              the Spotify app — not api.spotify.com. Playing a playlist may briefly show Spotify,
-              then AstroDeck comes back to the front.
+              the Spotify app — not api.spotify.com. Play starts in that app; Spotify may flash
+              briefly, then AstroDeck comes back to the front.
             </p>
           </button>
           <button
