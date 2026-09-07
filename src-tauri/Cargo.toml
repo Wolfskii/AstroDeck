@@ -32,6 +32,9 @@ base64 = "0.22"
 sha2 = "0.10"
 rand = "0.8"
 url = "2.5"
+protobuf = "3"
+librespot-core = { git = "https://github.com/nolight132/librespot", rev = "e7eb953d5848fd97bacd00e6c0e33500765eaa63", default-features = false, features = ["rustls-tls-native-roots"] }
+librespot-protocol = { git = "https://github.com/nolight132/librespot", rev = "e7eb953d5848fd97bacd00e6c0e33500765eaa63" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
@@ -53,3 +56,8 @@ media-remote = "0.3"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+# librespot-core 0.8's build.rs uses vergen-gitcl 1.0, which otherwise pulls two
+# incompatible vergen-lib versions into the same graph.
+[patch.crates-io]
+vergen-gitcl = { path = "vendor/vergen-gitcl" }
