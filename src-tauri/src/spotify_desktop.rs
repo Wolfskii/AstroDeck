@@ -287,7 +287,16 @@ pub fn open_spotify_uri(uri: &str) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        // `-g` keeps Spotify from coming to the front when it is already running.
+        let play_uri = playlist_launch_uri(uri);
+        let script = format!("tell application \"Spotify\" to play track \"{play_uri}\"");
+        if Command::new("osascript")
+            .args(["-e", &script])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
         Command::new("open")
             .args(["-g", uri])
             .status()
@@ -297,11 +306,11 @@ pub fn open_spotify_uri(uri: &str) -> Result<(), String> {
 
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        if play_uri_via_mpris(uri).is_ok() {
+        if play_uri_via_mpris(&playlist_launch_uri(uri)).is_ok() {
             return Ok(());
         }
         Command::new("xdg-open")
-            .arg(uri)
+            .arg(playlist_launch_uri(uri))
             .status()
             .map_err(|e| format!("Failed to play {uri} in Spotify: {e}"))?;
         Ok(())
@@ -333,7 +342,8 @@ fn open_spotify_uri_windows(uri: &str) -> Result<(), String> {
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
     let previous = unsafe { GetForegroundWindow() };
-    let args = windows_start_args(uri);
+    let launch_uri = playlist_launch_uri(uri);
+    let args = windows_start_args(&launch_uri);
     let status = Command::new("cmd")
         .args(&args)
         .status()
@@ -349,7 +359,14 @@ fn open_spotify_uri_windows(uri: &str) -> Result<(), String> {
     let _ = std::thread::Builder::new()
         .name("spotify-refocus".into())
         .spawn(move || {
-            wait_for_spotify_to_accept_uri();
+            wait_for_spotify_window();
+            std::thread::sleep(Duration::from_millis(800));
+            if let Some(hwnd) = find_spotify_main_window() {
+                focus_spotify_window(hwnd);
+                std::thread::sleep(Duration::from_millis(120));
+                send_spotify_play(hwnd);
+            }
+            std::thread::sleep(Duration::from_millis(250));
             restore_foreground_raw(previous_raw);
         });
     Ok(())
@@ -365,8 +382,17 @@ fn windows_start_args(uri: &str) -> Vec<String> {
     ]
 }
 
+fn playlist_launch_uri(context_uri: &str) -> String {
+    let trimmed = context_uri.trim().trim_end_matches(':');
+    if trimmed.ends_with(":play") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}:play")
+    }
+}
+
 #[cfg(windows)]
-fn wait_for_spotify_to_accept_uri() {
+fn wait_for_spotify_window() {
     let deadline = Instant::now() + Duration::from_secs(4);
     while Instant::now() < deadline {
         if find_spotify_main_window().is_some_and(window_is_showing) {
@@ -374,7 +400,69 @@ fn wait_for_spotify_to_accept_uri() {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    std::thread::sleep(Duration::from_millis(1500));
+}
+
+#[cfg(windows)]
+fn focus_spotify_window(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AllowSetForegroundWindow, SetForegroundWindow,
+    };
+
+    unsafe {
+        let _ = AllowSetForegroundWindow(u32::MAX);
+        let _ = SetForegroundWindow(hwnd);
+    }
+}
+
+#[cfg(windows)]
+fn send_spotify_play(hwnd: windows::Win32::Foundation::HWND) {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+        VK_SPACE,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APPCOMMAND};
+
+    // APPCOMMAND_MEDIA_PLAY = 46. Opening the playlist URI only shows it;
+    // this asks Spotify to actually start playback.
+    const APPCOMMAND_MEDIA_PLAY: isize = 46;
+    let _ = unsafe {
+        PostMessageW(
+            hwnd,
+            WM_APPCOMMAND,
+            WPARAM(0),
+            LPARAM(APPCOMMAND_MEDIA_PLAY << 16),
+        )
+    };
+
+    let space_down = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VK_SPACE,
+                wScan: 0,
+                dwFlags: KEYBD_EVENT_FLAGS(0),
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let space_up = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VK_SPACE,
+                wScan: 0,
+                dwFlags: KEYEVENTF_KEYUP,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let inputs = [space_down, space_up];
+    unsafe {
+        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    }
 }
 
 #[cfg(windows)]
@@ -522,11 +610,23 @@ mod tests {
 
     #[test]
     fn playlist_play_uses_normal_start_not_minimized() {
-        let args = windows_start_args("spotify:playlist:abc");
+        let args = windows_start_args("spotify:playlist:abc:play");
         assert_eq!(
             args.iter().map(String::as_str).collect::<Vec<_>>(),
-            vec!["/C", "start", "", "spotify:playlist:abc"]
+            vec!["/C", "start", "", "spotify:playlist:abc:play"]
         );
         assert!(!args.iter().any(|arg| arg == "/MIN"));
+    }
+
+    #[test]
+    fn playlist_launch_uri_appends_play() {
+        assert_eq!(
+            playlist_launch_uri("spotify:playlist:abc"),
+            "spotify:playlist:abc:play"
+        );
+        assert_eq!(
+            playlist_launch_uri("spotify:playlist:abc:play"),
+            "spotify:playlist:abc:play"
+        );
     }
 }
