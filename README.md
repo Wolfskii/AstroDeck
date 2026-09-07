@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/brand/astrodeck-astronaut.png" alt="AstroDeck" width="256" />
+  <img src="src/assets/app-icon.png" alt="AstroDeck" width="256" />
 </p>
 
 # AstroDeck
