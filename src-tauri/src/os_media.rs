@@ -301,8 +301,7 @@ pub fn handle_value(
             let position_ms = value.as_u64().ok_or_else(|| {
                 "media.seek expects a numeric position in milliseconds".to_string()
             })?;
-            control_playback(ControlOp::Seek(position_ms as i64))?;
-            Ok(())
+            seek_to(position_ms)
         }
         _ => Err(format!(
             "Media action '{}' does not support a value payload",

@@ -459,13 +459,13 @@ fn start_player(
     spotify: &SpotifyState,
     volume_percent: u8,
 ) -> Result<(Arc<Player>, Arc<dyn Mixer>), String> {
-    let mixer_builder = mixer::find(None).ok_or_else(|| "Spotify audio mixer is unavailable".to_string())?;
-    let mixer = mixer_builder(MixerConfig::default())
-        .map_err(|e| format!("Spotify mixer failed: {e}"))?;
+    let mixer_builder = mixer::find(None)
+        .ok_or_else(|| player_start_error("audio mixer is unavailable"))?;
+    let mixer = mixer_builder(MixerConfig::default()).map_err(player_start_error)?;
     mixer.set_volume(percent_to_volume(volume_percent));
 
     let sink_builder = audio_backend::find(None)
-        .ok_or_else(|| "Spotify audio output is unavailable".to_string())?;
+        .ok_or_else(|| player_start_error("audio output is unavailable"))?;
     let audio_format = AudioFormat::default();
     let mut player_config = PlayerConfig::default();
     player_config.position_update_interval = Some(Duration::from_secs(1));
