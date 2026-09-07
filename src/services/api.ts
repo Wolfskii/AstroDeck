@@ -166,6 +166,38 @@ export async function playSpotifyPlaylist(playlist: string): Promise<void> {
   return invoke("play_spotify_playlist", { playlist });
 }
 
+export interface SpotifyLyricLine {
+  startTimeMs: number;
+  words: string;
+}
+
+export interface SpotifyTrackLyrics {
+  trackId: string;
+  syncType: string;
+  available: boolean;
+  lines: SpotifyLyricLine[];
+}
+
+const DEMO_LYRICS: SpotifyTrackLyrics = {
+  trackId: "demo",
+  syncType: "LINE_SYNCED",
+  available: true,
+  lines: [
+    { startTimeMs: 0, words: "Lights down, the room leans in" },
+    { startTimeMs: 2500, words: "This is the line that's singing now" },
+    { startTimeMs: 5200, words: "And this one waits just underneath" },
+    { startTimeMs: 8000, words: "Then it rises as the last one fades" },
+    { startTimeMs: 10800, words: "White in the middle, grey above" },
+  ],
+};
+
+export async function getSpotifyLyrics(trackId: string): Promise<SpotifyTrackLyrics> {
+  if (!isTauri) {
+    return { ...DEMO_LYRICS, trackId };
+  }
+  return invoke<SpotifyTrackLyrics>("get_spotify_lyrics", { trackId });
+}
+
 export async function setSpotifyVolume(volumePercent: number): Promise<number> {
   return invoke<number>("set_spotify_volume", { volumePercent });
 }

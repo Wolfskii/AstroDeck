@@ -22,8 +22,8 @@ use tauri::Manager;
 use tokio::runtime::Runtime;
 
 use crate::spotify::{
-    get_access_token, token_has_streaming_scope, SpotifyPlaylist, SpotifyPlaylistPage,
-    SpotifyState, OFFICIAL_CLIENT_ID,
+    get_access_token, parse_color_lyrics, token_has_streaming_scope, SpotifyPlaylist,
+    SpotifyPlaylistPage, SpotifyState, SpotifyTrackLyrics, OFFICIAL_CLIENT_ID,
 };
 
 const ROOTLIST_LIMIT: usize = 500;
@@ -327,6 +327,22 @@ pub fn is_track_saved(spotify: &SpotifyState, track_id: &str) -> Result<Option<b
     let body = encode_collection_contains(&username, &uri);
     let response = collection_post(&session, "/collection/v2/contains", &body)?;
     Ok(parse_contains_response(&response))
+}
+
+pub fn fetch_lyrics(spotify: &SpotifyState, track_id: &str) -> Result<SpotifyTrackLyrics, String> {
+    let session = ensure_session(spotify)?;
+    let id = SpotifyId::from_base62(track_id)
+        .map_err(|e| format!("Spotify track id is invalid: {e}"))?;
+    let bytes = runtime().block_on(async {
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            session.spclient().get_lyrics(&id),
+        )
+        .await
+        .map_err(|_| "Spotify lyrics timed out".to_string())?
+        .map_err(|e| format!("Spotify lyrics could not be loaded: {e}"))
+    })?;
+    parse_color_lyrics(track_id, &bytes)
 }
 
 pub fn handle_transport(spotify: &SpotifyState, command: &str) -> Result<(), String> {
