@@ -2625,6 +2625,9 @@ pub fn get_track_lyrics(
                 log::info!("Spotify session lyrics failed, trying Web API: {session_err}");
                 match fetch_lyrics_http(spotify, track_id) {
                     Ok(lyrics) => lyrics,
+                    Err(err) if lyrics_error_is_unavailable(&err) => {
+                        SpotifyTrackLyrics::unavailable(track_id)
+                    }
                     Err(err) => return Err(friendly_lyrics_error(&err)),
                 }
             }
@@ -2642,10 +2645,8 @@ pub fn get_track_lyrics(
         }
     };
 
-    if lyrics.available {
-        if let Ok(mut cache) = spotify.lyrics_cache.lock() {
-            *cache = Some(lyrics.clone());
-        }
+    if let Ok(mut cache) = spotify.lyrics_cache.lock() {
+        *cache = Some(lyrics.clone());
     }
     Ok(lyrics)
 }
@@ -2671,7 +2672,7 @@ fn fetch_lyrics_http(
         .map_err(|e| format!("Spotify lyrics request failed: {e}"))?;
 
     let status = response.status();
-    if status.as_u16() == 404 {
+    if status.as_u16() == 403 || status.as_u16() == 404 {
         return Ok(SpotifyTrackLyrics::unavailable(track_id));
     }
     if !status.is_success() {
@@ -2739,7 +2740,11 @@ fn json_time_ms(value: Option<&serde_json::Value>) -> u64 {
 
 fn lyrics_error_is_unavailable(err: &str) -> bool {
     let lower = err.to_lowercase();
-    lower.contains("404") || lower.contains("not found")
+    lower.contains("404")
+        || lower.contains("not found")
+        || lower.contains("403")
+        || lower.contains("forbidden")
+        || lower.contains("permission denied")
 }
 
 fn friendly_lyrics_error(err: &str) -> String {
@@ -3249,6 +3254,6 @@ mod tests {
         assert!(lyrics_error_is_unavailable(
             "Spotify lyrics could not be loaded: 404"
         ));
-        assert!(!lyrics_error_is_unavailable("403 Forbidden"));
+        assert!(lyrics_error_is_unavailable("403 Forbidden"));
     }
 }

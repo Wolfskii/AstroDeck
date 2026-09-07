@@ -376,7 +376,11 @@ fn lyrics_image_uri(track_id: &str, cover_url: &str) -> String {
 
 fn lyrics_missing(err: &str) -> bool {
     let lower = err.to_lowercase();
-    lower.contains("404") || lower.contains("not found")
+    lower.contains("404")
+        || lower.contains("not found")
+        || lower.contains("403")
+        || lower.contains("forbidden")
+        || lower.contains("permission denied")
 }
 
 fn lyrics_get(session: &Session, uri: &str) -> Result<Vec<u8>, String> {
@@ -1409,7 +1413,7 @@ mod tests {
         );
         assert!(lyrics_missing("not found"));
         assert!(lyrics_missing("Response status code: 404"));
-        assert!(!lyrics_missing("403 Forbidden"));
+        assert!(lyrics_missing("403 Forbidden"));
     }
 
     fn payload_contains(bytes: &[u8], value: &str) -> bool {

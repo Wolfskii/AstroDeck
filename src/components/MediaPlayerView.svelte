@@ -418,8 +418,21 @@
   let lyricsError = $state<string | null>(null);
   let lyricsTrackId = $state<string | null>(null);
   let lyricsDoc = $state<SpotifyTrackLyrics | null>(null);
+  let lyricsHint = $state(false);
+  let lyricsRequest = 0;
 
-  const lyricsLines = $derived(lyricsDoc?.lines ?? []);
+  const noLyricsMessage = "Lyrics aren't available for this track";
+  const lyricsForThisTrack = $derived(
+    lyricsTrackId && trackId && lyricsTrackId === trackId ? lyricsDoc : null
+  );
+  const lyricsUnavailable = $derived(
+    Boolean(trackId) && lyricsForThisTrack !== null && lyricsForThisTrack.available === false
+  );
+  const lyricsBlocked = $derived(!trackId || lyricsUnavailable);
+  const lyricsHintText = $derived(
+    !trackId ? "Nothing is playing" : noLyricsMessage
+  );
+  const lyricsLines = $derived(lyricsDoc?.available ? lyricsDoc.lines : []);
   const lyricsSynced = $derived(
     lyricsDoc?.syncType === "LINE_SYNCED" || lyricsDoc?.syncType === "SYLLABLE_SYNCED"
   );
@@ -455,54 +468,91 @@
   });
 
   $effect(() => {
-    if (!lyricsOpen) return;
+    if (!lyricsEnabled) return;
     const id = trackId ?? null;
-    if (id && id !== lyricsTrackId) {
-      void loadLyrics(id);
-    }
+    const timer = setTimeout(() => {
+      void syncLyrics(id);
+    }, 120);
+    return () => clearTimeout(timer);
   });
 
-  async function toggleLyrics() {
-    lyricsOpen = !lyricsOpen;
-    if (lyricsOpen) {
-      await loadLyrics(trackId ?? null);
-    }
-  }
-
-  async function loadLyrics(id: string | null) {
+  async function syncLyrics(id: string | null) {
     if (!id) {
+      lyricsRequest += 1;
       lyricsDoc = null;
       lyricsTrackId = null;
-      lyricsError = "Nothing is playing";
+      lyricsBusy = false;
+      lyricsOpen = false;
+      lyricsHint = false;
       return;
     }
     if (lyricsTrackId === id && lyricsDoc) {
-      if (!lyricsDoc.available) {
-        lyricsError = "Lyrics aren't available for this track";
-      }
+      if (!lyricsDoc.available && lyricsOpen) lyricsOpen = false;
       return;
     }
+    const request = ++lyricsRequest;
     lyricsBusy = true;
     lyricsError = null;
+    if (lyricsOpen && lyricsTrackId !== id) {
+      lyricsDoc = null;
+    }
     try {
       const next = await getSpotifyLyrics(id);
+      if (request !== lyricsRequest) return;
       lyricsDoc = next;
       lyricsTrackId = id;
-      lyricsError = next.available ? null : "Lyrics aren't available for this track";
+      if (!next.available) {
+        lyricsError = noLyricsMessage;
+        lyricsOpen = false;
+      }
     } catch (e) {
-      lyricsDoc = null;
+      if (request !== lyricsRequest) return;
+      lyricsDoc = {
+        trackId: id,
+        syncType: "UNSYNCED",
+        available: false,
+        lines: [],
+      };
       lyricsTrackId = id;
-      lyricsError = lyricsUserMessage(e);
+      lyricsError = lyricsLooksMissing(e) ? noLyricsMessage : lyricsUserMessage(e);
+      lyricsOpen = false;
     } finally {
-      lyricsBusy = false;
+      if (request === lyricsRequest) lyricsBusy = false;
     }
+  }
+
+  async function toggleLyrics() {
+    if (lyricsBlocked) {
+      showLyricsHint();
+      return;
+    }
+    if (lyricsOpen) {
+      lyricsOpen = false;
+      lyricsHint = false;
+      return;
+    }
+    if (lyricsTrackId !== trackId || !lyricsDoc) {
+      await syncLyrics(trackId ?? null);
+    }
+    if (!lyricsDoc?.available) {
+      showLyricsHint();
+      return;
+    }
+    lyricsOpen = true;
+  }
+
+  function showLyricsHint() {
+    lyricsHint = true;
+    lyricsError = lyricsHintText;
+  }
+
+  function lyricsLooksMissing(error: unknown): boolean {
+    return /403|forbidden|permission denied|404|not found/i.test(String(error ?? ""));
   }
 
   function lyricsUserMessage(error: unknown): string {
     const text = String(error ?? "");
-    if (/403|forbidden|permission denied/i.test(text)) {
-      return "Spotify wouldn't share lyrics for this track.";
-    }
+    if (lyricsLooksMissing(text)) return noLyricsMessage;
     return text.replace(/^Error:\s*/i, "") || "Spotify lyrics could not be loaded";
   }
 
@@ -762,31 +812,47 @@
           <span class="car-transport-spacer" aria-hidden="true"></span>
         {/if}
         {#if lyricsEnabled}
-          <button
-            type="button"
-            class="car-transport-btn"
-            class:car-transport-lyrics-on={lyricsOpen}
-            aria-label={lyricsOpen ? "Hide lyrics" : "Show lyrics"}
-            aria-pressed={lyricsOpen}
-            disabled={!trackId}
-            onclick={() => void toggleLyrics()}
+          <div
+            class="car-lyrics-btn-wrap"
+            class:car-lyrics-btn-wrap--blocked={lyricsBlocked}
+            class:car-lyrics-btn-wrap--hint={lyricsHint}
+            onpointerleave={() => (lyricsHint = false)}
           >
-            <svg class="car-transport-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <g
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.85"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <g transform="rotate(-40 13.05 9)">
-                  <rect x="10.5" y="2.55" width="5.1" height="11.15" rx="2.55" />
-                  <path d="M13.05 13.7v3.05" />
+            <button
+              type="button"
+              class="car-transport-btn"
+              class:car-transport-lyrics-on={lyricsOpen}
+              class:car-transport-btn--inactive={lyricsBlocked}
+              aria-label={
+                lyricsBlocked
+                  ? lyricsHintText
+                  : lyricsOpen
+                    ? "Hide lyrics"
+                    : "Show lyrics"
+              }
+              aria-pressed={lyricsOpen}
+              aria-disabled={lyricsBlocked}
+              title={lyricsBlocked ? lyricsHintText : lyricsOpen ? "Hide lyrics" : "Show lyrics"}
+              onclick={() => void toggleLyrics()}
+            >
+              <svg class="car-transport-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <g
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.85"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <g transform="rotate(-40 13.05 9)">
+                    <rect x="10.5" y="2.55" width="5.1" height="11.15" rx="2.55" />
+                    <path d="M13.05 13.7v3.05" />
+                  </g>
                 </g>
-              </g>
-              <circle cx="8.2" cy="19.2" r="1.55" fill="currentColor" />
-            </svg>
-          </button>
+                <circle cx="8.2" cy="19.2" r="1.55" fill="currentColor" />
+              </svg>
+            </button>
+            <span class="car-lyrics-tooltip" role="status">{lyricsHintText}</span>
+          </div>
         {/if}
     </div>
   </footer>
@@ -986,8 +1052,8 @@
 
   .car-now-playing--lyrics {
     justify-content: center;
-    padding-left: 20px;
-    padding-right: 20px;
+    align-items: stretch;
+    padding: 8px 28px 16px;
   }
 
   .car-lyrics {
@@ -995,72 +1061,87 @@
     z-index: 1;
     width: 100%;
     height: 100%;
+    min-height: 0;
     display: flex;
-    align-items: center;
+    align-items: stretch;
     justify-content: center;
-    padding: 0 8px;
+    padding: 0;
   }
 
   .car-lyrics-stage {
-    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: stretch;
     width: min(52rem, 100%);
-    height: 10.8em;
+    height: 100%;
+    min-height: 0;
     overflow: hidden;
   }
 
   .car-lyrics-line {
-    position: absolute;
-    left: 0;
-    right: 0;
+    grid-column: 1;
     margin: 0;
-    padding: 0 12px;
+    padding: 0.22em 16px;
     text-align: center;
-    line-height: 1.25;
-    overflow-wrap: break-word;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    max-width: 100%;
     transition:
-      top 0.5s cubic-bezier(0.22, 1, 0.36, 1),
       opacity 0.45s ease,
       color 0.35s ease,
       font-size 0.45s cubic-bezier(0.22, 1, 0.36, 1),
-      font-weight 0.35s ease;
+      font-weight 0.35s ease,
+      transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .car-lyrics-line--exit,
+  .car-lyrics-line--prev {
+    grid-row: 1;
+    align-self: end;
   }
 
   .car-lyrics-line--exit {
-    top: -1.35em;
     opacity: 0;
     color: rgba(255, 255, 255, 0.28);
     font-size: clamp(1.05rem, 2.2vw, 1.45rem);
     font-weight: 500;
+    transform: translateY(-0.55rem);
     pointer-events: none;
   }
 
   .car-lyrics-line--prev {
-    top: 0.45em;
-    opacity: 0.42;
-    color: rgba(232, 232, 232, 0.58);
-    font-size: clamp(1.2rem, 2.8vw, 1.85rem);
+    opacity: 0.5;
+    color: rgba(232, 232, 232, 0.68);
+    font-size: clamp(1.15rem, 2.5vw, 1.7rem);
     font-weight: 600;
+    padding-bottom: 0.55em;
   }
 
   .car-lyrics-line--current {
-    top: 3.35em;
+    grid-row: 2;
+    align-self: center;
     opacity: 1;
     color: #fff;
-    font-size: clamp(1.85rem, 4.4vw, 2.85rem);
+    font-size: clamp(1.7rem, 3.8vw, 2.6rem);
     font-weight: 800;
     letter-spacing: -0.02em;
+    padding-top: 0.12em;
+    padding-bottom: 0.12em;
   }
 
   .car-lyrics-line--next {
-    top: 7.15em;
-    opacity: 0.38;
-    color: rgba(232, 232, 232, 0.5);
-    font-size: clamp(1.2rem, 2.8vw, 1.85rem);
+    grid-row: 3;
+    align-self: start;
+    opacity: 0.42;
+    color: rgba(232, 232, 232, 0.55);
+    font-size: clamp(1.15rem, 2.5vw, 1.7rem);
     font-weight: 600;
+    padding-top: 0.55em;
   }
 
   .car-lyrics-status {
-    margin: 0;
+    margin: auto;
     color: rgba(255, 255, 255, 0.62);
     font-size: clamp(1.2rem, 2.4vw, 1.7rem);
     font-weight: 600;
@@ -1069,6 +1150,10 @@
 
   .car-thing-body--has-icon .car-now-playing {
     padding-top: 100px;
+  }
+
+  .car-thing-body--has-icon .car-now-playing--lyrics {
+    padding-top: 108px;
   }
 
   .car-now-playing-inner {
@@ -1350,6 +1435,40 @@
     max-width: min(100%, 860px);
   }
 
+  .car-lyrics-btn-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .car-lyrics-tooltip {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 8px 14px;
+    background: #282828;
+    color: #fff;
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.25;
+    border-radius: 6px;
+    white-space: nowrap;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: 4;
+    transition: opacity 0.12s ease, visibility 0.12s ease;
+  }
+
+  .car-lyrics-btn-wrap--blocked:hover .car-lyrics-tooltip,
+  .car-lyrics-btn-wrap--hint .car-lyrics-tooltip {
+    opacity: 1;
+    visibility: visible;
+  }
+
   .car-transport-lyrics-on {
     color: #1db954;
   }
@@ -1385,9 +1504,18 @@
     transform: scale(0.94);
   }
 
-  .car-transport-btn:disabled {
+  .car-transport-btn:disabled,
+  .car-transport-btn--inactive {
     opacity: 0.35;
     cursor: default;
+    transform: none;
+  }
+
+  .car-transport-btn--inactive:hover {
+    color: rgba(255, 255, 255, 0.92);
+  }
+
+  .car-transport-btn--inactive:active {
     transform: none;
   }
 
