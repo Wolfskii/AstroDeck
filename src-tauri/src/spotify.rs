@@ -39,7 +39,7 @@ const CUSTOM_SPOTIFY_SCOPES: &str =
 /// Library scopes let official login like/unlike via the Web API after reconnect;
 /// collection-v2 still works without them.
 const OFFICIAL_SPOTIFY_SCOPES: &str =
-    "streaming user-library-read user-library-modify user-read-recently-played";
+    "streaming user-library-read user-library-modify user-read-recently-played playlist-read-private playlist-read-collaborative";
 
 /// Spotify's official desktop / librespot "keymaster" client id. Already approved,
 /// with localhost `/login` redirects registered, so users do not create a developer app.
@@ -3455,6 +3455,8 @@ mod tests {
         assert!(scopes.contains(&"user-library-read"));
         assert!(scopes.contains(&"user-library-modify"));
         assert!(scopes.contains(&"user-read-recently-played"));
+        assert!(scopes.contains(&"playlist-read-private"));
+        assert!(scopes.contains(&"playlist-read-collaborative"));
         assert!(oauth_scopes(SpotifyAuthMode::Custom).contains("playlist-read-private"));
         assert!(oauth_scopes(SpotifyAuthMode::Custom)
             .contains("user-read-recently-played"));

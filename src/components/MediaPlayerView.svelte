@@ -985,8 +985,11 @@
 
   .car-now-playing--lyrics {
     justify-content: center;
-    padding-left: 20px;
-    padding-right: 20px;
+    padding: 0 20px 28px;
+  }
+
+  .car-thing-body--has-icon .car-now-playing--lyrics {
+    padding-top: 0;
   }
 
   .car-lyrics {
@@ -1003,7 +1006,7 @@
   .car-lyrics-stage {
     position: relative;
     width: min(52rem, 100%);
-    height: 10.8em;
+    height: 10rem;
     overflow: hidden;
   }
 
@@ -1025,7 +1028,7 @@
   }
 
   .car-lyrics-line--exit {
-    top: -1.35em;
+    top: -1.2rem;
     opacity: 0;
     color: rgba(255, 255, 255, 0.28);
     font-size: clamp(1.05rem, 2.2vw, 1.45rem);
@@ -1034,7 +1037,7 @@
   }
 
   .car-lyrics-line--prev {
-    top: 0.45em;
+    top: 0.25rem;
     opacity: 0.42;
     color: rgba(232, 232, 232, 0.58);
     font-size: clamp(1.2rem, 2.8vw, 1.85rem);
@@ -1042,7 +1045,7 @@
   }
 
   .car-lyrics-line--current {
-    top: 3.35em;
+    top: 2.9rem;
     opacity: 1;
     color: #fff;
     font-size: clamp(1.85rem, 4.4vw, 2.85rem);
@@ -1051,7 +1054,7 @@
   }
 
   .car-lyrics-line--next {
-    top: 7.15em;
+    top: 6.6rem;
     opacity: 0.38;
     color: rgba(232, 232, 232, 0.5);
     font-size: clamp(1.2rem, 2.8vw, 1.85rem);
