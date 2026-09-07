@@ -981,12 +981,19 @@
     grid-column: 1;
     grid-row: 2;
     flex-shrink: 0;
+    box-sizing: border-box;
+    height: 18px;
+    min-height: 18px;
+    max-height: 18px;
     padding: 0 0 10px;
+    display: flex;
+    align-items: flex-end;
+    overflow: visible;
     cursor: pointer;
     touch-action: none;
     user-select: none;
     position: relative;
-    z-index: 1;
+    z-index: 2;
     background: var(--car-footer-bg, #0c0808);
     transition: background 0.7s ease;
   }
@@ -1003,14 +1010,10 @@
 
   .car-progress-rail {
     position: relative;
+    width: 100%;
     height: 8px;
     background: rgba(255, 255, 255, 0.14);
     border-radius: 0;
-    transition: height 0.15s ease;
-  }
-
-  .car-progress-wrap.car-progress-active .car-progress-rail {
-    height: 10px;
   }
 
   .car-progress-played {
@@ -1019,7 +1022,7 @@
     background: #fff;
     border-radius: 0;
     pointer-events: none;
-    transition: background 0.12s ease, height 0.15s ease;
+    transition: background 0.12s ease;
   }
 
   .car-progress-played.car-progress-played-hover {
@@ -1182,6 +1185,10 @@
     transition: background 0.7s ease;
   }
 
+  .car-thing--shader .car-fader {
+    isolation: isolate;
+  }
+
   .car-thing--controls-backdrop .car-fader {
     background: rgba(var(--controls-overlay-rgb, 0, 0, 0), var(--controls-overlay-alpha, 0.65));
   }
@@ -1287,6 +1294,18 @@
     background: rgba(255, 255, 255, 0.3);
   }
 
+  .car-thing--shader .car-fader-tick {
+    background: #4a4a4a;
+  }
+
+  .car-thing--shader .car-fader-tick-mid {
+    background: #5a5a5a;
+  }
+
+  .car-thing--shader .car-fader-tick-long {
+    background: #6a6a6a;
+  }
+
   .car-fader-rail {
     display: flex;
     flex-direction: column;
@@ -1304,6 +1323,16 @@
     background: transparent;
   }
 
+  .car-thing--shader .car-fader-slot::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 12px;
+    background: rgba(12, 12, 12, 0.96);
+    z-index: 0;
+    pointer-events: none;
+  }
+
   .car-fader-track-line {
     position: absolute;
     top: var(--fader-thumb-half);
@@ -1314,6 +1343,12 @@
     border-radius: 10px;
     background: rgba(255, 255, 255, 0.16);
     pointer-events: none;
+    z-index: 1;
+  }
+
+  .car-thing--shader .car-fader-track-line {
+    background: #3a3a3a;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
   }
 
   .car-fader-thumb {
@@ -1330,6 +1365,7 @@
     align-items: center;
     justify-content: center;
     pointer-events: none;
+    z-index: 2;
     transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.12s ease;
   }
 
