@@ -88,6 +88,12 @@ pub fn start_detection_loop(app_handle: tauri::AppHandle) {
                 matched_ids.retain(|id| id != "spotify");
             }
 
+            if crate::spotify_desktop::should_show_spotify_scene(&state.spotify)
+                && !matched_ids.iter().any(|id| id == "spotify")
+            {
+                matched_ids.push("spotify".to_string());
+            }
+
             matched_ids.retain(|id| crate::prefs::auto_switch_enabled(&app_handle, id));
 
             if let Ok(mut last) = state.last_matched_ids.lock() {

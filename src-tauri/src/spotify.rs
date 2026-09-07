@@ -8,7 +8,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 use url::Url;
@@ -138,6 +138,8 @@ pub struct SpotifyState {
     playlist_fetch: Mutex<()>,
     playback_history: Mutex<PlaybackHistory>,
     pub(crate) desktop_session: Mutex<Option<librespot_core::session::Session>>,
+    pub(crate) desktop_spirc: Mutex<Option<librespot_connect::Spirc>>,
+    pub(crate) desktop_playback: Arc<Mutex<crate::spotify_desktop::OfficialPlayback>>,
 }
 
 pub fn invalidate_playback_cache(spotify: &SpotifyState) {
@@ -1175,7 +1177,7 @@ fn official_desktop_status(spotify: &SpotifyState) -> Result<SpotifyStatus, Stri
         .map(|tokens| parse_scopes(&tokens.scope))
         .unwrap_or_default();
     let authenticated = stored_tokens.is_some();
-    let volume = crate::os_media::get_output_volume().ok();
+    let playback = crate::spotify_desktop::playback_snapshot(spotify);
     let needs_desktop_reconnect = authenticated
         && !granted_scopes.is_empty()
         && !granted_scopes.iter().any(|scope| scope == "streaming");
@@ -1194,7 +1196,7 @@ fn official_desktop_status(spotify: &SpotifyState) -> Result<SpotifyStatus, Stri
             duration_ms: None,
             playback_state: "stopped".to_string(),
             is_playing: false,
-            current_volume_percent: volume,
+            current_volume_percent: Some(playback.volume_percent),
             current_item_type: None,
             current_item_id: None,
             is_current_track_saved: None,
@@ -1203,36 +1205,48 @@ fn official_desktop_status(spotify: &SpotifyState) -> Result<SpotifyStatus, Stri
             uses_web_api: false,
             next_track_preview: None,
             prev_track_preview: None,
-            message: "Sign in with Spotify desktop login. Playback uses the Spotify app and OS media controls — no developer app or Web API.".to_string(),
+            message: "Sign in with Spotify desktop login. AstroDeck streams playback itself — no developer app, no Web API, and the Spotify desktop app is not required. Premium is required.".to_string(),
         });
     }
+
+    let playback_state = if playback.is_playing {
+        "playing"
+    } else if playback.track_name.is_some() {
+        "paused"
+    } else {
+        "stopped"
+    };
 
     Ok(SpotifyStatus {
         is_configured: true,
         is_authenticated: true,
-        has_active_device: true,
-        active_device_name: Some("Spotify app".to_string()),
-        current_track_name: None,
-        current_artist_name: None,
-        current_cover_art_url: None,
-        current_album_name: None,
-        progress_ms: None,
-        duration_ms: None,
-        playback_state: "stopped".to_string(),
-        is_playing: false,
-        current_volume_percent: volume,
-        current_item_type: None,
-        current_item_id: None,
+        has_active_device: playback.player_ready,
+        active_device_name: playback
+            .player_ready
+            .then(|| crate::spotify_desktop::OFFICIAL_DEVICE_NAME.to_string()),
+        current_track_name: playback.track_name,
+        current_artist_name: playback.artist_name,
+        current_cover_art_url: playback.cover_url,
+        current_album_name: playback.album_name,
+        progress_ms: playback.progress_ms,
+        duration_ms: playback.duration_ms,
+        playback_state: playback_state.to_string(),
+        is_playing: playback.is_playing,
+        current_volume_percent: Some(playback.volume_percent),
+        current_item_type: playback.item_type,
+        current_item_id: playback.item_id,
         is_current_track_saved: None,
-        is_shuffle: false,
+        is_shuffle: playback.shuffle,
         granted_scopes,
         uses_web_api: false,
         next_track_preview: None,
         prev_track_preview: None,
         message: if needs_desktop_reconnect {
             "Spotify desktop login needs a fresh connect for playlists. Disconnect and connect again so the browser prompt can grant desktop access.".to_string()
+        } else if playback.player_ready {
+            "Spotify desktop login is connected. AstroDeck is the player — playlists, volume, seek, and transport stream here. The Spotify app is not required.".to_string()
         } else {
-            "Spotify desktop login is connected. Playback, volume, and seek use the Spotify app and OS media controls.".to_string()
+            "Spotify desktop login is connected. Start a playlist to stream in AstroDeck — the Spotify app is not required.".to_string()
         },
     })
 }
@@ -1596,8 +1610,13 @@ pub fn complete_auth_via_callback(spotify: &SpotifyState) -> Result<(), String> 
         crate::spotify_desktop::clear_credentials(spotify);
         if let Err(err) = crate::spotify_desktop::ensure_session(spotify) {
             log::info!("Spotify desktop session after login skipped: {err}");
-        } else if let Err(err) = crate::spotify_desktop::list_playlists(spotify, 0, 50) {
-            log::info!("Spotify desktop playlist cache warm after login skipped: {err}");
+        } else {
+            if let Err(err) = crate::spotify_desktop::list_playlists(spotify, 0, 50) {
+                log::info!("Spotify desktop playlist cache warm after login skipped: {err}");
+            }
+            if let Err(err) = crate::spotify_desktop::ensure_player(spotify) {
+                log::info!("Spotify player after login skipped: {err}");
+            }
         }
     }
     Ok(())
@@ -2000,10 +2019,7 @@ fn fetch_track_saved_state(spotify: &SpotifyState, track_id: &str) -> Result<Opt
 
 pub fn adjust_volume(spotify: &SpotifyState, delta: i32) -> Result<u8, String> {
     if !uses_web_api(spotify) {
-        let current = crate::os_media::get_output_volume().unwrap_or(50) as i32;
-        let next = (current + delta).clamp(0, 100) as u8;
-        crate::os_media::set_output_volume(next)?;
-        return Ok(next);
+        return crate::spotify_desktop::adjust_volume(spotify, delta);
     }
     let playback = get_playback_for_mutation(spotify)?;
     let device_id = playback.device_id;
@@ -2014,8 +2030,7 @@ pub fn adjust_volume(spotify: &SpotifyState, delta: i32) -> Result<u8, String> {
 
 pub fn set_volume(spotify: &SpotifyState, volume_percent: u8, device_id: Option<String>) -> Result<u8, String> {
     if !uses_web_api(spotify) {
-        crate::os_media::set_output_volume(volume_percent)?;
-        return Ok(volume_percent);
+        return crate::spotify_desktop::set_volume(spotify, volume_percent);
     }
     let device_id = match device_id {
         Some(id) => id,
@@ -2049,7 +2064,7 @@ pub fn set_volume(spotify: &SpotifyState, volume_percent: u8, device_id: Option<
 
 pub fn seek(spotify: &SpotifyState, position_ms: u64) -> Result<(), String> {
     if !uses_web_api(spotify) {
-        return crate::os_media::seek_to(position_ms);
+        return crate::spotify_desktop::seek(spotify, position_ms);
     }
     let playback = get_playback_for_mutation(spotify)?;
     let access_token = get_access_token(spotify)?;
@@ -2177,7 +2192,7 @@ fn fetch_current_playback(spotify: &SpotifyState) -> Result<PlaybackSummary, Str
 
 pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
     if !uses_web_api(spotify) {
-        return Err(web_api_required("Shuffle"));
+        return crate::spotify_desktop::toggle_shuffle(spotify);
     }
     let playback = get_playback_for_mutation(spotify)?;
     let next_state = !playback.shuffle_state;
@@ -2453,8 +2468,7 @@ pub fn list_playlists(
 pub fn play_playlist(spotify: &SpotifyState, playlist: &str) -> Result<(), String> {
     if !uses_web_api(spotify) {
         let context_uri = playlist_context_uri(playlist)?;
-        crate::spotify_desktop::open_spotify_uri(&context_uri)?;
-        log::info!("Spotify desktop: playing {context_uri} in the Spotify app");
+        crate::spotify_desktop::play_context_uri(spotify, &context_uri)?;
         return Ok(());
     }
 
@@ -2709,6 +2723,15 @@ fn current_scopes(spotify: &SpotifyState) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn official_status_describes_in_app_playback() {
+        let spotify = SpotifyState::default();
+        let status = official_desktop_status(&spotify).unwrap();
+        assert!(!status.uses_web_api);
+        assert!(status.message.contains("AstroDeck streams playback"));
+        assert!(!status.message.contains("OS media"));
+    }
 
     #[test]
     fn new_install_defaults_to_official_desktop_login() {

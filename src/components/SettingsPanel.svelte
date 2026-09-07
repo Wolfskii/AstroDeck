@@ -548,8 +548,8 @@
             <p class="setting-title">Account</p>
             <p class="setting-desc">
               {#if spotifyAuthMode === "official"}
-                Sign in with your Spotify account. AstroDeck controls the Spotify app with OS media
-                keys and the desktop playlist protocol — no developer app and no Web API.
+                Sign in with your Spotify account. AstroDeck streams playback itself, so the Spotify
+                desktop app is not required — no developer app and no Web API. Premium is required.
               {:else}
                 Connect once to enable track liking, shuffle, and Spotify-device volume through the
                 Web API, plus OS media keys.
@@ -592,8 +592,8 @@
       <div class="settings-card settings-card-pad">
         <p class="setting-title">Login method</p>
         <p class="setting-desc">
-          Desktop login is the default and does not use Spotify's Web API. Switch to a developer app
-          if you want like, shuffle, and Spotify-device volume through the API.
+          Desktop login is the default and does not use Spotify's Web API. Playback streams in
+          AstroDeck. Switch to a developer app if you want like-song through the API.
         </p>
         <div class="auth-mode-list" role="radiogroup" aria-label="Spotify login method">
           <button
@@ -610,9 +610,8 @@
               <span class="scene-tag current">default</span>
             </div>
             <p class="setting-desc">
-              Sign in with your Spotify account. Playback, playlists, volume, and seek go through
-              the Spotify app — not api.spotify.com. Play starts in that app; Spotify may flash
-              briefly, then AstroDeck comes back to the front.
+              Sign in with your Spotify account. Playlists, transport, volume, and seek stream in
+              AstroDeck — not api.spotify.com and not Spotify.exe. Requires Spotify Premium.
             </p>
           </button>
           <button
