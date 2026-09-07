@@ -123,25 +123,61 @@ pub fn ensure_session(spotify: &SpotifyState) -> Result<Session, String> {
     Ok(session)
 }
 
+fn player_start_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 pub fn ensure_player(spotify: &SpotifyState) -> Result<(), String> {
-    let session = ensure_session(spotify)?;
+    let _start = player_start_lock().lock().map_err(|e| e.to_string())?;
     {
-        let guard = spotify.desktop_spirc.lock().map_err(|e| e.to_string())?;
-        if guard.is_some() && !session.is_invalid() {
+        let session_ok = spotify
+            .desktop_session
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|session| !session.is_invalid()))
+            .unwrap_or(false);
+        let spirc_ok = spotify
+            .desktop_spirc
+            .lock()
+            .ok()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false);
+        if session_ok && spirc_ok {
             return Ok(());
         }
     }
 
-    shutdown_player(spotify);
-    let cache = open_cache(spotify);
-    let credentials = player_credentials(spotify, cache.as_ref())?;
+    // Spirc::new calls Session::connect itself. Reusing a session that playlist
+    // listing already connected aborts with "request was already handled".
+    drop_session(spotify);
     let playback = spotify.desktop_playback.clone();
-    let spirc = start_spirc(session, credentials, playback)?;
+    let (spirc, session) = start_player_session(spotify, playback)?;
+    store_session(spotify, session);
     *spotify.desktop_spirc.lock().map_err(|e| e.to_string())? = Some(spirc);
     if let Ok(mut playback) = spotify.desktop_playback.lock() {
         playback.player_ready = true;
     }
     Ok(())
+}
+
+fn start_player_session(
+    spotify: &SpotifyState,
+    playback: Arc<Mutex<OfficialPlayback>>,
+) -> Result<(Spirc, Session), String> {
+    let cache = open_cache(spotify);
+    let credentials = player_credentials(spotify, cache.as_ref())?;
+    match start_spirc(credentials, cache, playback.clone()) {
+        Ok(started) => Ok(started),
+        Err(err) if is_double_connect_error(&err) => {
+            log::warn!("Spotify player hit a connected session; retrying with a fresh login: {err}");
+            drop_session(spotify);
+            let cache = open_cache(spotify);
+            let credentials = player_credentials(spotify, cache.as_ref())?;
+            start_spirc(credentials, cache, playback)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 pub fn playback_snapshot(spotify: &SpotifyState) -> OfficialPlayback {
@@ -285,11 +321,15 @@ fn connect_with_access_token(
         .map_err(desktop_session_login_error)
 }
 
+fn session_config() -> SessionConfig {
+    let mut config = SessionConfig::default();
+    config.client_id = OFFICIAL_CLIENT_ID.to_string();
+    config
+}
+
 fn connect_session(credentials: Credentials, cache: Option<Cache>) -> Result<Session, String> {
     runtime().block_on(async {
-        let mut config = SessionConfig::default();
-        config.client_id = OFFICIAL_CLIENT_ID.to_string();
-        let session = Session::new(config, cache);
+        let session = Session::new(session_config(), cache);
         session
             .connect(credentials, true)
             .await
@@ -312,11 +352,14 @@ fn player_credentials(
 }
 
 fn start_spirc(
-    session: Session,
     credentials: Credentials,
+    cache: Option<Cache>,
     playback: Arc<Mutex<OfficialPlayback>>,
-) -> Result<Spirc, String> {
+) -> Result<(Spirc, Session), String> {
     runtime().block_on(async {
+        // Must be unconnected: Spirc::new logs in. play_connect.rs does the same.
+        let session = Session::new(session_config(), cache);
+
         let mixer_builder = mixer::find(None)
             .ok_or_else(|| "Spotify audio mixer is unavailable".to_string())?;
         let mixer = mixer_builder(MixerConfig::default())
@@ -343,7 +386,7 @@ fn start_spirc(
         };
 
         let (spirc, spirc_task) =
-            Spirc::new(connect_config, session, credentials, player, mixer)
+            Spirc::new(connect_config, session.clone(), credentials, player, mixer)
                 .await
                 .map_err(player_start_error)?;
 
@@ -355,7 +398,7 @@ fn start_spirc(
         });
 
         spirc.activate().map_err(player_command_error)?;
-        Ok(spirc)
+        Ok((spirc, session))
     })
 }
 
@@ -480,6 +523,11 @@ fn desktop_session_login_error(err: String) -> String {
     } else {
         format!("Spotify desktop session failed: {err}")
     }
+}
+
+fn is_double_connect_error(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    lower.contains("already handled") || lower.contains("already connected")
 }
 
 fn player_start_error(err: impl std::fmt::Display) -> String {
@@ -682,5 +730,13 @@ mod tests {
         let message = player_start_error("Audio key: INVALID_CREDENTIALS");
         assert!(message.contains("Premium"));
         assert!(!message.contains("INVALID_CREDENTIALS"));
+    }
+
+    #[test]
+    fn already_handled_is_a_double_connect() {
+        assert!(is_double_connect_error(
+            "Spotify player failed to start: Operation aborted { request was already handled }"
+        ));
+        assert!(!is_double_connect_error("Spotify mixer failed"));
     }
 }

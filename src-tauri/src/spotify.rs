@@ -1608,15 +1608,14 @@ pub fn complete_auth_via_callback(spotify: &SpotifyState) -> Result<(), String> 
         }
     } else {
         crate::spotify_desktop::clear_credentials(spotify);
-        if let Err(err) = crate::spotify_desktop::ensure_session(spotify) {
-            log::info!("Spotify desktop session after login skipped: {err}");
-        } else {
-            if let Err(err) = crate::spotify_desktop::list_playlists(spotify, 0, 50) {
-                log::info!("Spotify desktop playlist cache warm after login skipped: {err}");
+        if let Err(err) = crate::spotify_desktop::ensure_player(spotify) {
+            log::info!("Spotify player after login skipped: {err}");
+            if let Err(err) = crate::spotify_desktop::ensure_session(spotify) {
+                log::info!("Spotify desktop session after login skipped: {err}");
             }
-            if let Err(err) = crate::spotify_desktop::ensure_player(spotify) {
-                log::info!("Spotify player after login skipped: {err}");
-            }
+        }
+        if let Err(err) = crate::spotify_desktop::list_playlists(spotify, 0, 50) {
+            log::info!("Spotify desktop playlist cache warm after login skipped: {err}");
         }
     }
     Ok(())
