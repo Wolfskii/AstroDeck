@@ -28,7 +28,10 @@ use crate::spotify::{
     SpotifyPlaylistPage, SpotifyState, SpotifyTrackLyrics, OFFICIAL_CLIENT_ID,
 };
 
-const ROOTLIST_LIMIT: usize = 500;
+// Spotify may silently cap large rootlist requests at 250 entries without
+// setting `truncated`. Keep requests below that cap so pagination is reliable.
+const ROOTLIST_LIMIT: usize = 100;
+const ROOTLIST_MAX_PAGES: usize = 100;
 const PLAYLIST_PAGE: usize = 200;
 const IMAGE_CDN: &str = "https://i.scdn.co/image/";
 pub const OFFICIAL_DEVICE_NAME: &str = "AstroDeck";
@@ -984,7 +987,7 @@ fn fetch_context_tracks(session: &Session, context_uri: &str) -> Result<Vec<Spot
     runtime().block_on(async {
         let mut tracks = Vec::new();
         let mut from = 0usize;
-        loop {
+        for _ in 0..ROOTLIST_MAX_PAGES {
             let endpoint = format!(
                 "/playlist/v2/playlist/{}?from={from}&length={PLAYLIST_PAGE}",
                 playlist_id
@@ -1059,7 +1062,7 @@ fn fetch_rootlist_page(
                 .as_ref()
                 .map(|contents| contents.truncated())
                 .unwrap_or(false);
-            if page_len == 0 || !truncated {
+            if page_len == 0 || (!truncated && page_len < ROOTLIST_LIMIT) {
                 break;
             }
             from += page_len;
@@ -1089,7 +1092,7 @@ fn playlists_from_rootlist(root: &SelectedListContent, username: &str) -> Vec<Sp
             .map(|entry| entry.owner_username())
             .filter(|owner| !owner.is_empty())
             .map(|owner| {
-                if owner == username {
+                if owner.eq_ignore_ascii_case(username) {
                     "You".to_string()
                 } else {
                     owner.to_string()
@@ -1117,10 +1120,13 @@ fn playlist_id_from_uri(uri: &str) -> Option<&str> {
 }
 
 fn page_from_playlists(
-    items: Vec<SpotifyPlaylist>,
+    mut items: Vec<SpotifyPlaylist>,
     offset: u32,
     limit: u32,
 ) -> SpotifyPlaylistPage {
+    // Make playlists created by the authenticated account immediately visible
+    // instead of burying them behind followed playlists and "Load more".
+    items.sort_by_key(|playlist| playlist.owner_name.as_deref() != Some("You"));
     let total = items.len() as u32;
     let start = (offset as usize).min(items.len());
     let end = (start + limit as usize).min(items.len());
@@ -1388,6 +1394,42 @@ mod tests {
                 "{pct} mapped to {back}"
             );
         }
+    }
+
+    #[test]
+    fn playlist_id_accepts_owned_and_standard_uris() {
+        assert_eq!(
+            playlist_id_from_uri("spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"),
+            Some("37i9dQZF1DXcBWIGoYBM5M")
+        );
+        assert_eq!(
+            playlist_id_from_uri("spotify:user:alice:playlist:abc123"),
+            Some("abc123")
+        );
+        assert_eq!(playlist_id_from_uri("spotify:folder:abc123"), None);
+    }
+
+    #[test]
+    fn owned_playlists_are_paged_before_followed_playlists() {
+        let playlist = |id: &str, owner: &str| SpotifyPlaylist {
+            id: id.to_string(),
+            name: id.to_string(),
+            uri: format!("spotify:playlist:{id}"),
+            image_url: None,
+            track_count: 1,
+            owner_name: Some(owner.to_string()),
+        };
+        let page = page_from_playlists(
+            vec![
+                playlist("followed", "someone"),
+                playlist("owned", "You"),
+            ],
+            0,
+            1,
+        );
+        assert_eq!(page.items[0].id, "owned");
+        assert_eq!(page.total, 2);
+        assert_eq!(page.next_offset, Some(1));
     }
 
     #[test]
