@@ -191,6 +191,7 @@ name = "astrodeck"
 version = "0.1.15-5"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
  "dotenv",
  "env_logger",
  "futures-util",
