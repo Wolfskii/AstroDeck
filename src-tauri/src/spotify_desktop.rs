@@ -280,30 +280,232 @@ fn image_url(file_id: &[u8]) -> Option<String> {
 pub fn open_spotify_uri(uri: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
-        Command::new("cmd")
-            .args(["/C", "start", "", uri])
-            .status()
-            .map_err(|e| format!("Failed to open {uri} in Spotify: {e}"))?;
-        return Ok(());
+        return open_spotify_uri_windows(uri);
     }
 
     #[cfg(target_os = "macos")]
     {
+        // `-g` keeps Spotify from coming to the front when it is already running.
         Command::new("open")
-            .arg(uri)
+            .args(["-g", uri])
             .status()
-            .map_err(|e| format!("Failed to open {uri} in Spotify: {e}"))?;
+            .map_err(|e| format!("Failed to play {uri} in Spotify: {e}"))?;
         return Ok(());
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]
     {
+        if play_uri_via_mpris(uri).is_ok() {
+            return Ok(());
+        }
         Command::new("xdg-open")
             .arg(uri)
             .status()
-            .map_err(|e| format!("Failed to open {uri} in Spotify: {e}"))?;
+            .map_err(|e| format!("Failed to play {uri} in Spotify: {e}"))?;
         Ok(())
     }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn play_uri_via_mpris(uri: &str) -> Result<(), String> {
+    let status = Command::new("dbus-send")
+        .args([
+            "--session",
+            "--type=method_call",
+            "--dest=org.mpris.MediaPlayer2.spotify",
+            "/org/mpris/MediaPlayer2",
+            "org.mpris.MediaPlayer2.Player.OpenUri",
+            &format!("string:{uri}"),
+        ])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("MPRIS OpenUri failed".to_string())
+    }
+}
+
+#[cfg(windows)]
+fn open_spotify_uri_windows(uri: &str) -> Result<(), String> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, ShowWindow, SW_SHOWMINNOACTIVE,
+    };
+
+    let previous = unsafe { GetForegroundWindow() };
+    let was_showing = find_spotify_main_window()
+        .map(window_is_showing)
+        .unwrap_or(false);
+
+    let args = windows_start_args(uri, was_showing);
+    let status = Command::new("cmd")
+        .args(&args)
+        .status()
+        .map_err(|e| format!("Failed to play {uri} in Spotify: {e}"))?;
+    if !status.success() {
+        return Err(format!("Failed to play {uri} in Spotify"));
+    }
+
+    std::thread::sleep(Duration::from_millis(400));
+
+    if !was_showing {
+        if let Some(hwnd) = find_spotify_main_window() {
+            if window_is_showing(hwnd) {
+                let _ = unsafe { ShowWindow(hwnd, SW_SHOWMINNOACTIVE) };
+            }
+        }
+    }
+
+    restore_foreground(previous);
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn windows_start_args(uri: &str, spotify_already_showing: bool) -> Vec<String> {
+    if spotify_already_showing {
+        vec![
+            "/C".to_string(),
+            "start".to_string(),
+            String::new(),
+            uri.to_string(),
+        ]
+    } else {
+        vec![
+            "/C".to_string(),
+            "start".to_string(),
+            "/MIN".to_string(),
+            String::new(),
+            uri.to_string(),
+        ]
+    }
+}
+
+#[cfg(windows)]
+fn restore_foreground(previous: windows::Win32::Foundation::HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AllowSetForegroundWindow, SetForegroundWindow,
+    };
+
+    if previous.0.is_null() {
+        return;
+    }
+    unsafe {
+        let _ = AllowSetForegroundWindow(u32::MAX);
+        let _ = SetForegroundWindow(previous);
+    }
+}
+
+#[cfg(windows)]
+fn window_is_showing(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindowVisible};
+
+    if hwnd.0.is_null() {
+        return false;
+    }
+    unsafe { IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() && !window_is_cloaked(hwnd) }
+}
+
+#[cfg(windows)]
+fn window_is_cloaked(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+
+    let mut cloaked: u32 = 0;
+    let ok = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            &mut cloaked as *mut u32 as *mut _,
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    ok.is_ok() && cloaked != 0
+}
+
+#[cfg(windows)]
+fn spotify_pids() -> Vec<u32> {
+    use sysinfo::{ProcessesToUpdate, System};
+
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    system
+        .processes()
+        .iter()
+        .filter_map(|(_, process)| {
+            let name = process.name().to_string_lossy().to_ascii_lowercase();
+            if name == "spotify.exe" || name == "spotify" {
+                Some(process.pid().as_u32())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn find_spotify_main_window() -> Option<windows::Win32::Foundation::HWND> {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetParent, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId,
+        GWL_EXSTYLE,
+    };
+
+    const WS_EX_TOOLWINDOW: i32 = 0x80;
+    let pids = spotify_pids();
+    if pids.is_empty() {
+        return None;
+    }
+
+    struct Search {
+        pids: Vec<u32>,
+        windows: Vec<HWND>,
+    }
+
+    unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        if hwnd.0.is_null() {
+            return BOOL(1);
+        }
+        let search = unsafe { &mut *(lparam.0 as *mut Search) };
+        if unsafe { GetParent(hwnd) }.is_ok() {
+            return BOOL(1);
+        }
+        let ex = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) };
+        if ex & WS_EX_TOOLWINDOW != 0 {
+            return BOOL(1);
+        }
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32)) };
+        if !search.pids.contains(&pid) {
+            return BOOL(1);
+        }
+        search.windows.push(hwnd);
+        BOOL(1)
+    }
+
+    let mut search = Search {
+        pids,
+        windows: Vec::new(),
+    };
+    unsafe {
+        let ptr = &mut search as *mut Search;
+        let _ = EnumWindows(Some(enum_windows_proc), LPARAM(ptr as isize));
+    }
+
+    search
+        .windows
+        .iter()
+        .copied()
+        .find(|hwnd| window_is_showing(*hwnd))
+        .or_else(|| {
+            search.windows.into_iter().max_by_key(|hwnd| {
+                let mut rect = RECT::default();
+                let ok = unsafe { GetWindowRect(*hwnd, &mut rect) };
+                if ok.is_ok() {
+                    (rect.right - rect.left).max(0) * (rect.bottom - rect.top).max(0)
+                } else {
+                    0
+                }
+            })
+        })
 }
 
 #[cfg(test)]
@@ -317,5 +519,20 @@ mod tests {
         );
         assert!(message.contains("Disconnect and connect again"));
         assert!(!message.contains("Bad credentials"));
+    }
+
+    #[test]
+    fn playlist_play_starts_minimized_when_spotify_is_hidden() {
+        let showing = windows_start_args("spotify:playlist:abc", true);
+        assert_eq!(
+            showing.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec!["/C", "start", "", "spotify:playlist:abc"]
+        );
+
+        let hidden = windows_start_args("spotify:playlist:abc", false);
+        assert_eq!(
+            hidden.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec!["/C", "start", "/MIN", "", "spotify:playlist:abc"]
+        );
     }
 }
