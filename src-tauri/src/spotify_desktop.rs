@@ -1,9 +1,11 @@
-use http::header::{HeaderValue, CONTENT_TYPE};
-use http::{HeaderMap, Method};
+use bytes::Bytes;
+use http::header::{HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use http::{HeaderMap, Method, Request};
 use librespot_core::authentication::Credentials;
 use librespot_core::cache::Cache;
 use librespot_core::config::SessionConfig;
 use librespot_core::session::Session;
+use librespot_core::spclient::CLIENT_TOKEN;
 use librespot_core::{SpotifyId, SpotifyUri};
 use librespot_metadata::audio::UniqueFields;
 use librespot_playback::audio_backend;
@@ -34,6 +36,8 @@ const PREV_RESTART_MS: u64 = 3_000;
 const METADATA_WAIT: Duration = Duration::from_millis(2_000);
 const COLLECTION_SET: &str = "collection";
 const COLLECTION_CONTENT_TYPE: &str = "application/vnd.collection-v2.spotify.proto";
+const COLOR_LYRICS_URL: &str = "https://spclient.wg.spotify.com/color-lyrics/v2/track";
+const LYRICS_APP_PLATFORM: &str = "WebPlayer";
 
 fn runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -333,16 +337,93 @@ pub fn fetch_lyrics(spotify: &SpotifyState, track_id: &str) -> Result<SpotifyTra
     let session = ensure_session(spotify)?;
     let id = SpotifyId::from_base62(track_id)
         .map_err(|e| format!("Spotify track id is invalid: {e}"))?;
-    let bytes = runtime().block_on(async {
-        tokio::time::timeout(
+    let id62 = id
+        .to_base62()
+        .map_err(|e| format!("Spotify track id is invalid: {e}"))?;
+
+    match lyrics_get(&session, &lyrics_request_uri(&id62)) {
+        Ok(bytes) => parse_color_lyrics(track_id, &bytes),
+        Err(err) if lyrics_missing(&err) => {
+            if let Some(cover) = playback_snapshot(spotify)
+                .cover_url
+                .filter(|url| url.starts_with("http://") || url.starts_with("https://"))
+            {
+                match lyrics_get(&session, &lyrics_image_uri(&id62, &cover)) {
+                    Ok(bytes) => parse_color_lyrics(track_id, &bytes),
+                    Err(image_err) if lyrics_missing(&image_err) => {
+                        Ok(SpotifyTrackLyrics::unavailable(track_id))
+                    }
+                    Err(image_err) => Err(image_err),
+                }
+            } else {
+                Ok(SpotifyTrackLyrics::unavailable(track_id))
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn lyrics_request_uri(track_id: &str) -> String {
+    format!("{COLOR_LYRICS_URL}/{track_id}?format=json&vocalRemoval=false&market=from_token")
+}
+
+fn lyrics_image_uri(track_id: &str, cover_url: &str) -> String {
+    format!(
+        "{COLOR_LYRICS_URL}/{track_id}/image/{}?format=json&vocalRemoval=false&market=from_token",
+        encode_lyrics_image_path(cover_url)
+    )
+}
+
+fn lyrics_missing(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("404") || lower.contains("not found")
+}
+
+fn lyrics_get(session: &Session, uri: &str) -> Result<Vec<u8>, String> {
+    runtime().block_on(async {
+        let token = tokio::time::timeout(Duration::from_secs(20), session.login5().auth_token())
+            .await
+            .map_err(|_| "Spotify lyrics timed out".to_string())?
+            .map_err(|e| format!("Spotify lyrics could not be loaded: {e}"))?;
+        let client_token =
+            tokio::time::timeout(Duration::from_secs(20), session.spclient().client_token())
+                .await
+                .map_err(|_| "Spotify lyrics timed out".to_string())?
+                .map_err(|e| format!("Spotify lyrics could not be loaded: {e}"))?;
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .header(ACCEPT, "application/json")
+            .header("app-platform", LYRICS_APP_PLATFORM)
+            .header(
+                AUTHORIZATION,
+                format!("{} {}", token.token_type, token.access_token),
+            )
+            .header(CLIENT_TOKEN, client_token)
+            .body(Bytes::new())
+            .map_err(|e| format!("Spotify lyrics could not be loaded: {e}"))?;
+        let body = tokio::time::timeout(
             Duration::from_secs(20),
-            session.spclient().get_lyrics(&id),
+            session.http_client().request_body(request),
         )
         .await
         .map_err(|_| "Spotify lyrics timed out".to_string())?
-        .map_err(|e| format!("Spotify lyrics could not be loaded: {e}"))
-    })?;
-    parse_color_lyrics(track_id, &bytes)
+        .map_err(|e| format!("Spotify lyrics could not be loaded: {e}"))?;
+        Ok(body.to_vec())
+    })
+}
+
+fn encode_lyrics_image_path(url: &str) -> String {
+    let mut encoded = String::new();
+    for byte in url.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 pub fn handle_transport(spotify: &SpotifyState, command: &str) -> Result<(), String> {
@@ -1314,6 +1395,21 @@ mod tests {
         assert_eq!(parse_contains_response(&[0x08, 0x00]), Some(false));
         assert_eq!(parse_contains_response(&[0x0a, 0x01, 0x01]), Some(true));
         assert_eq!(parse_contains_response(&[]), None);
+    }
+
+    #[test]
+    fn lyrics_request_uses_web_player_host_and_query() {
+        assert_eq!(
+            lyrics_request_uri("4uLU6hMCjMI75M1A2tKUQC"),
+            "https://spclient.wg.spotify.com/color-lyrics/v2/track/4uLU6hMCjMI75M1A2tKUQC?format=json&vocalRemoval=false&market=from_token"
+        );
+        assert_eq!(
+            encode_lyrics_image_path("https://i.scdn.co/image/ab"),
+            "https%3A%2F%2Fi.scdn.co%2Fimage%2Fab"
+        );
+        assert!(lyrics_missing("not found"));
+        assert!(lyrics_missing("Response status code: 404"));
+        assert!(!lyrics_missing("403 Forbidden"));
     }
 
     fn payload_contains(bytes: &[u8], value: &str) -> bool {
