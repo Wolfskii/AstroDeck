@@ -194,7 +194,7 @@ dependencies = [
  "dotenv",
  "env_logger",
  "futures-util",
- "librespot-connect",
+ "http",
  "librespot-core",
  "librespot-metadata",
  "librespot-playback",
@@ -3023,25 +3023,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
-]
-
-[[package]]
-name = "librespot-connect"
-version = "0.8.0"
-source = "git+https://github.com/nolight132/librespot?rev=e7eb953d5848fd97bacd00e6c0e33500765eaa63#e7eb953d5848fd97bacd00e6c0e33500765eaa63"
-dependencies = [
- "futures-util",
- "librespot-core",
- "librespot-playback",
- "librespot-protocol",
- "log",
- "protobuf",
- "rand 0.9.2",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "uuid",
 ]
 
 [[package]]
