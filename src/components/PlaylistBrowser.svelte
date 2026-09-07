@@ -22,6 +22,10 @@
   let playlistsError = $state<string | null>(null);
   let playlistsQuery = $state("");
   let playingPlaylistId = $state<string | null>(null);
+  const LAST_PLAYLIST_KEY = "astrodeck:lastSpotifyPlaylistId";
+  let selectedPlaylistId = $state<string | null>(
+    typeof window !== "undefined" ? window.localStorage.getItem(LAST_PLAYLIST_KEY) : null
+  );
   let loadSeq = 0;
   let sawOpen = false;
 
@@ -31,11 +35,16 @@
 
   const visiblePlaylists = $derived.by(() => {
     const query = playlistsQuery.trim().toLowerCase();
-    if (!query) return playlists;
-    return playlists.filter((playlist) => {
+    const filtered = !query
+      ? playlists
+      : playlists.filter((playlist) => {
       const owner = playlist.ownerName?.toLowerCase() ?? "";
       return playlist.name.toLowerCase().includes(query) || owner.includes(query);
     });
+    if (!selectedPlaylistId) return filtered;
+    return [...filtered].sort(
+      (a, b) => Number(b.id === selectedPlaylistId) - Number(a.id === selectedPlaylistId)
+    );
   });
 
   const BROWSER_DEMO_PLAYLISTS: SpotifyPlaylist[] = [
@@ -157,12 +166,14 @@
       } else {
         await executeActionValue("spotify.playPlaylist", playlist.uri);
       }
+      selectedPlaylistId = playlist.id;
+      window.localStorage.setItem(LAST_PLAYLIST_KEY, playlist.id);
       window.dispatchEvent(
         new CustomEvent("astrodeck-action-executed", {
           detail: { action: "spotify.playPlaylist", label: playlist.name },
         })
       );
-      close();
+      playingPlaylistId = null;
     } catch (e) {
       playlistsError = String(e);
       playingPlaylistId = null;
@@ -230,34 +241,41 @@
         {#if playlistsError}
           <p class="playlist-status playlist-status-error">{playlistsError}</p>
         {/if}
-        <ul class="playlist-list">
+        <div class="playlist-list">
           {#each visiblePlaylists as playlist (playlist.id)}
-            <li>
-              <button
-                type="button"
-                class="playlist-row"
-                disabled={playingPlaylistId === playlist.id}
-                onclick={() => void playPlaylist(playlist)}
-              >
+            <button
+              type="button"
+              class="playlist-card"
+              class:playlist-card--selected={selectedPlaylistId === playlist.id}
+              disabled={playingPlaylistId === playlist.id}
+              onclick={() => void playPlaylist(playlist)}
+            >
+              <span class="playlist-card-art-wrap">
                 {#if playlist.imageUrl}
                   <img class="playlist-art" src={playlist.imageUrl} alt="" />
                 {:else}
                   <span class="playlist-art playlist-art-fallback" aria-hidden="true">♪</span>
                 {/if}
-                <span class="playlist-copy">
-                  <strong>{playlist.name}</strong>
-                  <em>
-                    {playlist.ownerName ? `${playlist.ownerName} · ` : ""}{playlist.trackCount}
-                    track{playlist.trackCount === 1 ? "" : "s"}
-                  </em>
-                </span>
-                <span class="playlist-play">
-                  {playingPlaylistId === playlist.id ? "Starting…" : "Play"}
-                </span>
-              </button>
-            </li>
+                {#if selectedPlaylistId === playlist.id}
+                  <span class="playlist-now-playing">
+                    <span class="playlist-equalizer" aria-hidden="true"><i></i><i></i><i></i></span>
+                    Now playing
+                  </span>
+                {/if}
+              </span>
+              <span class="playlist-copy">
+                <strong>{playlist.name}</strong>
+                <em>
+                  {playlist.ownerName ? `${playlist.ownerName} · ` : ""}{playlist.trackCount}
+                  track{playlist.trackCount === 1 ? "" : "s"}
+                </em>
+              </span>
+              <span class="playlist-play">
+                {playingPlaylistId === playlist.id ? "Starting…" : selectedPlaylistId === playlist.id ? "Selected" : "Play"}
+              </span>
+            </button>
           {/each}
-        </ul>
+        </div>
         {#if playlistsNextOffset != null && !playlistsQuery.trim()}
           <button
             type="button"
@@ -280,22 +298,23 @@
     z-index: 40;
     display: flex;
     align-items: stretch;
-    justify-content: flex-end;
-    background: rgba(0, 0, 0, 0.52);
-    padding: 12px;
+    justify-content: stretch;
+    background: #090909;
+    padding: 0;
     touch-action: manipulation;
   }
 
   .playlist-sheet {
-    width: min(680px, 100%);
+    width: 100%;
+    height: 100%;
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    padding: 24px;
-    border-radius: 20px;
-    background: #141414;
+    gap: 20px;
+    padding: 28px 32px;
+    background:
+      radial-gradient(circle at 10% 0%, rgba(29, 185, 84, 0.12), transparent 32%),
+      #141414;
     color: #f8fafc;
-    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
     overflow: hidden;
   }
 
@@ -308,7 +327,7 @@
 
   .playlist-sheet-head h2 {
     margin: 0;
-    font-size: 1.8rem;
+    font-size: clamp(1.8rem, 3vw, 2.7rem);
     line-height: 1.1;
   }
 
@@ -344,13 +363,13 @@
   }
 
   .playlist-list {
-    list-style: none;
     margin: 0;
-    padding: 0 16px 0 0;
+    padding: 0 16px 20px 0;
     overflow: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    align-content: start;
+    gap: 18px;
     min-height: 0;
     flex: 1 1 auto;
     overscroll-behavior: contain;
@@ -379,16 +398,15 @@
     background: #aab4c0;
   }
 
-  .playlist-row {
-    display: grid;
-    grid-template-columns: 76px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 16px;
+  .playlist-card {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     width: 100%;
-    min-height: 84px;
-    padding: 10px;
-    border: none;
-    border-radius: 14px;
+    min-height: 300px;
+    padding: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
     background: #1c1c1c;
     color: inherit;
     text-align: left;
@@ -396,15 +414,29 @@
     touch-action: manipulation;
   }
 
-  .playlist-row:hover:not(:disabled) {
+  .playlist-card:hover:not(:disabled) {
     background: #262626;
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+
+  .playlist-card--selected {
+    border-color: rgba(29, 185, 84, 0.8);
+    box-shadow: 0 0 0 2px rgba(29, 185, 84, 0.16);
+  }
+
+  .playlist-card-art-wrap {
+    position: relative;
+    display: block;
+    aspect-ratio: 1;
+    margin-bottom: 14px;
   }
 
   .playlist-art,
   .playlist-art-fallback {
-    width: 76px;
-    height: 76px;
-    border-radius: 10px;
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 12px;
     object-fit: cover;
   }
 
@@ -416,11 +448,51 @@
     font-size: 1.3rem;
   }
 
+  .playlist-now-playing {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 32px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: #1db954;
+    color: #071b0d;
+    font-size: 0.8rem;
+    font-weight: 800;
+  }
+
+  .playlist-equalizer {
+    display: inline-flex;
+    align-items: end;
+    gap: 2px;
+    height: 13px;
+  }
+
+  .playlist-equalizer i {
+    display: block;
+    width: 2px;
+    height: 8px;
+    border-radius: 2px;
+    background: currentColor;
+  }
+
+  .playlist-equalizer i:nth-child(2) {
+    height: 13px;
+  }
+
+  .playlist-equalizer i:nth-child(3) {
+    height: 10px;
+  }
+
   .playlist-copy {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     min-width: 0;
+    flex: 1 1 auto;
   }
 
   .playlist-copy strong,
@@ -431,8 +503,13 @@
   }
 
   .playlist-copy strong {
-    font-size: 1.05rem;
-    line-height: 1.2;
+    font-size: 1.15rem;
+    line-height: 1.25;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
 
   .playlist-copy em {
@@ -442,8 +519,10 @@
   }
 
   .playlist-play {
-    min-width: 58px;
-    padding: 10px 12px;
+    align-self: flex-start;
+    min-width: 72px;
+    margin-top: 14px;
+    padding: 10px 14px;
     border-radius: 10px;
     background: rgba(34, 197, 94, 0.1);
     font-weight: 700;
@@ -474,32 +553,33 @@
 
   @media (max-width: 640px) {
     .playlist-overlay {
-      align-items: flex-end;
-      padding: 8px;
+      align-items: stretch;
     }
 
     .playlist-sheet {
       width: 100%;
-      max-height: calc(100% - 8px);
-      padding: 18px;
-      border-radius: 20px 20px 14px 14px;
+      padding: 20px 16px;
     }
 
-    .playlist-row {
-      grid-template-columns: 64px minmax(0, 1fr) auto;
+    .playlist-list {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 12px;
-      min-height: 72px;
+      padding-right: 12px;
     }
 
-    .playlist-art,
-    .playlist-art-fallback {
-      width: 64px;
-      height: 64px;
+    .playlist-card {
+      min-height: 0;
+      padding: 9px;
+    }
+
+    .playlist-copy strong {
+      font-size: 1rem;
     }
 
     .playlist-play {
-      min-width: 52px;
-      padding-inline: 8px;
+      min-width: 62px;
+      margin-top: 10px;
+      padding-inline: 9px;
     }
   }
 </style>

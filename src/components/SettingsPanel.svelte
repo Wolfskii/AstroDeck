@@ -28,7 +28,6 @@
   import type { PluginConfig } from "../types";
   import type { AppUpdateInfo } from "../services/updater";
   import type { SpotifyAuthMode, SpotifyStatus } from "../services/api";
-  import PlaylistBrowser from "./PlaylistBrowser.svelte";
 
   type SettingsSection = "general" | "appearance" | "updates" | "spotify" | "scenes";
 
@@ -131,7 +130,6 @@
   } = $props();
 
   let section = $state<SettingsSection>("general");
-  let playlistsOpen = $state(false);
   const activeSection = $derived(section);
 
   const titles: Record<SettingsSection, string> = {
@@ -557,9 +555,6 @@
             </p>
           </div>
           <div class="settings-btn-row">
-            <button class="md-btn" onclick={() => (playlistsOpen = true)}>
-              Browse playlists
-            </button>
             <button class="md-btn md-btn-primary" onclick={onConnectSpotify} disabled={spotifyBusy}>
               {#if spotifyBusy}
                 Connecting…
@@ -803,7 +798,6 @@
     {/if}
     </section>
   </div>
-  <PlaylistBrowser open={playlistsOpen} onClose={() => (playlistsOpen = false)} />
 </div>
 
 <style>
