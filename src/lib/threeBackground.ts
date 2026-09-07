@@ -16,6 +16,7 @@ import {
 export type ThreeBackgroundHandle = {
   applyPalette: (palette: string[]) => void;
   setPlaying: (next: boolean) => void;
+  getElapsed: () => number;
   dispose: () => void;
 };
 
@@ -54,7 +55,8 @@ function makeGlowTexture(size = 128): THREE.CanvasTexture {
 export function createThreeBackground(
   host: HTMLElement,
   style: SceneBackgroundId,
-  palette: string[]
+  palette: string[],
+  initialElapsed = 0
 ): ThreeBackgroundHandle {
   const renderer = new THREE.WebGLRenderer({
     antialias: false,
@@ -81,7 +83,7 @@ export function createThreeBackground(
   let disposed = false;
   let raf = 0;
   let playing = true;
-  let animElapsed = 0;
+  let animElapsed = Math.max(0, initialElapsed);
   let lastBands: number[] | null = null;
   const night = new THREE.Color(0x05070c);
   const fogScratch = new THREE.Color();
@@ -583,6 +585,9 @@ export function createThreeBackground(
     },
     setPlaying(next: boolean) {
       playing = next;
+    },
+    getElapsed() {
+      return animElapsed;
     },
     dispose() {
       disposed = true;

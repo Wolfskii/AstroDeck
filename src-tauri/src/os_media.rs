@@ -4,7 +4,8 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
 
 const EVENT_NAME: &str = "os-now-playing";
-const SEEK_JUMP_MS: i64 = 2500;
+const SEEK_JUMP_MS: i64 = 4000;
+const SEEK_BACK_MS: i64 = 5000;
 const RESTART_FROM_MS: i64 = 2500;
 const RESTART_TO_MS: i64 = 1500;
 
@@ -90,7 +91,11 @@ fn progress_jumped(last: &LastPublish, payload: &OsNowPlaying) -> bool {
     let expected = last
         .progress_ms
         .saturating_add(if last.is_playing { elapsed } else { 0 });
-    (progress - expected).abs() >= SEEK_JUMP_MS
+    let delta = progress - expected;
+    if last.is_playing && delta < 0 && delta > -SEEK_BACK_MS {
+        return false;
+    }
+    delta.abs() >= SEEK_JUMP_MS
 }
 
 fn usable_local(payload: &OsNowPlaying) -> bool {

@@ -710,7 +710,8 @@
     return token.replace(/([a-z])([A-Z])/g, "$1 $2");
   }
 
-  const PROGRESS_SYNC_SLACK_MS = 2000;
+  const PROGRESS_SYNC_SLACK_MS = 4000;
+  const PROGRESS_SEEK_BACK_MS = 5000;
 
   function osProgressJumped(
     fromMs?: number | null,
@@ -723,7 +724,9 @@
     if (from >= 2500 && toMs <= 1500) return true;
     const elapsed = wasPlaying ? Math.max(0, Date.now() - fromAtMs) : 0;
     const expected = from + elapsed;
-    return Math.abs(toMs - expected) >= PROGRESS_SYNC_SLACK_MS;
+    const delta = toMs - expected;
+    if (wasPlaying && delta < 0 && delta > -PROGRESS_SEEK_BACK_MS) return false;
+    return Math.abs(delta) >= PROGRESS_SYNC_SLACK_MS;
   }
 
   function sameOsTrack(previous: OsNowPlaying | null, next: OsNowPlaying) {
