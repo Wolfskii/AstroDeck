@@ -1135,7 +1135,7 @@
   }
 
   async function commitSceneVolume(action: string, value: number) {
-    const useOsVolume = action.startsWith("media.") || (isSpotifyScene && !usesSpotifyWebApi);
+    const useOsVolume = action.startsWith("media.");
     if (useOsVolume) {
       osVolumePercent = value;
       osVolumeTarget = value;
@@ -2093,7 +2093,7 @@
           playPause={currentMediaView.playPause}
           next={currentMediaView.next}
           like={isOsMediaScene || (isSpotifyScene && !usesSpotifyWebApi) ? null : currentMediaView.like}
-          shuffle={isOsMediaScene || (isSpotifyScene && !usesSpotifyWebApi) ? null : currentMediaView.shuffle}
+          shuffle={isOsMediaScene ? null : currentMediaView.shuffle}
           shuffleActive={isSpotifyScene ? effectiveSpotifyShuffle : false}
           trackSaved={isSpotifyScene ? effectiveSpotifySaved : null}
           title={mediaPlayerTitle}
@@ -2125,8 +2125,8 @@
               : null}
           volumeAction={currentMediaView.volumeAction}
           seekAction={currentMediaView.seekAction}
-          volumePercent={isOsMediaScene || (isSpotifyScene && !usesSpotifyWebApi) ? osVolumePercent : spotifyVolumePercent}
-          volumeBusy={isOsMediaScene || (isSpotifyScene && !usesSpotifyWebApi) ? osVolumeBusy : spotifyVolumeBusy}
+          volumePercent={isOsMediaScene ? osVolumePercent : spotifyVolumePercent}
+          volumeBusy={isOsMediaScene ? osVolumeBusy : spotifyVolumeBusy}
           volumeEnabled={isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
           seekEnabled={isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
           source={`${sceneId} window`}
