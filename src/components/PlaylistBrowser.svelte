@@ -22,6 +22,8 @@
   let playlistsError = $state<string | null>(null);
   let playlistsQuery = $state("");
   let playingPlaylistId = $state<string | null>(null);
+  let loadSeq = 0;
+  let sawOpen = false;
 
   const isTauriRuntime =
     typeof window !== "undefined" &&
@@ -63,7 +65,22 @@
     },
   ];
 
-  async function loadPlaylists(reset: boolean) {
+  function playlistRateLimitWaitMs(message: string): number | null {
+    const about = message.match(/about (\d+) seconds/i);
+    if (about) {
+      const seconds = Number(about[1]);
+      if (Number.isFinite(seconds) && seconds > 0) {
+        return Math.min(seconds, 12) * 1000;
+      }
+    }
+    if (/rate-limit/i.test(message) || /Too Many Requests/i.test(message)) {
+      return 4000;
+    }
+    return null;
+  }
+
+  async function loadPlaylists(reset: boolean, allowAutoRetry = true) {
+    const seq = reset ? ++loadSeq : loadSeq;
     if (reset) {
       playlistsLoading = true;
       playlistsError = null;
@@ -82,22 +99,42 @@
         offset: reset ? 0 : (playlistsNextOffset ?? playlists.length),
         limit: 50,
       });
+      if (seq !== loadSeq) return;
       playlists = reset ? page.items : [...playlists, ...page.items];
       playlistsTotal = page.total;
       playlistsNextOffset = page.nextOffset ?? null;
     } catch (e) {
-      playlistsError = String(e);
+      const message = String(e);
+      const waitMs = allowAutoRetry && reset ? playlistRateLimitWaitMs(message) : null;
+      if (waitMs != null && seq === loadSeq) {
+        playlistsError = message;
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        if (seq !== loadSeq) return;
+        await loadPlaylists(true, false);
+        return;
+      }
+      if (seq === loadSeq) {
+        playlistsError = message;
+      }
     } finally {
-      playlistsLoading = false;
-      playlistsLoadingMore = false;
+      if (seq === loadSeq) {
+        playlistsLoading = false;
+        playlistsLoadingMore = false;
+      }
     }
   }
 
   $effect(() => {
-    if (!open) return;
-    playlistsQuery = "";
-    playingPlaylistId = null;
-    void loadPlaylists(true);
+    const isOpen = open;
+    if (isOpen && !sawOpen) {
+      playlistsQuery = "";
+      playingPlaylistId = null;
+      void loadPlaylists(true);
+    }
+    if (!isOpen && sawOpen) {
+      loadSeq += 1;
+    }
+    sawOpen = isOpen;
   });
 
   function close() {
@@ -173,9 +210,20 @@
         />
       </label>
       {#if playlistsLoading}
-        <p class="playlist-status">Loading playlists…</p>
+        <p class="playlist-status">
+          {playlistsError
+            ? playlistsError
+            : "Loading playlists… Spotify may need a few seconds right after sign-in."}
+        </p>
       {:else if playlistsError && playlists.length === 0}
         <p class="playlist-status playlist-status-error">{playlistsError}</p>
+        <button
+          type="button"
+          class="playlist-more"
+          onclick={() => void loadPlaylists(true)}
+        >
+          Try again
+        </button>
       {:else if visiblePlaylists.length === 0}
         <p class="playlist-status">No playlists match that search.</p>
       {:else}

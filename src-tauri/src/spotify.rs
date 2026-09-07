@@ -51,12 +51,14 @@ struct SavedTrackCache {
 enum RateLimitScope {
     PlaybackRead,
     Library,
+    Playlists,
 }
 
 #[derive(Default)]
 struct ApiRateLimitState {
     playback_read_until: Option<SystemTime>,
     library_until: Option<SystemTime>,
+    playlists_until: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -92,6 +94,14 @@ struct QueueCache {
 }
 
 #[derive(Default)]
+struct PlaylistCache {
+    offset: u32,
+    limit: u32,
+    page: Option<SpotifyPlaylistPage>,
+    fetched_at: Option<SystemTime>,
+}
+
+#[derive(Default)]
 struct PlaybackHistory {
     recent: Vec<TrackPreview>,
 }
@@ -101,11 +111,16 @@ const SAVED_TRACK_CACHE_TTL: Duration = Duration::from_secs(120);
 /// Reuse /me/player responses for routine status polls (UI extrapolates progress locally).
 const PLAYBACK_CACHE_TTL: Duration = Duration::from_secs(30);
 const QUEUE_CACHE_TTL: Duration = Duration::from_secs(45);
+const PLAYLIST_CACHE_TTL: Duration = Duration::from_secs(300);
 const PLAYBACK_HISTORY_MAX: usize = 12;
 /// Default backoff when Spotify omits Retry-After on a 429.
 const SPOTIFY_DEFAULT_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(60);
 /// Max wait before a single automatic retry (user-initiated actions).
 const SPOTIFY_MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
+/// Playlist browse should not freeze the overlay for a long Retry-After.
+const SPOTIFY_PLAYLIST_RETRY_WAIT: Duration = Duration::from_secs(5);
+const SPOTIFY_PLAYLIST_FIELDS: &str =
+    "items(id,name,uri,images(url),owner(display_name),tracks(total)),total,limit,offset";
 
 #[derive(Default)]
 pub struct SpotifyState {
@@ -116,6 +131,8 @@ pub struct SpotifyState {
     api_rate_limit: Mutex<ApiRateLimitState>,
     playback_cache: Mutex<PlaybackCache>,
     queue_cache: Mutex<QueueCache>,
+    playlist_cache: Mutex<PlaylistCache>,
+    playlist_fetch: Mutex<()>,
     playback_history: Mutex<PlaybackHistory>,
 }
 
@@ -235,6 +252,7 @@ fn scope_rate_limit_until(state: &mut ApiRateLimitState, scope: RateLimitScope) 
     match scope {
         RateLimitScope::PlaybackRead => &mut state.playback_read_until,
         RateLimitScope::Library => &mut state.library_until,
+        RateLimitScope::Playlists => &mut state.playlists_until,
     }
 }
 
@@ -261,6 +279,7 @@ fn scope_rate_limit_wait_remaining(
     let until = match scope {
         RateLimitScope::PlaybackRead => state.playback_read_until?,
         RateLimitScope::Library => state.library_until?,
+        RateLimitScope::Playlists => state.playlists_until?,
     };
     until
         .duration_since(SystemTime::now())
@@ -288,6 +307,10 @@ fn scope_rate_limited_error(scope: RateLimitScope) -> String {
         }
         RateLimitScope::Library => {
             "Spotify library API is rate-limited. Wait for Retry-After, then try again."
+                .to_string()
+        }
+        RateLimitScope::Playlists => {
+            "Spotify playlist API is rate-limited. Wait for Retry-After, then try again."
                 .to_string()
         }
     }
@@ -1312,6 +1335,10 @@ pub fn disconnect(spotify: &SpotifyState) -> Result<(), String> {
         let mut pending = spotify.auth_session.lock().map_err(|e| e.to_string())?;
         *pending = None;
     }
+    {
+        let mut cache = spotify.playlist_cache.lock().map_err(|e| e.to_string())?;
+        *cache = PlaylistCache::default();
+    }
 
     Ok(())
 }
@@ -1455,6 +1482,10 @@ pub fn complete_auth_via_callback(spotify: &SpotifyState) -> Result<(), String> 
     persist_tokens(spotify, tokens)?;
     clear_pending_auth(spotify)?;
     write_html_response(&mut stream, true, "Spotify connected. You can close this tab now.")?;
+    // Warm the playlist cache before the UI starts polling playback/queue/library.
+    if let Err(err) = list_playlists(spotify, 0, 50) {
+        log::info!("Spotify playlist cache warm after login skipped: {err}");
+    }
     Ok(())
 }
 
@@ -2049,36 +2080,98 @@ fn playlist_context_uri(id_or_uri: &str) -> Result<String, String> {
     Ok(format!("spotify:playlist:{trimmed}"))
 }
 
-pub fn list_playlists(
+fn playlist_wait_error(seconds: u64, cached: bool) -> String {
+    if cached {
+        format!(
+            "Spotify is rate-limiting playlist reads. Showing saved playlists. Try refresh in about {seconds} seconds."
+        )
+    } else {
+        format!(
+            "Spotify is rate-limiting playlist reads. Try again in about {seconds} seconds."
+        )
+    }
+}
+
+fn read_playlist_cache(
+    spotify: &SpotifyState,
+    offset: u32,
+    limit: u32,
+    max_age: Duration,
+) -> Option<SpotifyPlaylistPage> {
+    let cache = spotify.playlist_cache.lock().unwrap();
+    let page = cache.page.as_ref()?;
+    if cache.offset != offset || cache.limit != limit {
+        return None;
+    }
+    let fetched_at = cache.fetched_at?;
+    let age = SystemTime::now()
+        .duration_since(fetched_at)
+        .unwrap_or(Duration::MAX);
+    (age <= max_age).then(|| page.clone())
+}
+
+fn read_playlist_cache_stale(
+    spotify: &SpotifyState,
+    offset: u32,
+    limit: u32,
+) -> Option<SpotifyPlaylistPage> {
+    let cache = spotify.playlist_cache.lock().unwrap();
+    if cache.offset != offset || cache.limit != limit {
+        return None;
+    }
+    cache.page.clone()
+}
+
+fn store_playlist_cache(spotify: &SpotifyState, offset: u32, limit: u32, page: &SpotifyPlaylistPage) {
+    let mut cache = spotify.playlist_cache.lock().unwrap();
+    cache.offset = offset;
+    cache.limit = limit;
+    cache.page = Some(page.clone());
+    cache.fetched_at = Some(SystemTime::now());
+}
+
+fn playlists_rate_limited_error(spotify: &SpotifyState) -> String {
+    let seconds = scope_rate_limit_wait_remaining(spotify, RateLimitScope::Playlists)
+        .map(|duration| duration.as_secs().max(1))
+        .unwrap_or(1);
+    playlist_wait_error(seconds, false)
+}
+
+fn fetch_playlists_page(
     spotify: &SpotifyState,
     offset: u32,
     limit: u32,
 ) -> Result<SpotifyPlaylistPage, String> {
-    if !has_scope(spotify, "playlist-read-private")?
-        && !has_scope(spotify, "playlist-read-collaborative")?
-    {
-        return Err(
-            "Spotify token is missing playlist access. Disconnect and reconnect Spotify."
-                .to_string(),
-        );
-    }
-
-    let limit = limit.clamp(1, 50);
     let access_token = get_access_token(spotify)?;
     let client = spotify_http_client()?;
     let response = client
         .get(SPOTIFY_PLAYLISTS_URL)
         .bearer_auth(&access_token)
-        .query(&[("limit", limit.to_string()), ("offset", offset.to_string())])
+        .query(&[
+            ("limit", limit.to_string()),
+            ("offset", offset.to_string()),
+            ("fields", SPOTIFY_PLAYLIST_FIELDS.to_string()),
+        ])
         .send()
         .map_err(|e| format!("Spotify playlists request failed: {e}"))?;
 
+    if response.status().as_u16() == 429 {
+        apply_scope_rate_limit_from_response(spotify, RateLimitScope::Playlists, &response);
+        return Err(playlists_rate_limited_error(spotify));
+    }
+
     if !response.status().is_success() {
         let status = response.status();
+        let backoff = retry_after_from_response(&response);
         let body = response.text().unwrap_or_default();
+        if body.contains("API rate limit exceeded") {
+            set_scope_rate_limit(spotify, RateLimitScope::Playlists, backoff);
+            return Err(playlists_rate_limited_error(spotify));
+        }
         return Err(format!("Spotify playlists query failed: {status} {body}"));
     }
 
+    clear_scope_rate_limit(spotify, RateLimitScope::Playlists);
     let page: PlaylistsResponse = response.json().map_err(|e| e.to_string())?;
     let items = page
         .items
@@ -2110,6 +2203,97 @@ pub fn list_playlists(
     })
 }
 
+pub fn list_playlists(
+    spotify: &SpotifyState,
+    offset: u32,
+    limit: u32,
+) -> Result<SpotifyPlaylistPage, String> {
+    if !has_scope(spotify, "playlist-read-private")?
+        && !has_scope(spotify, "playlist-read-collaborative")?
+    {
+        return Err(
+            "Spotify token is missing playlist access. Disconnect and reconnect Spotify."
+                .to_string(),
+        );
+    }
+
+    let limit = limit.clamp(1, 50);
+    let _fetch = spotify
+        .playlist_fetch
+        .lock()
+        .map_err(|e| e.to_string())?;
+
+    if let Some(cached) = read_playlist_cache(spotify, offset, limit, PLAYLIST_CACHE_TTL) {
+        return Ok(cached);
+    }
+
+    let blocking_scope = [
+        RateLimitScope::Playlists,
+        RateLimitScope::PlaybackRead,
+        RateLimitScope::Library,
+    ]
+    .into_iter()
+    .find(|scope| is_scope_rate_limited(spotify, *scope));
+    if let Some(scope) = blocking_scope {
+        if let Some(cached) = read_playlist_cache_stale(spotify, offset, limit) {
+            log::info!("Spotify {:?} API is rate-limited; returning cached playlists", scope);
+            return Ok(cached);
+        }
+        let remaining = scope_rate_limit_wait_remaining(spotify, scope)
+            .unwrap_or(Duration::from_secs(1));
+        if remaining > SPOTIFY_PLAYLIST_RETRY_WAIT {
+            return Err(playlist_wait_error(remaining.as_secs().max(1), false));
+        }
+        log::info!(
+            "Spotify {:?} API is rate-limited; waiting {}s before playlist fetch",
+            scope,
+            remaining.as_secs()
+        );
+        std::thread::sleep(remaining);
+    }
+
+    match fetch_playlists_page(spotify, offset, limit) {
+        Ok(page) => {
+            store_playlist_cache(spotify, offset, limit, &page);
+            Ok(page)
+        }
+        Err(err) => {
+            if is_scope_rate_limited(spotify, RateLimitScope::Playlists) {
+                let remaining = scope_rate_limit_wait_remaining(spotify, RateLimitScope::Playlists)
+                    .unwrap_or(Duration::from_secs(2));
+                if remaining <= SPOTIFY_PLAYLIST_RETRY_WAIT {
+                    log::info!(
+                        "Spotify playlists 429; retrying once after {}s",
+                        remaining.as_secs()
+                    );
+                    std::thread::sleep(remaining);
+                    match fetch_playlists_page(spotify, offset, limit) {
+                        Ok(page) => {
+                            store_playlist_cache(spotify, offset, limit, &page);
+                            return Ok(page);
+                        }
+                        Err(retry_err) => {
+                            if let Some(cached) = read_playlist_cache_stale(spotify, offset, limit) {
+                                log::warn!(
+                                    "Spotify playlists retry failed ({retry_err}); returning cache"
+                                );
+                                return Ok(cached);
+                            }
+                            return Err(retry_err);
+                        }
+                    }
+                }
+                if let Some(cached) = read_playlist_cache_stale(spotify, offset, limit) {
+                    log::info!("Spotify playlists still rate-limited; returning cached page");
+                    return Ok(cached);
+                }
+                return Err(playlist_wait_error(remaining.as_secs().max(1), false));
+            }
+            Err(err)
+        }
+    }
+}
+
 pub fn play_playlist(spotify: &SpotifyState, playlist: &str) -> Result<(), String> {
     let context_uri = playlist_context_uri(playlist)?;
     let device_id = get_playback_for_mutation(spotify).ok().map(|p| p.device_id);
@@ -2120,30 +2304,47 @@ pub fn play_playlist(spotify: &SpotifyState, playlist: &str) -> Result<(), Strin
     })
     .map_err(|e| e.to_string())?;
 
-    let mut request = client
-        .put(SPOTIFY_PLAY_URL)
-        .bearer_auth(access_token)
-        .header("Content-Type", "application/json")
-        .body(body);
-    if let Some(device_id) = device_id.as_ref() {
-        request = request.query(&[("device_id", device_id)]);
-    }
+    for attempt in 0..2 {
+        let mut request = client
+            .put(SPOTIFY_PLAY_URL)
+            .bearer_auth(&access_token)
+            .header("Content-Type", "application/json")
+            .body(body.clone());
+        if let Some(device_id) = device_id.as_ref() {
+            request = request.query(&[("device_id", device_id)]);
+        }
 
-    let response = request
-        .send()
-        .map_err(|e| format!("Spotify play playlist request failed: {e}"))?;
+        let response = request
+            .send()
+            .map_err(|e| format!("Spotify play playlist request failed: {e}"))?;
 
-    if response.status().is_success() || response.status().as_u16() == 204 {
-        invalidate_playback_cache(spotify);
-        invalidate_queue_cache(spotify);
-        Ok(())
-    } else {
+        if response.status().as_u16() == 429 {
+            apply_scope_rate_limit_from_response(spotify, RateLimitScope::Playlists, &response);
+            if attempt == 0 {
+                let remaining = scope_rate_limit_wait_remaining(spotify, RateLimitScope::Playlists)
+                    .unwrap_or(Duration::from_secs(2));
+                if remaining <= SPOTIFY_PLAYLIST_RETRY_WAIT {
+                    std::thread::sleep(remaining);
+                    continue;
+                }
+            }
+            return Err(playlists_rate_limited_error(spotify));
+        }
+
+        if response.status().is_success() || response.status().as_u16() == 204 {
+            invalidate_playback_cache(spotify);
+            invalidate_queue_cache(spotify);
+            return Ok(());
+        }
+
         let status = response.status();
         let body = response.text().unwrap_or_default();
-        Err(format!(
+        return Err(format!(
             "Spotify play playlist failed for {context_uri}: {status} {body}"
-        ))
+        ));
     }
+
+    Err(playlists_rate_limited_error(spotify))
 }
 
 fn playback_item_image_url(item: &PlaybackItem) -> Option<String> {
@@ -2427,5 +2628,18 @@ mod tests {
         );
         assert!(playlist_context_uri("spotify:album:abc").is_err());
         assert!(playlist_context_uri("").is_err());
+    }
+
+    #[test]
+    fn playlist_wait_error_hides_raw_429_json() {
+        let message = playlist_wait_error(12, false);
+        assert!(message.contains("12 seconds"));
+        assert!(!message.contains("429"));
+        assert!(!message.contains("API rate limit exceeded"));
+        assert!(!message.contains("Spotify playlists query failed"));
+
+        let cached = playlist_wait_error(8, true);
+        assert!(cached.contains("Showing saved playlists"));
+        assert!(!cached.contains("429"));
     }
 }
