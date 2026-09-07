@@ -282,16 +282,17 @@
     align-items: stretch;
     justify-content: flex-end;
     background: rgba(0, 0, 0, 0.52);
-    padding: 16px;
+    padding: 12px;
+    touch-action: manipulation;
   }
 
   .playlist-sheet {
-    width: min(520px, 100%);
+    width: min(680px, 100%);
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    padding: 18px;
-    border-radius: 16px;
+    gap: 16px;
+    padding: 24px;
+    border-radius: 20px;
     background: #141414;
     color: #f8fafc;
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
@@ -307,36 +308,39 @@
 
   .playlist-sheet-head h2 {
     margin: 0;
-    font-size: 1.4rem;
+    font-size: 1.8rem;
+    line-height: 1.1;
   }
 
   .playlist-sheet-head p {
     margin: 4px 0 0;
     color: #cbd5e1;
-    font-size: 0.92rem;
+    font-size: 1rem;
   }
 
   .playlist-close,
   .playlist-more {
-    min-height: 40px;
-    padding: 8px 14px;
+    min-height: 52px;
+    padding: 10px 18px;
     border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 10px;
+    border-radius: 12px;
     background: transparent;
     color: #fff;
+    font-size: 1rem;
     font-weight: 650;
     cursor: pointer;
+    touch-action: manipulation;
   }
 
   .playlist-search input {
     width: 100%;
-    min-height: 46px;
-    padding: 10px 12px;
+    min-height: 56px;
+    padding: 12px 16px;
     border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 10px;
+    border-radius: 14px;
     background: #0d0d0d;
     color: #fff;
-    font-size: 1rem;
+    font-size: 1.1rem;
   }
 
   .playlist-list {
@@ -346,24 +350,50 @@
     overflow: auto;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     min-height: 0;
     flex: 1 1 auto;
+    overscroll-behavior: contain;
+    scrollbar-width: auto;
+    scrollbar-color: #77808d #242424;
+  }
+
+  .playlist-list::-webkit-scrollbar {
+    width: 18px;
+  }
+
+  .playlist-list::-webkit-scrollbar-track {
+    margin: 2px 0;
+    border-radius: 999px;
+    background: #242424;
+  }
+
+  .playlist-list::-webkit-scrollbar-thumb {
+    min-height: 72px;
+    border: 4px solid #242424;
+    border-radius: 999px;
+    background: #77808d;
+  }
+
+  .playlist-list::-webkit-scrollbar-thumb:hover {
+    background: #aab4c0;
   }
 
   .playlist-row {
     display: grid;
-    grid-template-columns: 56px minmax(0, 1fr) auto;
+    grid-template-columns: 76px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 12px;
+    gap: 16px;
     width: 100%;
-    padding: 8px;
+    min-height: 84px;
+    padding: 10px;
     border: none;
-    border-radius: 12px;
+    border-radius: 14px;
     background: #1c1c1c;
     color: inherit;
     text-align: left;
     cursor: pointer;
+    touch-action: manipulation;
   }
 
   .playlist-row:hover:not(:disabled) {
@@ -372,9 +402,9 @@
 
   .playlist-art,
   .playlist-art-fallback {
-    width: 56px;
-    height: 56px;
-    border-radius: 8px;
+    width: 76px;
+    height: 76px;
+    border-radius: 10px;
     object-fit: cover;
   }
 
@@ -389,7 +419,7 @@
   .playlist-copy {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
     min-width: 0;
   }
 
@@ -400,15 +430,25 @@
     white-space: nowrap;
   }
 
+  .playlist-copy strong {
+    font-size: 1.05rem;
+    line-height: 1.2;
+  }
+
   .playlist-copy em {
     font-style: normal;
     color: #94a3b8;
-    font-size: 0.88rem;
+    font-size: 0.95rem;
   }
 
   .playlist-play {
+    min-width: 58px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(34, 197, 94, 0.1);
     font-weight: 700;
     color: #22c55e;
+    text-align: center;
   }
 
   .playlist-status {
@@ -430,5 +470,36 @@
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
     border: 0;
+  }
+
+  @media (max-width: 640px) {
+    .playlist-overlay {
+      align-items: flex-end;
+      padding: 8px;
+    }
+
+    .playlist-sheet {
+      width: 100%;
+      max-height: calc(100% - 8px);
+      padding: 18px;
+      border-radius: 20px 20px 14px 14px;
+    }
+
+    .playlist-row {
+      grid-template-columns: 64px minmax(0, 1fr) auto;
+      gap: 12px;
+      min-height: 72px;
+    }
+
+    .playlist-art,
+    .playlist-art-fallback {
+      width: 64px;
+      height: 64px;
+    }
+
+    .playlist-play {
+      min-width: 52px;
+      padding-inline: 8px;
+    }
   }
 </style>
