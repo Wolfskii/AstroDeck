@@ -34,7 +34,7 @@ const SPOTIFY_SCOPES: &str =
 
 /// Spotify's official desktop / librespot "keymaster" client id. Already approved,
 /// with localhost `/login` redirects registered, so users do not create a developer app.
-const OFFICIAL_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
+pub(crate) const OFFICIAL_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
 const OFFICIAL_REDIRECT_URI: &str = "http://127.0.0.1:8989/login";
 const CUSTOM_REDIRECT_URI: &str = "http://127.0.0.1:43821/callback";
 
@@ -134,6 +134,7 @@ pub struct SpotifyState {
     playlist_cache: Mutex<PlaylistCache>,
     playlist_fetch: Mutex<()>,
     playback_history: Mutex<PlaybackHistory>,
+    pub(crate) desktop_session: Mutex<Option<librespot_core::session::Session>>,
 }
 
 pub fn invalidate_playback_cache(spotify: &SpotifyState) {
@@ -409,6 +410,14 @@ impl SpotifyAuthMode {
     }
 }
 
+pub fn uses_web_api(spotify: &SpotifyState) -> bool {
+    spotify
+        .config
+        .lock()
+        .map(|config| config.auth_mode == SpotifyAuthMode::Custom)
+        .unwrap_or(false)
+}
+
 #[derive(Default, Clone)]
 pub struct SpotifyConfig {
     pub auth_mode: SpotifyAuthMode,
@@ -543,6 +552,8 @@ pub struct SpotifyStatus {
     pub is_shuffle: bool,
     #[serde(rename = "grantedScopes")]
     pub granted_scopes: Vec<String>,
+    #[serde(rename = "usesWebApi")]
+    pub uses_web_api: bool,
     #[serde(rename = "nextTrackPreview", skip_serializing_if = "Option::is_none")]
     pub next_track_preview: Option<TrackPreview>,
     #[serde(rename = "prevTrackPreview", skip_serializing_if = "Option::is_none")]
@@ -1129,11 +1140,79 @@ pub fn apply_optimistic_skip(spotify: &SpotifyState, direction: &str) -> Option<
 }
 
 pub fn get_status(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
+    if !uses_web_api(spotify) {
+        return official_desktop_status(spotify);
+    }
     build_status(spotify, false)
 }
 
 pub fn get_status_fresh(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
+    if !uses_web_api(spotify) {
+        return official_desktop_status(spotify);
+    }
     build_status(spotify, true)
+}
+
+fn official_desktop_status(spotify: &SpotifyState) -> Result<SpotifyStatus, String> {
+    let stored_tokens = spotify.tokens.lock().map_err(|e| e.to_string())?.clone();
+    let granted_scopes = stored_tokens
+        .as_ref()
+        .map(|tokens| parse_scopes(&tokens.scope))
+        .unwrap_or_default();
+    let authenticated = stored_tokens.is_some();
+    let volume = crate::os_media::get_output_volume().ok();
+
+    if !authenticated {
+        return Ok(SpotifyStatus {
+            is_configured: true,
+            is_authenticated: false,
+            has_active_device: false,
+            active_device_name: None,
+            current_track_name: None,
+            current_artist_name: None,
+            current_cover_art_url: None,
+            current_album_name: None,
+            progress_ms: None,
+            duration_ms: None,
+            playback_state: "stopped".to_string(),
+            is_playing: false,
+            current_volume_percent: volume,
+            current_item_type: None,
+            current_item_id: None,
+            is_current_track_saved: None,
+            is_shuffle: false,
+            granted_scopes,
+            uses_web_api: false,
+            next_track_preview: None,
+            prev_track_preview: None,
+            message: "Sign in with Spotify desktop login. Playback uses the Spotify app and OS media controls — no developer app or Web API.".to_string(),
+        });
+    }
+
+    Ok(SpotifyStatus {
+        is_configured: true,
+        is_authenticated: true,
+        has_active_device: true,
+        active_device_name: Some("Spotify app".to_string()),
+        current_track_name: None,
+        current_artist_name: None,
+        current_cover_art_url: None,
+        current_album_name: None,
+        progress_ms: None,
+        duration_ms: None,
+        playback_state: "stopped".to_string(),
+        is_playing: false,
+        current_volume_percent: volume,
+        current_item_type: None,
+        current_item_id: None,
+        is_current_track_saved: None,
+        is_shuffle: false,
+        granted_scopes,
+        uses_web_api: false,
+        next_track_preview: None,
+        prev_track_preview: None,
+        message: "Spotify desktop login is connected. Playback, volume, and seek use the Spotify app and OS media controls.".to_string(),
+    })
 }
 
 fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyStatus, String> {
@@ -1166,6 +1245,7 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
             is_current_track_saved: None,
             is_shuffle: false,
             granted_scopes,
+            uses_web_api: true,
             next_track_preview: None,
             prev_track_preview: None,
             message: "Spotify developer-app login needs a Client ID. Save one in Settings, or switch to Spotify desktop login."
@@ -1193,6 +1273,7 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
             is_current_track_saved: None,
             is_shuffle: false,
             granted_scopes,
+            uses_web_api: true,
             next_track_preview: None,
             prev_track_preview: None,
             message: "Spotify is not connected yet.".to_string(),
@@ -1245,6 +1326,7 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
                     is_current_track_saved: None,
                     is_shuffle: false,
                     granted_scopes,
+                    uses_web_api: true,
                     next_track_preview: None,
                     prev_track_preview: None,
                     message: err,
@@ -1304,6 +1386,7 @@ fn build_spotify_status_from_playback(
         is_current_track_saved,
         is_shuffle: playback.shuffle_state,
         granted_scopes,
+        uses_web_api: true,
         next_track_preview: next_preview_from_cache(spotify, playback.item_id.as_deref()),
         prev_track_preview: prev_preview_from_history(spotify, playback.item_id.as_deref()),
         message,
@@ -1339,6 +1422,7 @@ pub fn disconnect(spotify: &SpotifyState) -> Result<(), String> {
         let mut cache = spotify.playlist_cache.lock().map_err(|e| e.to_string())?;
         *cache = PlaylistCache::default();
     }
+    crate::spotify_desktop::drop_session(spotify);
 
     Ok(())
 }
@@ -1482,14 +1566,31 @@ pub fn complete_auth_via_callback(spotify: &SpotifyState) -> Result<(), String> 
     persist_tokens(spotify, tokens)?;
     clear_pending_auth(spotify)?;
     write_html_response(&mut stream, true, "Spotify connected. You can close this tab now.")?;
-    // Warm the playlist cache before the UI starts polling playback/queue/library.
-    if let Err(err) = list_playlists(spotify, 0, 50) {
-        log::info!("Spotify playlist cache warm after login skipped: {err}");
+    if uses_web_api(spotify) {
+        if let Err(err) = list_playlists(spotify, 0, 50) {
+            log::info!("Spotify playlist cache warm after login skipped: {err}");
+        }
+    } else {
+        crate::spotify_desktop::drop_session(spotify);
+        if let Err(err) = crate::spotify_desktop::ensure_session(spotify) {
+            log::info!("Spotify desktop session after login skipped: {err}");
+        } else if let Err(err) = crate::spotify_desktop::list_playlists(spotify, 0, 50) {
+            log::info!("Spotify desktop playlist cache warm after login skipped: {err}");
+        }
     }
     Ok(())
 }
 
+fn web_api_required(action: &str) -> String {
+    format!(
+        "{action} uses Spotify's Web API. Switch Login method to Your Spotify developer app."
+    )
+}
+
 pub fn toggle_current_track_saved(spotify: &SpotifyState) -> Result<bool, String> {
+    if !uses_web_api(spotify) {
+        return Err(web_api_required("Like"));
+    }
     ensure_scope(spotify, "user-library-modify")?;
     let playback = get_playback_for_mutation(spotify)?;
     let item_id = playback
@@ -1514,6 +1615,9 @@ pub fn set_current_track_saved(
     spotify: &SpotifyState,
     should_save: bool,
 ) -> Result<bool, String> {
+    if !uses_web_api(spotify) {
+        return Err(web_api_required("Like"));
+    }
     ensure_scope(spotify, "user-library-modify")?;
     let (item_id, item_type) = match cached_playback_item_id(spotify) {
         Some(item_id) => (item_id, "track".to_string()),
@@ -1873,6 +1977,12 @@ fn fetch_track_saved_state(spotify: &SpotifyState, track_id: &str) -> Result<Opt
 }
 
 pub fn adjust_volume(spotify: &SpotifyState, delta: i32) -> Result<u8, String> {
+    if !uses_web_api(spotify) {
+        let current = crate::os_media::get_output_volume().unwrap_or(50) as i32;
+        let next = (current + delta).clamp(0, 100) as u8;
+        crate::os_media::set_output_volume(next)?;
+        return Ok(next);
+    }
     let playback = get_playback_for_mutation(spotify)?;
     let device_id = playback.device_id;
     let current = playback.volume_percent as i32;
@@ -1881,6 +1991,10 @@ pub fn adjust_volume(spotify: &SpotifyState, delta: i32) -> Result<u8, String> {
 }
 
 pub fn set_volume(spotify: &SpotifyState, volume_percent: u8, device_id: Option<String>) -> Result<u8, String> {
+    if !uses_web_api(spotify) {
+        crate::os_media::set_output_volume(volume_percent)?;
+        return Ok(volume_percent);
+    }
     let device_id = match device_id {
         Some(id) => id,
         None => get_playback_for_mutation(spotify)?.device_id,
@@ -1912,6 +2026,9 @@ pub fn set_volume(spotify: &SpotifyState, volume_percent: u8, device_id: Option<
 }
 
 pub fn seek(spotify: &SpotifyState, position_ms: u64) -> Result<(), String> {
+    if !uses_web_api(spotify) {
+        return crate::os_media::seek_to(position_ms);
+    }
     let playback = get_playback_for_mutation(spotify)?;
     let access_token = get_access_token(spotify)?;
     let client = spotify_http_client()?;
@@ -2037,6 +2154,9 @@ fn fetch_current_playback(spotify: &SpotifyState) -> Result<PlaybackSummary, Str
 }
 
 pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
+    if !uses_web_api(spotify) {
+        return Err(web_api_required("Shuffle"));
+    }
     let playback = get_playback_for_mutation(spotify)?;
     let next_state = !playback.shuffle_state;
     let access_token = get_access_token(spotify)?;
@@ -2208,6 +2328,20 @@ pub fn list_playlists(
     offset: u32,
     limit: u32,
 ) -> Result<SpotifyPlaylistPage, String> {
+    if !uses_web_api(spotify) {
+        let limit = limit.clamp(1, 50);
+        let _fetch = spotify
+            .playlist_fetch
+            .lock()
+            .map_err(|e| e.to_string())?;
+        if let Some(cached) = read_playlist_cache(spotify, offset, limit, PLAYLIST_CACHE_TTL) {
+            return Ok(cached);
+        }
+        let page = crate::spotify_desktop::list_playlists(spotify, offset, limit)?;
+        store_playlist_cache(spotify, offset, limit, &page);
+        return Ok(page);
+    }
+
     if !has_scope(spotify, "playlist-read-private")?
         && !has_scope(spotify, "playlist-read-collaborative")?
     {
@@ -2295,6 +2429,13 @@ pub fn list_playlists(
 }
 
 pub fn play_playlist(spotify: &SpotifyState, playlist: &str) -> Result<(), String> {
+    if !uses_web_api(spotify) {
+        let context_uri = playlist_context_uri(playlist)?;
+        crate::spotify_desktop::open_spotify_uri(&context_uri)?;
+        log::info!("Spotify desktop: opened {context_uri} in the Spotify app");
+        return Ok(());
+    }
+
     let context_uri = playlist_context_uri(playlist)?;
     let device_id = get_playback_for_mutation(spotify).ok().map(|p| p.device_id);
     let access_token = get_access_token(spotify)?;
@@ -2355,7 +2496,7 @@ fn playback_item_image_url(item: &PlaybackItem) -> Option<String> {
         .or_else(|| item.images.first().map(|image| image.url.clone()))
 }
 
-fn get_access_token(spotify: &SpotifyState) -> Result<String, String> {
+pub(crate) fn get_access_token(spotify: &SpotifyState) -> Result<String, String> {
     maybe_refresh_token(spotify)?;
     spotify
         .tokens
@@ -2597,6 +2738,16 @@ mod tests {
             effective_client_id(SpotifyAuthMode::Official, "user-app-id", ""),
             OFFICIAL_CLIENT_ID
         );
+    }
+
+    #[test]
+    fn official_mode_does_not_use_web_api() {
+        let spotify = SpotifyState::default();
+        assert!(!uses_web_api(&spotify));
+        let mut config = spotify.config.lock().unwrap();
+        config.auth_mode = SpotifyAuthMode::Custom;
+        drop(config);
+        assert!(uses_web_api(&spotify));
     }
 
     #[test]

@@ -548,10 +548,11 @@
             <p class="setting-title">Account</p>
             <p class="setting-desc">
               {#if spotifyAuthMode === "official"}
-                Sign in with Spotify to enable track liking and Spotify-only volume. No developer app
-                needed.
+                Sign in with your Spotify account. AstroDeck controls the Spotify app with OS media
+                keys and the desktop playlist protocol — no developer app and no Web API.
               {:else}
-                Connect once to enable track liking and Spotify-only volume control.
+                Connect once to enable track liking, shuffle, and Spotify-device volume through the
+                Web API, plus OS media keys.
               {/if}
             </p>
           </div>
@@ -591,8 +592,8 @@
       <div class="settings-card settings-card-pad">
         <p class="setting-title">Login method</p>
         <p class="setting-desc">
-          Desktop login is the default. Switch to a developer app if you already have a Client ID
-          or desktop login is unavailable.
+          Desktop login is the default and does not use Spotify's Web API. Switch to a developer app
+          if you want like, shuffle, and Spotify-device volume through the API.
         </p>
         <div class="auth-mode-list" role="radiogroup" aria-label="Spotify login method">
           <button
@@ -609,7 +610,8 @@
               <span class="scene-tag current">default</span>
             </div>
             <p class="setting-desc">
-              Sign in with your Spotify account. No developer dashboard or Client ID.
+              Sign in with your Spotify account. Playback, playlists, volume, and seek go through
+              the Spotify app — not api.spotify.com.
             </p>
           </button>
           <button
@@ -625,7 +627,8 @@
               <span class="setting-title">Your Spotify developer app</span>
             </div>
             <p class="setting-desc">
-              Use a Client ID from the Spotify Developer Dashboard and the Web API.
+              Use a Client ID from the Spotify Developer Dashboard. Enables Web API like, shuffle,
+              Spotify-device volume, and playlist play on the active device, plus OS media keys.
             </p>
           </button>
         </div>
