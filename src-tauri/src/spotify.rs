@@ -25,18 +25,21 @@ const SPOTIFY_LIBRARY_CONTAINS_URL: &str = "https://api.spotify.com/v1/me/librar
 const SPOTIFY_QUEUE_URL: &str = "https://api.spotify.com/v1/me/player/queue";
 const SPOTIFY_PLAYLISTS_URL: &str = "https://api.spotify.com/v1/me/playlists";
 const SPOTIFY_PLAY_URL: &str = "https://api.spotify.com/v1/me/player/play";
+const SPOTIFY_RECENTLY_PLAYED_URL: &str =
+    "https://api.spotify.com/v1/me/player/recently-played?limit=1";
 const SPOTIFY_COLOR_LYRICS_URL: &str = "https://spclient.wg.spotify.com/color-lyrics/v2/track";
+const SPOTIFY_LAST_PLAYBACK_FILE: &str = "spotify_last_playback.json";
 #[derive(Serialize)]
 struct LibraryUrisBody {
     uris: Vec<String>,
 }
 const CUSTOM_SPOTIFY_SCOPES: &str =
-    "user-library-modify user-library-read user-read-playback-state user-modify-playback-state playlist-read-private playlist-read-collaborative";
+    "user-library-modify user-library-read user-read-playback-state user-modify-playback-state user-read-recently-played playlist-read-private playlist-read-collaborative";
 /// Librespot's access-point login only accepts tokens that include `streaming`.
 /// Library scopes let official login like/unlike via the Web API after reconnect;
 /// collection-v2 still works without them.
 const OFFICIAL_SPOTIFY_SCOPES: &str =
-    "streaming user-library-read user-library-modify";
+    "streaming user-library-read user-library-modify user-read-recently-played";
 
 /// Spotify's official desktop / librespot "keymaster" client id. Already approved,
 /// with localhost `/login` redirects registered, so users do not create a developer app.
@@ -112,12 +115,31 @@ struct PlaybackHistory {
     recent: Vec<TrackPreview>,
 }
 
+#[derive(Default)]
+struct RecentPlaybackCache {
+    display: Option<IdlePlaybackDisplay>,
+    fetched_at: Option<SystemTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IdlePlaybackDisplay {
+    track_name: String,
+    artist_name: Option<String>,
+    album_line: Option<String>,
+    cover_art_url: Option<String>,
+    item_id: Option<String>,
+    item_type: Option<String>,
+    duration_ms: Option<u64>,
+    progress_ms: Option<u64>,
+}
+
 const SPOTIFY_HTTP_TIMEOUT: Duration = Duration::from_secs(12);
 const SAVED_TRACK_CACHE_TTL: Duration = Duration::from_secs(120);
 /// Reuse /me/player responses for routine status polls (UI extrapolates progress locally).
 const PLAYBACK_CACHE_TTL: Duration = Duration::from_secs(30);
 const QUEUE_CACHE_TTL: Duration = Duration::from_secs(45);
 const PLAYLIST_CACHE_TTL: Duration = Duration::from_secs(300);
+const RECENT_PLAYBACK_CACHE_TTL: Duration = Duration::from_secs(120);
 const PLAYBACK_HISTORY_MAX: usize = 12;
 /// Default backoff when Spotify omits Retry-After on a 429.
 const SPOTIFY_DEFAULT_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(60);
@@ -140,6 +162,7 @@ pub struct SpotifyState {
     playlist_cache: Mutex<PlaylistCache>,
     playlist_fetch: Mutex<()>,
     playback_history: Mutex<PlaybackHistory>,
+    recent_playback_cache: Mutex<RecentPlaybackCache>,
     pub(crate) desktop_session: Mutex<Option<librespot_core::session::Session>>,
     pub(crate) desktop_player: Arc<Mutex<Option<Arc<librespot_playback::player::Player>>>>,
     pub(crate) desktop_mixer: Mutex<Option<Arc<dyn librespot_playback::mixer::Mixer>>>,
@@ -443,6 +466,7 @@ pub struct SpotifyConfig {
     pub client_store_path: Option<PathBuf>,
     /// Librespot reusable credentials (`credentials.json`) for official desktop login.
     pub desktop_cache_path: Option<PathBuf>,
+    pub last_playback_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -689,6 +713,25 @@ struct PlaybackArtist {
     name: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct RecentlyPlayedResponse {
+    items: Vec<RecentlyPlayedItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RecentlyPlayedItem {
+    track: PlaybackItem,
+    context: Option<RecentlyPlayedContext>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RecentlyPlayedContext {
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    context_type: Option<String>,
+    name: Option<String>,
+}
+
 fn read_stored_client_file(path: &PathBuf) -> Option<SpotifyClientFile> {
     let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
@@ -849,6 +892,7 @@ pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String
         config.token_path = Some(token_path.clone());
         config.client_store_path = Some(client_store_path);
         config.desktop_cache_path = Some(desktop_cache_path);
+        config.last_playback_path = Some(base.join(SPOTIFY_LAST_PLAYBACK_FILE));
     }
 
     {
@@ -977,6 +1021,197 @@ fn playback_item_to_preview(item: &PlaybackItem) -> Option<TrackPreview> {
         cover_art_url: preview_image_url(item),
         duration_ms: item.duration_ms,
     })
+}
+
+fn recently_played_album_line(
+    context: &Option<RecentlyPlayedContext>,
+    track: &PlaybackItem,
+) -> Option<String> {
+    if let Some(ctx) = context {
+        if let Some(name) = ctx.name.as_ref().filter(|name| !name.is_empty()) {
+            return Some(name.clone());
+        }
+    }
+    track.album.as_ref().and_then(|album| album.name.clone())
+}
+
+fn idle_display_from_track(
+    track: &PlaybackItem,
+    context: Option<RecentlyPlayedContext>,
+) -> Option<IdlePlaybackDisplay> {
+    let preview = playback_item_to_preview(track)?;
+    Some(IdlePlaybackDisplay {
+        track_name: preview.track_name,
+        artist_name: preview.artist_name,
+        album_line: recently_played_album_line(&context, track),
+        cover_art_url: preview.cover_art_url,
+        item_id: Some(preview.item_id),
+        item_type: Some(preview.item_type),
+        duration_ms: preview.duration_ms,
+        progress_ms: None,
+    })
+}
+
+fn idle_display_from_playback(playback: &PlaybackSummary) -> Option<IdlePlaybackDisplay> {
+    let track_name = playback.item_name.clone().filter(|name| !name.is_empty())?;
+    Some(IdlePlaybackDisplay {
+        track_name,
+        artist_name: playback.artist_name.clone(),
+        album_line: playback.album_name.clone(),
+        cover_art_url: playback.cover_art_url.clone(),
+        item_id: playback.item_id.clone(),
+        item_type: playback.item_type.clone(),
+        duration_ms: playback.duration_ms,
+        progress_ms: playback.progress_ms,
+    })
+}
+
+fn idle_display_from_desktop(
+    playback: &crate::spotify_desktop::OfficialPlayback,
+) -> Option<IdlePlaybackDisplay> {
+    let track_name = playback.track_name.clone().filter(|name| !name.is_empty())?;
+    Some(IdlePlaybackDisplay {
+        track_name,
+        artist_name: playback.artist_name.clone(),
+        album_line: playback.album_name.clone(),
+        cover_art_url: playback.cover_url.clone(),
+        item_id: playback.item_id.clone(),
+        item_type: playback.item_type.clone(),
+        duration_ms: playback.duration_ms,
+        progress_ms: playback.progress_ms,
+    })
+}
+
+fn persist_idle_playback(spotify: &SpotifyState, display: &IdlePlaybackDisplay) {
+    let path = spotify
+        .config
+        .lock()
+        .ok()
+        .and_then(|config| config.last_playback_path.clone());
+    let Some(path) = path else {
+        return;
+    };
+    match serde_json::to_string_pretty(display) {
+        Ok(json) => {
+            if let Err(err) = fs::write(path, json) {
+                log::warn!("Failed to persist Spotify last playback: {err}");
+            }
+        }
+        Err(err) => log::warn!("Failed to encode Spotify last playback: {err}"),
+    }
+}
+
+fn load_persisted_idle_playback(spotify: &SpotifyState) -> Option<IdlePlaybackDisplay> {
+    let path = spotify
+        .config
+        .lock()
+        .ok()
+        .and_then(|config| config.last_playback_path.clone());
+    let Some(path) = path else {
+        return None;
+    };
+    if !path.exists() {
+        return None;
+    }
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn fetch_recently_played_display(spotify: &SpotifyState) -> Option<IdlePlaybackDisplay> {
+    if !has_saved_tokens(spotify) {
+        return None;
+    }
+    let access_token = get_access_token(spotify).ok()?;
+    let client = spotify_http_client().ok()?;
+    let response = client
+        .get(SPOTIFY_RECENTLY_PLAYED_URL)
+        .bearer_auth(&access_token)
+        .send()
+        .ok()?;
+    if !response.status().is_success() {
+        if response.status().as_u16() == 429 {
+            apply_scope_rate_limit_from_response(
+                spotify,
+                RateLimitScope::PlaybackRead,
+                &response,
+            );
+        }
+        return None;
+    }
+    clear_scope_rate_limit(spotify, RateLimitScope::PlaybackRead);
+    let payload: RecentlyPlayedResponse = response.json().ok()?;
+    payload
+        .items
+        .first()
+        .and_then(|item| idle_display_from_track(&item.track, item.context.clone()))
+}
+
+fn cached_recently_played_display(
+    spotify: &SpotifyState,
+    force: bool,
+) -> Option<IdlePlaybackDisplay> {
+    if !force {
+        let cache = spotify.recent_playback_cache.lock().ok()?;
+        if let Some(fetched_at) = cache.fetched_at {
+            if SystemTime::now()
+                .duration_since(fetched_at)
+                .unwrap_or(Duration::MAX)
+                < RECENT_PLAYBACK_CACHE_TTL
+            {
+                return cache.display.clone();
+            }
+        }
+    }
+
+    let display = fetch_recently_played_display(spotify);
+    if let Ok(mut cache) = spotify.recent_playback_cache.lock() {
+        cache.display = display.clone();
+        cache.fetched_at = Some(SystemTime::now());
+    }
+    display
+}
+
+fn idle_playback_display(spotify: &SpotifyState, fresh: bool) -> Option<IdlePlaybackDisplay> {
+    cached_recently_played_display(spotify, fresh)
+        .or_else(|| load_persisted_idle_playback(spotify))
+}
+
+fn apply_idle_playback(status: &mut SpotifyStatus, display: &IdlePlaybackDisplay) {
+    status.current_track_name = Some(display.track_name.clone());
+    status.current_artist_name = display.artist_name.clone();
+    status.current_album_name = display.album_line.clone();
+    status.current_cover_art_url = display.cover_art_url.clone();
+    status.current_item_id = display.item_id.clone();
+    status.current_item_type = display.item_type.clone();
+    status.duration_ms = display.duration_ms;
+    status.progress_ms = display.progress_ms;
+    status.playback_state = "stopped".to_string();
+    status.is_playing = false;
+    status.message = "Last played on Spotify".to_string();
+}
+
+fn maybe_enrich_idle_status(spotify: &SpotifyState, status: &mut SpotifyStatus, fresh: bool) {
+    if status.current_track_name.is_some() || !status.is_authenticated {
+        return;
+    }
+    if let Some(display) = idle_playback_display(spotify, fresh) {
+        apply_idle_playback(status, &display);
+    }
+}
+
+fn persist_active_playback_snapshot(spotify: &SpotifyState) {
+    if uses_web_api(spotify) {
+        if let Some(summary) = read_playback_cache_stale(spotify) {
+            if let Some(display) = idle_display_from_playback(&summary) {
+                persist_idle_playback(spotify, &display);
+            }
+        }
+        return;
+    }
+    let playback = crate::spotify_desktop::playback_snapshot(spotify);
+    if let Some(display) = idle_display_from_desktop(&playback) {
+        persist_idle_playback(spotify, &display);
+    }
 }
 
 fn playback_summary_to_preview(summary: &PlaybackSummary) -> Option<TrackPreview> {
@@ -1210,6 +1445,7 @@ pub fn get_status_fresh(spotify: &SpotifyState) -> Result<SpotifyStatus, String>
 }
 
 pub(crate) fn publish_status(spotify: &SpotifyState) {
+    persist_active_playback_snapshot(spotify);
     let Ok(status) = get_status(spotify) else {
         return;
     };
@@ -1276,7 +1512,7 @@ fn official_desktop_status(spotify: &SpotifyState, fresh: bool) -> Result<Spotif
         "stopped"
     };
 
-    Ok(SpotifyStatus {
+    let mut status = SpotifyStatus {
         is_configured: true,
         is_authenticated: true,
         has_active_device: playback.player_ready,
@@ -1314,7 +1550,9 @@ fn official_desktop_status(spotify: &SpotifyState, fresh: bool) -> Result<Spotif
         } else {
             "Spotify desktop login is connected. Start a playlist to stream in AstroDeck — the Spotify app is not required.".to_string()
         },
-    })
+    };
+    maybe_enrich_idle_status(spotify, &mut status, fresh);
+    Ok(status)
 }
 
 fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyStatus, String> {
@@ -1391,23 +1629,56 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
     };
 
     match playback_result {
-        Ok(playback) => build_spotify_status_from_playback(
-            spotify,
-            &playback,
-            granted_scopes,
-            "Spotify is connected.".to_string(),
-            fresh_playback,
-        ),
+        Ok(playback) => {
+            let mut status = build_spotify_status_from_playback(
+                spotify,
+                &playback,
+                granted_scopes,
+                "Spotify is connected.".to_string(),
+                fresh_playback,
+            )?;
+            maybe_enrich_idle_status(spotify, &mut status, fresh_playback);
+            Ok(status)
+        }
         Err(err) => {
             if let Some(playback) = read_playback_cache_stale(spotify) {
                 let message = format!("{err} Showing last known playback.");
-                build_spotify_status_from_playback(
+                let mut status = build_spotify_status_from_playback(
                     spotify,
                     &playback,
                     granted_scopes,
                     message,
                     false,
-                )
+                )?;
+                maybe_enrich_idle_status(spotify, &mut status, fresh_playback);
+                Ok(status)
+            } else if let Some(display) = idle_playback_display(spotify, fresh_playback) {
+                let mut status = SpotifyStatus {
+                    is_configured: true,
+                    is_authenticated: true,
+                    has_active_device: false,
+                    active_device_name: None,
+                    current_track_name: None,
+                    current_artist_name: None,
+                    current_cover_art_url: None,
+                    current_album_name: None,
+                    progress_ms: None,
+                    duration_ms: None,
+                    playback_state: "stopped".to_string(),
+                    is_playing: false,
+                    current_volume_percent: None,
+                    current_item_type: None,
+                    current_item_id: None,
+                    is_current_track_saved: None,
+                    is_shuffle: false,
+                    granted_scopes,
+                    uses_web_api: true,
+                    next_track_preview: None,
+                    prev_track_preview: None,
+                    message: err,
+                };
+                apply_idle_playback(&mut status, &display);
+                Ok(status)
             } else {
                 Ok(SpotifyStatus {
                     is_configured: true,
@@ -3158,10 +3429,91 @@ mod tests {
         assert!(scopes.contains(&"streaming"));
         assert!(scopes.contains(&"user-library-read"));
         assert!(scopes.contains(&"user-library-modify"));
+        assert!(scopes.contains(&"user-read-recently-played"));
         assert!(oauth_scopes(SpotifyAuthMode::Custom).contains("playlist-read-private"));
+        assert!(oauth_scopes(SpotifyAuthMode::Custom)
+            .contains("user-read-recently-played"));
         assert!(!oauth_scopes(SpotifyAuthMode::Custom)
             .split_whitespace()
             .any(|scope| scope == "streaming"));
+    }
+
+    #[test]
+    fn recently_played_prefers_playlist_context_name() {
+        let json = r#"{
+            "items": [{
+                "track": {
+                    "id": "abc123",
+                    "name": "Track One",
+                    "type": "track",
+                    "duration_ms": 180000,
+                    "artists": [{ "name": "Artist" }],
+                    "album": { "name": "Album Name", "images": [] }
+                },
+                "context": {
+                    "type": "playlist",
+                    "name": "Discover Weekly"
+                }
+            }]
+        }"#;
+        let payload: RecentlyPlayedResponse = serde_json::from_str(json).unwrap();
+        let item = payload.items.first().unwrap();
+        let display = idle_display_from_track(&item.track, item.context.clone()).unwrap();
+        assert_eq!(display.track_name, "Track One");
+        assert_eq!(display.artist_name.as_deref(), Some("Artist"));
+        assert_eq!(display.album_line.as_deref(), Some("Discover Weekly"));
+    }
+
+    #[test]
+    fn idle_status_uses_persisted_playback_when_desktop_is_empty() {
+        let spotify = SpotifyState::default();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "astrodeck-spotify-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let last_playback_path = temp_dir.join(SPOTIFY_LAST_PLAYBACK_FILE);
+        {
+            let mut config = spotify.config.lock().unwrap();
+            config.last_playback_path = Some(last_playback_path.clone());
+        }
+        {
+            let mut tokens = spotify.tokens.lock().unwrap();
+            *tokens = Some(SpotifyTokens {
+                access_token: "token".to_string(),
+                refresh_token: "refresh".to_string(),
+                expires_at: u64::MAX,
+                scope: "streaming user-read-recently-played".to_string(),
+            });
+        }
+        persist_idle_playback(
+            &spotify,
+            &IdlePlaybackDisplay {
+                track_name: "Saved Track".to_string(),
+                artist_name: Some("Saved Artist".to_string()),
+                album_line: Some("Saved Playlist".to_string()),
+                cover_art_url: None,
+                item_id: Some("track-id".to_string()),
+                item_type: Some("track".to_string()),
+                duration_ms: Some(200_000),
+                progress_ms: Some(12_000),
+            },
+        );
+        {
+            let mut playback = spotify.desktop_playback.lock().unwrap();
+            playback.player_ready = true;
+        }
+
+        let status = official_desktop_status(&spotify, false).unwrap();
+        assert_eq!(status.current_track_name.as_deref(), Some("Saved Track"));
+        assert_eq!(status.current_artist_name.as_deref(), Some("Saved Artist"));
+        assert_eq!(status.current_album_name.as_deref(), Some("Saved Playlist"));
+        assert_eq!(status.message, "Last played on Spotify");
+
+        let _ = fs::remove_dir_all(temp_dir);
     }
 
     #[test]

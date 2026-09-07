@@ -770,13 +770,12 @@
                 stroke-width="1.85"
                 stroke-linecap="round"
                 stroke-linejoin="round"
+                transform="rotate(-39 12 12)"
               >
-                <g transform="rotate(-40 13.05 9)">
-                  <rect x="10.5" y="2.55" width="5.1" height="11.15" rx="2.55" />
-                  <path d="M13.05 13.7v3.05" />
-                </g>
+                <rect x="9.25" y="3.75" width="5.5" height="10" rx="2.75" />
+                <path d="M12 13.75v3.35" />
+                <path d="M9.75 17.1h4.5" />
               </g>
-              <circle cx="8.2" cy="19.2" r="1.55" fill="currentColor" />
             </svg>
           </button>
         {/if}
