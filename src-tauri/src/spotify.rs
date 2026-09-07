@@ -29,8 +29,11 @@ const SPOTIFY_PLAY_URL: &str = "https://api.spotify.com/v1/me/player/play";
 struct LibraryUrisBody {
     uris: Vec<String>,
 }
-const SPOTIFY_SCOPES: &str =
+const CUSTOM_SPOTIFY_SCOPES: &str =
     "user-library-modify user-library-read user-read-playback-state user-modify-playback-state playlist-read-private playlist-read-collaborative";
+/// Librespot's access-point login only accepts tokens that include `streaming`.
+/// Web API playlist/library scopes alone are rejected as "Bad credentials".
+const OFFICIAL_SPOTIFY_SCOPES: &str = "streaming";
 
 /// Spotify's official desktop / librespot "keymaster" client id. Already approved,
 /// with localhost `/login` redirects registered, so users do not create a developer app.
@@ -429,6 +432,8 @@ pub struct SpotifyConfig {
     pub token_path: Option<PathBuf>,
     /// `app_local_data_dir/spotify_client.json` — used when `SPOTIFY_CLIENT_ID` is unset.
     pub client_store_path: Option<PathBuf>,
+    /// Librespot reusable credentials (`credentials.json`) for official desktop login.
+    pub desktop_cache_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -589,6 +594,7 @@ struct TokenResponse {
     access_token: String,
     token_type: String,
     expires_in: u64,
+    #[serde(default)]
     scope: String,
     refresh_token: Option<String>,
 }
@@ -721,6 +727,13 @@ fn apply_mode_to_config(config: &mut SpotifyConfig, mode: SpotifyAuthMode, env_i
     config.redirect_uri = redirect_uri_for_mode(mode);
 }
 
+fn oauth_scopes(mode: SpotifyAuthMode) -> &'static str {
+    match mode {
+        SpotifyAuthMode::Official => OFFICIAL_SPOTIFY_SCOPES,
+        SpotifyAuthMode::Custom => CUSTOM_SPOTIFY_SCOPES,
+    }
+}
+
 fn persist_client_file(spotify: &SpotifyState) -> Result<(), String> {
     let (store_path, file) = {
         let guard = spotify.config.lock().map_err(|e| e.to_string())?;
@@ -782,6 +795,7 @@ pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String
 
     let client_store_path = base.join("spotify_client.json");
     let token_path = base.join("spotify_tokens.json");
+    let desktop_cache_path = base.join("spotify_desktop");
 
     let from_env = env_client_id();
     let stored = read_stored_client_file(&client_store_path);
@@ -798,6 +812,7 @@ pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String
         config.redirect_uri = redirect_uri;
         config.token_path = Some(token_path.clone());
         config.client_store_path = Some(client_store_path);
+        config.desktop_cache_path = Some(desktop_cache_path);
     }
 
     if token_path.exists() {
@@ -1161,6 +1176,9 @@ fn official_desktop_status(spotify: &SpotifyState) -> Result<SpotifyStatus, Stri
         .unwrap_or_default();
     let authenticated = stored_tokens.is_some();
     let volume = crate::os_media::get_output_volume().ok();
+    let needs_desktop_reconnect = authenticated
+        && !granted_scopes.is_empty()
+        && !granted_scopes.iter().any(|scope| scope == "streaming");
 
     if !authenticated {
         return Ok(SpotifyStatus {
@@ -1211,7 +1229,11 @@ fn official_desktop_status(spotify: &SpotifyState) -> Result<SpotifyStatus, Stri
         uses_web_api: false,
         next_track_preview: None,
         prev_track_preview: None,
-        message: "Spotify desktop login is connected. Playback, volume, and seek use the Spotify app and OS media controls.".to_string(),
+        message: if needs_desktop_reconnect {
+            "Spotify desktop login needs a fresh connect for playlists. Disconnect and connect again so the browser prompt can grant desktop access.".to_string()
+        } else {
+            "Spotify desktop login is connected. Playback, volume, and seek use the Spotify app and OS media controls.".to_string()
+        },
     })
 }
 
@@ -1422,7 +1444,7 @@ pub fn disconnect(spotify: &SpotifyState) -> Result<(), String> {
         let mut cache = spotify.playlist_cache.lock().map_err(|e| e.to_string())?;
         *cache = PlaylistCache::default();
     }
-    crate::spotify_desktop::drop_session(spotify);
+    crate::spotify_desktop::clear_credentials(spotify);
 
     Ok(())
 }
@@ -1458,7 +1480,7 @@ pub fn start_auth_flow(spotify: &SpotifyState) -> Result<String, String> {
         .append_pair("client_id", &config.client_id)
         .append_pair("response_type", "code")
         .append_pair("redirect_uri", &config.redirect_uri)
-        .append_pair("scope", SPOTIFY_SCOPES)
+        .append_pair("scope", oauth_scopes(config.auth_mode))
         .append_pair("state", &state)
         .append_pair("code_challenge_method", "S256")
         .append_pair("code_challenge", &code_challenge)
@@ -1571,7 +1593,7 @@ pub fn complete_auth_via_callback(spotify: &SpotifyState) -> Result<(), String> 
             log::info!("Spotify playlist cache warm after login skipped: {err}");
         }
     } else {
-        crate::spotify_desktop::drop_session(spotify);
+        crate::spotify_desktop::clear_credentials(spotify);
         if let Err(err) = crate::spotify_desktop::ensure_session(spotify) {
             log::info!("Spotify desktop session after login skipped: {err}");
         } else if let Err(err) = crate::spotify_desktop::list_playlists(spotify, 0, 50) {
@@ -2566,7 +2588,7 @@ fn maybe_refresh_token(spotify: &SpotifyState) -> Result<(), String> {
     }
 
     let refreshed: TokenResponse = response.json().map_err(|e| e.to_string())?;
-    let tokens = tokens_from_response(refreshed, Some(current_tokens.refresh_token))?;
+    let tokens = tokens_from_response(refreshed, Some(&current_tokens))?;
     persist_tokens(spotify, tokens)
 }
 
@@ -2590,20 +2612,26 @@ fn clear_pending_auth(spotify: &SpotifyState) -> Result<(), String> {
 
 fn tokens_from_response(
     response: TokenResponse,
-    existing_refresh_token: Option<String>,
+    existing: Option<&SpotifyTokens>,
 ) -> Result<SpotifyTokens, String> {
     if response.token_type.to_lowercase() != "bearer" {
         return Err(format!("Unexpected Spotify token type: {}", response.token_type));
     }
 
+    let scope = if response.scope.trim().is_empty() {
+        existing.map(|tokens| tokens.scope.clone()).unwrap_or_default()
+    } else {
+        response.scope
+    };
+
     Ok(SpotifyTokens {
         access_token: response.access_token,
         refresh_token: response
             .refresh_token
-            .or(existing_refresh_token)
+            .or_else(|| existing.map(|tokens| tokens.refresh_token.clone()))
             .ok_or_else(|| "Spotify did not return a refresh token".to_string())?,
         expires_at: now_unix_seconds() + response.expires_in,
-        scope: response.scope,
+        scope,
     })
 }
 
@@ -2650,6 +2678,22 @@ fn parse_scopes(scope_string: &str) -> Vec<String> {
         .filter(|scope| !scope.is_empty())
         .map(|scope| scope.to_string())
         .collect()
+}
+
+/// `None` if there is no token or Spotify omitted scopes; otherwise whether `streaming` was granted.
+pub(crate) fn token_has_streaming_scope(spotify: &SpotifyState) -> Result<Option<bool>, String> {
+    let guard = spotify.tokens.lock().map_err(|e| e.to_string())?;
+    let Some(tokens) = guard.as_ref() else {
+        return Ok(None);
+    };
+    if tokens.scope.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(
+        parse_scopes(&tokens.scope)
+            .iter()
+            .any(|scope| scope == "streaming"),
+    ))
 }
 
 fn current_scopes(spotify: &SpotifyState) -> Result<Vec<String>, String> {
@@ -2792,5 +2836,38 @@ mod tests {
         let cached = playlist_wait_error(8, true);
         assert!(cached.contains("Showing saved playlists"));
         assert!(!cached.contains("429"));
+    }
+
+    #[test]
+    fn official_oauth_requests_streaming_scope() {
+        assert_eq!(oauth_scopes(SpotifyAuthMode::Official), "streaming");
+        assert!(oauth_scopes(SpotifyAuthMode::Custom).contains("playlist-read-private"));
+        assert!(!oauth_scopes(SpotifyAuthMode::Custom)
+            .split_whitespace()
+            .any(|scope| scope == "streaming"));
+    }
+
+    #[test]
+    fn refresh_keeps_existing_scope_when_token_omits_it() {
+        let existing = SpotifyTokens {
+            access_token: "old".to_string(),
+            refresh_token: "refresh".to_string(),
+            expires_at: 1,
+            scope: "streaming".to_string(),
+        };
+        let refreshed = tokens_from_response(
+            TokenResponse {
+                access_token: "new".to_string(),
+                token_type: "Bearer".to_string(),
+                expires_in: 3600,
+                scope: String::new(),
+                refresh_token: None,
+            },
+            Some(&existing),
+        )
+        .unwrap();
+        assert_eq!(refreshed.access_token, "new");
+        assert_eq!(refreshed.refresh_token, "refresh");
+        assert_eq!(refreshed.scope, "streaming");
     }
 }
