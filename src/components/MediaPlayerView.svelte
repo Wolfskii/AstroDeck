@@ -1,6 +1,7 @@
 <script lang="ts">
   import "@fontsource/dseg7-classic/400.css";
   import appIconUrl from "../assets/app-icon.png";
+  import microphoneLyricsUrl from "../assets/microphone-reference.png";
   import type { DeckButtonConfig } from "../types";
   import { executeAction, executeActionValue, getSpotifyLyrics, type SpotifyTrackLyrics } from "../services/api";
   import PlaylistBrowser from "./PlaylistBrowser.svelte";
@@ -771,20 +772,12 @@
             disabled={!trackId}
             onclick={() => void toggleLyrics()}
           >
-            <svg class="car-transport-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <g
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.85"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                transform="rotate(-39 12 12)"
-              >
-                <rect x="9.25" y="3.75" width="5.5" height="10" rx="2.75" />
-                <path d="M12 13.75v3.35" />
-                <path d="M9.75 17.1h4.5" />
-              </g>
-            </svg>
+            <img
+              class="car-transport-icon car-lyrics-icon"
+              src={microphoneLyricsUrl}
+              alt=""
+              aria-hidden="true"
+            />
           </button>
         {/if}
     </div>
@@ -1401,6 +1394,11 @@
   .car-transport-icon {
     width: 56px;
     height: 56px;
+  }
+
+  .car-lyrics-icon {
+    object-fit: contain;
+    filter: brightness(0) invert(1);
   }
 
   .car-transport-icon-center {
