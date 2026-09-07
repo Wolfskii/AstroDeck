@@ -611,7 +611,8 @@
             </div>
             <p class="setting-desc">
               Sign in with your Spotify account. Playback, playlists, volume, and seek go through
-              the Spotify app — not api.spotify.com.
+              the Spotify app — not api.spotify.com. After an app update, disconnect and connect
+              once if playlists fail.
             </p>
           </button>
           <button
