@@ -289,6 +289,54 @@ fn download_installer(
     Ok(target_path)
 }
 
+#[cfg(target_os = "windows")]
+fn to_wide(value: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    std::ffi::OsStr::new(value)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+/// Program Files installs require elevation. `Command::spawn` cannot trigger UAC
+/// (Windows error 740), so we ShellExecute with the `runas` verb.
+#[cfg(target_os = "windows")]
+fn launch_elevated(file: &str, params: &str) -> Result<(), String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, HWND};
+    use windows::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let mut verb = to_wide("runas");
+    let mut file_w = to_wide(file);
+    let mut params_w = to_wide(params);
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
+        hwnd: HWND::default(),
+        lpVerb: PCWSTR(verb.as_mut_ptr()),
+        lpFile: PCWSTR(file_w.as_mut_ptr()),
+        lpParameters: PCWSTR(params_w.as_mut_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+
+    unsafe { ShellExecuteExW(&mut info) }.map_err(|err: windows::core::Error| {
+        if err.code() == ERROR_CANCELLED.to_hresult() {
+            "Update cancelled".to_string()
+        } else {
+            format!("Failed to launch installer: {err}")
+        }
+    })?;
+
+    if !info.hProcess.is_invalid() {
+        let _ = unsafe { CloseHandle(info.hProcess) };
+    }
+    Ok(())
+}
+
 fn launch_installer(path: &Path) -> Result<(), String> {
     let path_str = path
         .to_str()
@@ -296,9 +344,6 @@ fn launch_installer(path: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS: u32 = 0x00000008;
-
         let extension = path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -306,19 +351,12 @@ fn launch_installer(path: &Path) -> Result<(), String> {
             .to_ascii_lowercase();
 
         if extension == "msi" {
-            std::process::Command::new("msiexec")
-                .args(["/i", path_str, "/passive", "/norestart"])
-                .creation_flags(DETACHED_PROCESS)
-                .spawn()
-                .map_err(|e| format!("Failed to launch MSI installer: {e}"))?;
+            let params = format!("/i \"{path_str}\" /passive /norestart");
+            launch_elevated("msiexec", &params)?;
             return Ok(());
         }
 
-        std::process::Command::new(path_str)
-            .args(["/P", "/UPDATE"])
-            .creation_flags(DETACHED_PROCESS)
-            .spawn()
-            .map_err(|e| format!("Failed to launch installer: {e}"))?;
+        launch_elevated(path_str, "/P /UPDATE")?;
         return Ok(());
     }
 
