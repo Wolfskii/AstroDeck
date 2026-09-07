@@ -2727,6 +2727,41 @@ fn read_playlist_cache_stale(
     cache.page.clone()
 }
 
+fn read_complete_playlist_cache(
+    spotify: &SpotifyState,
+    max_age: Duration,
+) -> Option<SpotifyPlaylistPage> {
+    let cache = spotify.playlist_cache.lock().unwrap();
+    let page = cache.page.as_ref()?;
+    let fetched_at = cache.fetched_at?;
+    let age = SystemTime::now()
+        .duration_since(fetched_at)
+        .unwrap_or(Duration::MAX);
+    (cache.offset == 0
+        && page.next_offset.is_none()
+        && page.items.len() as u32 == page.total
+        && age <= max_age)
+        .then(|| page.clone())
+}
+
+fn slice_playlist_page(
+    complete: &SpotifyPlaylistPage,
+    offset: u32,
+    limit: u32,
+) -> SpotifyPlaylistPage {
+    let start = (offset as usize).min(complete.items.len());
+    let end = start
+        .saturating_add(limit as usize)
+        .min(complete.items.len());
+    SpotifyPlaylistPage {
+        items: complete.items[start..end].to_vec(),
+        offset,
+        limit,
+        total: complete.total,
+        next_offset: (end < complete.items.len()).then_some(end as u32),
+    }
+}
+
 fn store_playlist_cache(spotify: &SpotifyState, offset: u32, limit: u32, page: &SpotifyPlaylistPage) {
     let mut cache = spotify.playlist_cache.lock().unwrap();
     cache.offset = offset;
@@ -2819,12 +2854,12 @@ pub fn list_playlists(
             .playlist_fetch
             .lock()
             .map_err(|e| e.to_string())?;
-        if let Some(cached) = read_playlist_cache(spotify, offset, limit, PLAYLIST_CACHE_TTL) {
-            return Ok(cached);
+        if let Some(complete) = read_complete_playlist_cache(spotify, PLAYLIST_CACHE_TTL) {
+            return Ok(slice_playlist_page(&complete, offset, limit));
         }
-        let page = crate::spotify_desktop::list_playlists(spotify, offset, limit)?;
-        store_playlist_cache(spotify, offset, limit, &page);
-        return Ok(page);
+        let complete = crate::spotify_desktop::list_playlists(spotify, 0, u32::MAX)?;
+        store_playlist_cache(spotify, 0, u32::MAX, &complete);
+        return Ok(slice_playlist_page(&complete, offset, limit));
     }
 
     if !has_scope(spotify, "playlist-read-private")?

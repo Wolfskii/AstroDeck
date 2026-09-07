@@ -26,6 +26,7 @@
   let selectedPlaylistId = $state<string | null>(
     typeof window !== "undefined" ? window.localStorage.getItem(LAST_PLAYLIST_KEY) : null
   );
+  let playlistListEl = $state<HTMLElement | null>(null);
   let loadSeq = 0;
   let sawOpen = false;
 
@@ -89,6 +90,7 @@
   }
 
   async function loadPlaylists(reset: boolean, allowAutoRetry = true) {
+    if (!reset && (playlistsLoading || playlistsLoadingMore || playlistsNextOffset == null)) return;
     const seq = reset ? ++loadSeq : loadSeq;
     if (reset) {
       playlistsLoading = true;
@@ -109,7 +111,15 @@
         limit: 50,
       });
       if (seq !== loadSeq) return;
-      playlists = reset ? page.items : [...playlists, ...page.items];
+      if (reset) {
+        playlists = page.items;
+      } else {
+        const known = new Set(playlists.map((playlist) => playlist.id));
+        playlists = [
+          ...playlists,
+          ...page.items.filter((playlist) => !known.has(playlist.id)),
+        ];
+      }
       playlistsTotal = page.total;
       playlistsNextOffset = page.nextOffset ?? null;
     } catch (e) {
@@ -131,6 +141,64 @@
         playlistsLoadingMore = false;
       }
     }
+    if (seq === loadSeq && playlistsQuery.trim() && playlistsNextOffset != null) {
+      void loadAllPlaylists();
+    }
+  }
+
+  async function loadAllPlaylists() {
+    if (
+      !isTauriRuntime ||
+      playlistsLoading ||
+      playlistsLoadingMore ||
+      playlistsNextOffset == null
+    ) {
+      return;
+    }
+    const seq = loadSeq;
+    playlistsLoadingMore = true;
+    try {
+      while (seq === loadSeq && playlistsNextOffset != null) {
+        const page = await listSpotifyPlaylists({
+          offset: playlistsNextOffset,
+          limit: 50,
+        });
+        if (seq !== loadSeq) return;
+        const known = new Set(playlists.map((playlist) => playlist.id));
+        playlists = [
+          ...playlists,
+          ...page.items.filter((playlist) => !known.has(playlist.id)),
+        ];
+        playlistsTotal = page.total;
+        playlistsNextOffset = page.nextOffset ?? null;
+      }
+    } catch (e) {
+      if (seq === loadSeq) playlistsError = String(e);
+    } finally {
+      if (seq === loadSeq) playlistsLoadingMore = false;
+    }
+  }
+
+  function maybeLoadMore() {
+    if (
+      !playlistListEl ||
+      playlistsQuery.trim() ||
+      playlistsLoading ||
+      playlistsLoadingMore ||
+      playlistsNextOffset == null
+    ) {
+      return;
+    }
+    const remaining =
+      playlistListEl.scrollHeight - playlistListEl.scrollTop - playlistListEl.clientHeight;
+    if (remaining <= 320) void loadPlaylists(false);
+  }
+
+  function handleSearchInput(event: Event) {
+    playlistsQuery = (event.currentTarget as HTMLInputElement).value;
+    if (playlistsQuery.trim() && playlistsNextOffset != null) {
+      void loadAllPlaylists();
+    }
   }
 
   $effect(() => {
@@ -144,6 +212,14 @@
       loadSeq += 1;
     }
     sawOpen = isOpen;
+  });
+
+  $effect(() => {
+    const isOpen = open;
+    const loadedCount = playlists.length;
+    if (!isOpen || loadedCount === 0 || playlistsQuery.trim()) return;
+    const timer = window.setTimeout(maybeLoadMore, 0);
+    return () => window.clearTimeout(timer);
   });
 
   function close() {
@@ -216,7 +292,8 @@
         <input
           type="search"
           placeholder="Search playlists"
-          bind:value={playlistsQuery}
+          value={playlistsQuery}
+          oninput={handleSearchInput}
           autocomplete="off"
         />
       </label>
@@ -236,12 +313,16 @@
           Try again
         </button>
       {:else if visiblePlaylists.length === 0}
-        <p class="playlist-status">No playlists match that search.</p>
+        <p class="playlist-status">
+          {playlistsLoadingMore && playlistsQuery.trim()
+            ? "Searching all playlists…"
+            : "No playlists match that search."}
+        </p>
       {:else}
         {#if playlistsError}
           <p class="playlist-status playlist-status-error">{playlistsError}</p>
         {/if}
-        <div class="playlist-list">
+        <div class="playlist-list" bind:this={playlistListEl} onscroll={maybeLoadMore}>
           {#each visiblePlaylists as playlist (playlist.id)}
             <button
               type="button"
@@ -275,17 +356,12 @@
               </span>
             </button>
           {/each}
+          {#if playlistsLoadingMore}
+            <p class="playlist-loading-more">
+              {playlistsQuery.trim() ? "Searching all playlists…" : "Loading more playlists…"}
+            </p>
+          {/if}
         </div>
-        {#if playlistsNextOffset != null && !playlistsQuery.trim()}
-          <button
-            type="button"
-            class="playlist-more"
-            disabled={playlistsLoadingMore}
-            onclick={() => void loadPlaylists(false)}
-          >
-            {playlistsLoadingMore ? "Loading…" : "Load more"}
-          </button>
-        {/if}
       {/if}
     </div>
   </div>
@@ -422,6 +498,16 @@
   .playlist-card--selected {
     border-color: rgba(29, 185, 84, 0.8);
     box-shadow: 0 0 0 2px rgba(29, 185, 84, 0.16);
+  }
+
+  .playlist-loading-more {
+    grid-column: 1 / -1;
+    margin: 8px 0 4px;
+    padding: 18px;
+    color: #cbd5e1;
+    font-size: 1rem;
+    font-weight: 650;
+    text-align: center;
   }
 
   .playlist-card-art-wrap {
