@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "astrodeck"
-version = "0.1.11-1"
+version = "0.1.12"
 dependencies = [
  "base64 0.22.1",
  "dotenv",

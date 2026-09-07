@@ -9,6 +9,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 use tokio::runtime::Runtime;
 
 use crate::spotify::{
@@ -328,16 +330,10 @@ fn play_uri_via_mpris(uri: &str) -> Result<(), String> {
 
 #[cfg(windows)]
 fn open_spotify_uri_windows(uri: &str) -> Result<(), String> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, ShowWindow, SW_SHOWMINNOACTIVE,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
     let previous = unsafe { GetForegroundWindow() };
-    let was_showing = find_spotify_main_window()
-        .map(window_is_showing)
-        .unwrap_or(false);
-
-    let args = windows_start_args(uri, was_showing);
+    let args = windows_start_args(uri);
     let status = Command::new("cmd")
         .args(&args)
         .status()
@@ -346,49 +342,52 @@ fn open_spotify_uri_windows(uri: &str) -> Result<(), String> {
         return Err(format!("Failed to play {uri} in Spotify"));
     }
 
-    std::thread::sleep(Duration::from_millis(400));
-
-    if !was_showing {
-        if let Some(hwnd) = find_spotify_main_window() {
-            if window_is_showing(hwnd) {
-                let _ = unsafe { ShowWindow(hwnd, SW_SHOWMINNOACTIVE) };
-            }
-        }
-    }
-
-    restore_foreground(previous);
+    // Spotify only starts the playlist if it can handle the URI in a normal
+    // (not minimized) window. Give it time to do that, then put AstroDeck back
+    // in front without hiding Spotify — minimizing too early cancelled playback.
+    let previous_raw = previous.0 as isize;
+    let _ = std::thread::Builder::new()
+        .name("spotify-refocus".into())
+        .spawn(move || {
+            wait_for_spotify_to_accept_uri();
+            restore_foreground_raw(previous_raw);
+        });
     Ok(())
 }
 
 #[cfg(any(windows, test))]
-fn windows_start_args(uri: &str, spotify_already_showing: bool) -> Vec<String> {
-    if spotify_already_showing {
-        vec![
-            "/C".to_string(),
-            "start".to_string(),
-            String::new(),
-            uri.to_string(),
-        ]
-    } else {
-        vec![
-            "/C".to_string(),
-            "start".to_string(),
-            "/MIN".to_string(),
-            String::new(),
-            uri.to_string(),
-        ]
-    }
+fn windows_start_args(uri: &str) -> Vec<String> {
+    vec![
+        "/C".to_string(),
+        "start".to_string(),
+        String::new(),
+        uri.to_string(),
+    ]
 }
 
 #[cfg(windows)]
-fn restore_foreground(previous: windows::Win32::Foundation::HWND) {
+fn wait_for_spotify_to_accept_uri() {
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < deadline {
+        if find_spotify_main_window().is_some_and(window_is_showing) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(1500));
+}
+
+#[cfg(windows)]
+fn restore_foreground_raw(previous_raw: isize) {
+    use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
         AllowSetForegroundWindow, SetForegroundWindow,
     };
 
-    if previous.0.is_null() {
+    if previous_raw == 0 {
         return;
     }
+    let previous = HWND(previous_raw as *mut core::ffi::c_void);
     unsafe {
         let _ = AllowSetForegroundWindow(u32::MAX);
         let _ = SetForegroundWindow(previous);
@@ -522,17 +521,12 @@ mod tests {
     }
 
     #[test]
-    fn playlist_play_starts_minimized_when_spotify_is_hidden() {
-        let showing = windows_start_args("spotify:playlist:abc", true);
+    fn playlist_play_uses_normal_start_not_minimized() {
+        let args = windows_start_args("spotify:playlist:abc");
         assert_eq!(
-            showing.iter().map(String::as_str).collect::<Vec<_>>(),
+            args.iter().map(String::as_str).collect::<Vec<_>>(),
             vec!["/C", "start", "", "spotify:playlist:abc"]
         );
-
-        let hidden = windows_start_args("spotify:playlist:abc", false);
-        assert_eq!(
-            hidden.iter().map(String::as_str).collect::<Vec<_>>(),
-            vec!["/C", "start", "/MIN", "", "spotify:playlist:abc"]
-        );
+        assert!(!args.iter().any(|arg| arg == "/MIN"));
     }
 }
