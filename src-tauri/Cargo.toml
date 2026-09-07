@@ -39,6 +39,8 @@ librespot-protocol = { git = "https://github.com/nolight132/librespot", rev = "e
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_System_Registry",
     "Win32_System_Com",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
