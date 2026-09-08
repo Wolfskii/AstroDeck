@@ -1344,15 +1344,13 @@
   let availableScenes = $state<string[]>([]);
   let loading = $state(true);
   const isSpotifyScene = $derived(sceneId === "spotify");
+  const isYouTubeMusicScene = $derived(sceneId === "youtubeMusic");
   const isOsMediaScene = $derived(sceneId === "media");
   const isYouTubeMusicActive = $derived(
-    isSpotifyScene && youtubeMusicStatus?.currentItemId != null
+    isYouTubeMusicScene && youtubeMusicStatus?.currentItemId != null
   );
   const mediaPlayerTitle = $derived.by(() => {
     if (isSpotifyScene) {
-      if (isYouTubeMusicActive) {
-        return youtubeMusicStatus?.currentTrackName ?? "Nothing playing";
-      }
       return (
         spotifyStatus?.currentTrackName ??
         (spotifyStatus?.isConfigured === false
@@ -1362,6 +1360,9 @@
             : "Nothing playing")
       );
     }
+    if (isYouTubeMusicScene) {
+      return youtubeMusicStatus?.currentTrackName ?? "Search YouTube Music";
+    }
     if (isOsMediaScene) {
       return osLocalNowPlaying?.title?.trim() || "Nothing playing";
     }
@@ -1369,14 +1370,14 @@
   });
   const mediaPlayerSubtitle = $derived.by(() => {
     if (isSpotifyScene) {
-      if (isYouTubeMusicActive) {
-        return youtubeMusicStatus?.currentArtistName ?? "YouTube Music";
-      }
       return (
         spotifyStatus?.currentArtistName ??
         (spotifyStatus?.message ??
           "Tray → Settings: Connect Spotify")
       );
+    }
+    if (isYouTubeMusicScene) {
+      return youtubeMusicStatus?.currentArtistName ?? "Guest playback";
     }
     if (isOsMediaScene) {
       return (
@@ -2177,7 +2178,10 @@
           shuffle={isOsMediaScene || isYouTubeMusicActive ? null : currentMediaView.shuffle}
           shuffleActive={isSpotifyScene ? effectiveSpotifyShuffle : false}
           trackSaved={isSpotifyScene ? effectiveSpotifySaved : null}
-          lyricsEnabled={isSpotifyScene && !!(spotifyStatus?.currentItemId || youtubeMusicStatus?.currentItemId)}
+          lyricsEnabled={
+            (isSpotifyScene || isYouTubeMusicScene) &&
+            !!(spotifyStatus?.currentItemId || youtubeMusicStatus?.currentItemId)
+          }
           trackId={isYouTubeMusicActive
             ? youtubeMusicStatus?.currentItemId ?? null
             : isSpotifyScene
@@ -2246,7 +2250,7 @@
           showSettingsButton={isTauri}
           onOpenSettings={() => (viewMode = "settings")}
           playlistsEnabled={isSpotifyScene}
-          youtubeMusicEnabled={isSpotifyScene}
+          youtubeMusicEnabled={isYouTubeMusicScene}
           lyricsProviderOrder={lyricsProviderOrder}
         />
       {:else if sceneId === "teams" && displayedLayout}
