@@ -253,6 +253,38 @@ fn get_youtube_music_status(
 }
 
 #[tauri::command]
+fn get_youtube_music_library(
+    state: tauri::State<AppState>,
+) -> Result<youtube_music::YouTubeLocalLibrary, String> {
+    youtube_music::get_library(&state.youtube_music)
+}
+
+#[tauri::command]
+fn save_youtube_music_track(
+    track: youtube_music::YouTubeSearchTrack,
+    state: tauri::State<AppState>,
+) -> Result<youtube_music::YouTubeLocalLibrary, String> {
+    youtube_music::save_track(&state.youtube_music, track)
+}
+
+#[tauri::command]
+fn create_youtube_music_playlist(
+    name: String,
+    state: tauri::State<AppState>,
+) -> Result<youtube_music::YouTubeLocalLibrary, String> {
+    youtube_music::create_playlist(&state.youtube_music, name)
+}
+
+#[tauri::command]
+fn add_youtube_music_track_to_playlist(
+    playlist_id: String,
+    track_id: String,
+    state: tauri::State<AppState>,
+) -> Result<youtube_music::YouTubeLocalLibrary, String> {
+    youtube_music::add_track_to_playlist(&state.youtube_music, playlist_id, track_id)
+}
+
+#[tauri::command]
 fn play_youtube_music(
     track: youtube_music::YouTubeSearchTrack,
     state: tauri::State<AppState>,
@@ -475,6 +507,10 @@ pub fn run() {
             get_lyrics,
             search_youtube_music,
             get_youtube_music_status,
+            get_youtube_music_library,
+            save_youtube_music_track,
+            create_youtube_music_playlist,
+            add_youtube_music_track_to_playlist,
             play_youtube_music,
             toggle_youtube_music_play,
             set_youtube_music_volume,

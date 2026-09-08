@@ -32,6 +32,7 @@
     SpotifyAuthMode,
     SpotifyStatus,
     YouTubeMusicStatus,
+    YouTubeLocalLibrary,
   } from "../services/api";
 
   type SettingsSection = "general" | "appearance" | "updates" | "spotify" | "scenes";
@@ -65,6 +66,7 @@
     onShowUpdatePopupsChange,
     spotifyStatus,
     youtubeMusicStatus = null,
+    youtubeMusicLibrary = null,
     lyricsProviderOrder = [],
     onLyricsProviderOrderChange,
     spotifyBusy,
@@ -116,6 +118,7 @@
     onShowUpdatePopupsChange: (event: Event) => void;
     spotifyStatus: SpotifyStatus | null;
     youtubeMusicStatus?: YouTubeMusicStatus | null;
+    youtubeMusicLibrary?: YouTubeLocalLibrary | null;
     lyricsProviderOrder?: LyricsProviderId[];
     onLyricsProviderOrderChange?: (order: LyricsProviderId[]) => void;
     spotifyBusy: boolean;
@@ -628,6 +631,11 @@
               : "Ready — use the YouTube button in the player to search"}
           </span>
         </div>
+        <p class="setting-desc">
+          Local guest profile:
+          {youtubeMusicLibrary?.savedTracks.length ?? 0} saved songs ·
+          {youtubeMusicLibrary?.playlists.length ?? 0} local playlists
+        </p>
       </div>
 
       <div class="settings-card settings-card-pad">

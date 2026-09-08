@@ -23,6 +23,7 @@
     getSpotifyClientConfig,
     getSpotifyStatus,
     getYouTubeMusicStatus,
+    getYouTubeMusicLibrary,
     peekSpotifySkipTrack,
     setActiveScene,
     setSpotifyAuthMode,
@@ -33,6 +34,7 @@
     SpotifyAuthMode,
     SpotifyTrackPreview,
     YouTubeMusicStatus,
+    YouTubeLocalLibrary,
   } from "./services/api";
   import type { SceneState, LayoutConfig, PluginConfig, DeckButtonConfig } from "./types";
   import {
@@ -99,6 +101,7 @@
   let plugins = $state<PluginConfig[]>([]);
   let spotifyStatus = $state<SpotifyStatus | null>(null);
   let youtubeMusicStatus = $state<YouTubeMusicStatus | null>(null);
+  let youtubeMusicLibrary = $state<YouTubeLocalLibrary | null>(null);
   let lyricsProviderOrder = $state(getLyricsProviderOrder());
   let spotifyBusy = $state(false);
   let spotifyVolumeBusy = $state(false);
@@ -1957,6 +1960,11 @@
           youtubeMusicStatus = status;
         })
         .catch((error) => logError(`Failed to fetch YouTube Music status: ${String(error)}`, "YouTube Music"));
+      void getYouTubeMusicLibrary()
+        .then((library) => {
+          youtubeMusicLibrary = library;
+        })
+        .catch((error) => logError(`Failed to load YouTube Music local library: ${String(error)}`, "YouTube Music"));
 
       const onWindowFocus = () => {
         void refreshSpotifyStatusForDesktop();
@@ -2124,6 +2132,7 @@
         onShowUpdatePopupsChange={onShowUpdatePopupsChange}
         spotifyStatus={spotifyStatus}
         youtubeMusicStatus={youtubeMusicStatus}
+        youtubeMusicLibrary={youtubeMusicLibrary}
         lyricsProviderOrder={lyricsProviderOrder}
         onLyricsProviderOrderChange={(order) => {
           lyricsProviderOrder = order;

@@ -17,6 +17,32 @@ pub struct YouTubeSearchTrack {
     pub duration_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YouTubeLocalPlaylist {
+    pub id: String,
+    pub name: String,
+    pub track_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YouTubeLocalLibrary {
+    pub profile_name: String,
+    pub saved_tracks: Vec<YouTubeSearchTrack>,
+    pub playlists: Vec<YouTubeLocalPlaylist>,
+}
+
+impl Default for YouTubeLocalLibrary {
+    fn default() -> Self {
+        Self {
+            profile_name: "YouTube Music Guest".to_string(),
+            saved_tracks: Vec::new(),
+            playlists: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct YouTubeStatus {
@@ -64,6 +90,7 @@ pub struct YouTubeMusicState {
     output_stream: Mutex<Option<OutputStream>>,
     sink: Mutex<Option<Arc<Sink>>>,
     app_handle: Mutex<Option<tauri::AppHandle>>,
+    library_path: Mutex<Option<std::path::PathBuf>>,
 }
 
 impl Default for YouTubeMusicState {
@@ -74,6 +101,7 @@ impl Default for YouTubeMusicState {
             output_stream: Mutex::new(None),
             sink: Mutex::new(None),
             app_handle: Mutex::new(None),
+            library_path: Mutex::new(None),
         }
     }
 }
@@ -94,6 +122,89 @@ pub fn init(app: &tauri::AppHandle, state: &YouTubeMusicState) {
     if let Ok(mut handle) = state.app_handle.lock() {
         *handle = Some(app.clone());
     }
+    if let Ok(base) = app.path().app_local_data_dir() {
+        let _ = std::fs::create_dir_all(&base);
+        if let Ok(mut path) = state.library_path.lock() {
+            *path = Some(base.join("youtube_music_guest_library.json"));
+        }
+    }
+}
+
+fn library_path(state: &YouTubeMusicState) -> Result<std::path::PathBuf, String> {
+    state
+        .library_path
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone()
+        .ok_or_else(|| "YouTube Music local library is not initialized.".to_string())
+}
+
+pub fn get_library(state: &YouTubeMusicState) -> Result<YouTubeLocalLibrary, String> {
+    let path = library_path(state)?;
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Ok(YouTubeLocalLibrary::default());
+    };
+    serde_json::from_str(&contents).map_err(|error| format!("Local YouTube library is invalid: {error}"))
+}
+
+fn save_library(state: &YouTubeMusicState, library: &YouTubeLocalLibrary) -> Result<(), String> {
+    let path = library_path(state)?;
+    let contents = serde_json::to_string_pretty(library).map_err(|error| error.to_string())?;
+    std::fs::write(path, contents).map_err(|error| error.to_string())
+}
+
+pub fn save_track(
+    state: &YouTubeMusicState,
+    track: YouTubeSearchTrack,
+) -> Result<YouTubeLocalLibrary, String> {
+    let mut library = get_library(state)?;
+    library.saved_tracks.retain(|saved| saved.video_id != track.video_id);
+    library.saved_tracks.insert(0, track);
+    save_library(state, &library)?;
+    Ok(library)
+}
+
+pub fn create_playlist(
+    state: &YouTubeMusicState,
+    name: String,
+) -> Result<YouTubeLocalLibrary, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Playlist name is required.".to_string());
+    }
+    let mut library = get_library(state)?;
+    let id = format!(
+        "local-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_millis()
+    );
+    library.playlists.push(YouTubeLocalPlaylist {
+        id,
+        name: name.to_string(),
+        track_ids: Vec::new(),
+    });
+    save_library(state, &library)?;
+    Ok(library)
+}
+
+pub fn add_track_to_playlist(
+    state: &YouTubeMusicState,
+    playlist_id: String,
+    track_id: String,
+) -> Result<YouTubeLocalLibrary, String> {
+    let mut library = get_library(state)?;
+    let playlist = library
+        .playlists
+        .iter_mut()
+        .find(|playlist| playlist.id == playlist_id)
+        .ok_or_else(|| "Local YouTube playlist was not found.".to_string())?;
+    if !playlist.track_ids.iter().any(|id| id == &track_id) {
+        playlist.track_ids.push(track_id);
+    }
+    save_library(state, &library)?;
+    Ok(library)
 }
 
 pub fn search(state: &YouTubeMusicState, query: &str) -> Result<Vec<YouTubeSearchTrack>, String> {
