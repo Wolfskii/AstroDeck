@@ -4,8 +4,39 @@ import {
   parseSceneBackgroundId,
   type SceneBackgroundId,
 } from "../lib/sceneBackgrounds";
+import type { LyricsProviderId } from "./api";
 
 export { DEFAULT_CONTROLS_OVERLAY_COLOR };
+
+export const DEFAULT_LYRICS_PROVIDER_ORDER: LyricsProviderId[] = [
+  "lrclib",
+  "musixmatch",
+  "kugou",
+  "netease",
+];
+const LYRICS_PROVIDER_ORDER_KEY = "astrodeck:lyricsProviderOrder";
+
+export function getLyricsProviderOrder(): LyricsProviderId[] {
+  if (typeof window === "undefined") return [...DEFAULT_LYRICS_PROVIDER_ORDER];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LYRICS_PROVIDER_ORDER_KEY) ?? "null");
+    if (!Array.isArray(parsed)) return [...DEFAULT_LYRICS_PROVIDER_ORDER];
+    const valid = parsed.filter((id): id is LyricsProviderId =>
+      DEFAULT_LYRICS_PROVIDER_ORDER.includes(id)
+    );
+    return [
+      ...valid,
+      ...DEFAULT_LYRICS_PROVIDER_ORDER.filter((id) => !valid.includes(id)),
+    ];
+  } catch {
+    return [...DEFAULT_LYRICS_PROVIDER_ORDER];
+  }
+}
+
+export function setLyricsProviderOrder(order: LyricsProviderId[]): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(LYRICS_PROVIDER_ORDER_KEY, JSON.stringify(order));
+}
 
 const isTauri =
   typeof window !== "undefined" &&

@@ -31,6 +31,10 @@ pub fn dispatch(action: &str, _app: &tauri::AppHandle, state: &crate::AppState) 
             spotify_actions::handle(command, &state.spotify)?;
             Ok(())
         }
+        "youtubeMusic" => match command {
+            "togglePlay" => crate::youtube_music::toggle_play(&state.youtube_music),
+            _ => Err(format!("Unknown YouTube Music command: {command}")),
+        },
         "media" => crate::os_media::handle(command, state),
         "core" => handle_core(command),
         _ => {
@@ -59,6 +63,23 @@ pub fn dispatch_value(
             spotify_actions::handle_value(command, value, &state.spotify)?;
             Ok(())
         }
+        "youtubeMusic" => match command {
+            "setVolume" => {
+                let volume = value
+                    .as_u64()
+                    .ok_or_else(|| "youtubeMusic.setVolume expects a numeric value".to_string())?
+                    .clamp(0, 100) as u8;
+                crate::youtube_music::set_volume(&state.youtube_music, volume)?;
+                Ok(())
+            }
+            "seek" => {
+                let position = value
+                    .as_u64()
+                    .ok_or_else(|| "youtubeMusic.seek expects a numeric position".to_string())?;
+                crate::youtube_music::seek(&state.youtube_music, position)
+            }
+            _ => Err(format!("Unknown YouTube Music value command: {command}")),
+        },
         "media" => crate::os_media::handle_value(command, value, state),
         _ => Err(format!(
             "Action '{}' does not support value payload execution",

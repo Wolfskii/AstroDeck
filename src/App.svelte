@@ -22,12 +22,18 @@
     getPlugins,
     getSpotifyClientConfig,
     getSpotifyStatus,
+    getYouTubeMusicStatus,
     peekSpotifySkipTrack,
     setActiveScene,
     setSpotifyAuthMode,
     setSpotifyClientId,
   } from "./services/api";
-  import type { OsNowPlaying, SpotifyAuthMode, SpotifyTrackPreview } from "./services/api";
+  import type {
+    OsNowPlaying,
+    SpotifyAuthMode,
+    SpotifyTrackPreview,
+    YouTubeMusicStatus,
+  } from "./services/api";
   import type { SceneState, LayoutConfig, PluginConfig, DeckButtonConfig } from "./types";
   import {
     getBuiltinLayout,
@@ -44,7 +50,18 @@
     type AppUpdateInfo,
   } from "./services/updater";
   import { isAutostartEnabled, setAutostartEnabled } from "./services/autostart";
-  import { getStartMinimized, setStartMinimized, getStartFullscreen, setStartFullscreen, getShowSettingsTerminal, setShowSettingsTerminal, getAutoSwitchScenes, setAutoSwitchScene } from "./services/prefs";
+  import {
+    getStartMinimized,
+    setStartMinimized,
+    getStartFullscreen,
+    setStartFullscreen,
+    getShowSettingsTerminal,
+    setShowSettingsTerminal,
+    getAutoSwitchScenes,
+    setAutoSwitchScene,
+    getLyricsProviderOrder,
+    setLyricsProviderOrder,
+  } from "./services/prefs";
   import { hideMainWindow, persistMainWindowState, revealMainWindow } from "./services/windowState";
   import { hydrateSceneBackground } from "./stores/appearance";
 
@@ -81,6 +98,8 @@
   let logBusSocket: WebSocket | null = null;
   let plugins = $state<PluginConfig[]>([]);
   let spotifyStatus = $state<SpotifyStatus | null>(null);
+  let youtubeMusicStatus = $state<YouTubeMusicStatus | null>(null);
+  let lyricsProviderOrder = $state(getLyricsProviderOrder());
   let spotifyBusy = $state(false);
   let spotifyVolumeBusy = $state(false);
   let spotifySeekTargetMs = $state<number | null>(null);
@@ -1136,6 +1155,7 @@
 
   async function commitSceneVolume(action: string, value: number) {
     const useOsVolume = action.startsWith("media.");
+    const useYouTubeVolume = action.startsWith("youtubeMusic.");
     if (useOsVolume) {
       osVolumePercent = value;
       osVolumeTarget = value;
@@ -1147,6 +1167,14 @@
         osVolumeTarget = null;
       } finally {
         osVolumeBusy = false;
+      }
+      return;
+    }
+    if (useYouTubeVolume) {
+      try {
+        await executeActionValue(action, value);
+      } catch (e) {
+        logError(`Failed to set volume via ${action}: ${String(e)}`, `${sceneId} window`);
       }
       return;
     }
@@ -1176,6 +1204,12 @@
           logError(`Failed to seek via ${action}: ${String(e)}`, `${sceneId} window`);
         }
       })();
+      return;
+    }
+    if (action.startsWith("youtubeMusic.")) {
+      void executeActionValue(action, positionMs).catch((e) => {
+        logError(`Failed to seek via ${action}: ${String(e)}`, `${sceneId} window`);
+      });
       return;
     }
     spotifySeekTargetMs = positionMs;
@@ -1308,8 +1342,14 @@
   let loading = $state(true);
   const isSpotifyScene = $derived(sceneId === "spotify");
   const isOsMediaScene = $derived(sceneId === "media");
+  const isYouTubeMusicActive = $derived(
+    isSpotifyScene && youtubeMusicStatus?.currentItemId != null
+  );
   const mediaPlayerTitle = $derived.by(() => {
     if (isSpotifyScene) {
+      if (isYouTubeMusicActive) {
+        return youtubeMusicStatus?.currentTrackName ?? "Nothing playing";
+      }
       return (
         spotifyStatus?.currentTrackName ??
         (spotifyStatus?.isConfigured === false
@@ -1326,6 +1366,9 @@
   });
   const mediaPlayerSubtitle = $derived.by(() => {
     if (isSpotifyScene) {
+      if (isYouTubeMusicActive) {
+        return youtubeMusicStatus?.currentArtistName ?? "YouTube Music";
+      }
       return (
         spotifyStatus?.currentArtistName ??
         (spotifyStatus?.message ??
@@ -1909,6 +1952,11 @@
         void refreshSpotifyStatusForDesktop({ fresh: true, immediate: true });
       }
       void hydrateOsLocalMedia();
+      void getYouTubeMusicStatus()
+        .then((status) => {
+          youtubeMusicStatus = status;
+        })
+        .catch((error) => logError(`Failed to fetch YouTube Music status: ${String(error)}`, "YouTube Music"));
 
       const onWindowFocus = () => {
         void refreshSpotifyStatusForDesktop();
@@ -1926,6 +1974,9 @@
         if (event.payload.isAuthenticated) {
           spotifyAuthHint = null;
         }
+      });
+      const unlistenYouTubeStatus = listen<YouTubeMusicStatus>("youtube-status", (event) => {
+        youtubeMusicStatus = event.payload;
       });
       const unlisten = listen<SceneState>("scene-changed", (event) => {
         sceneId = event.payload.activeSceneId;
@@ -1960,6 +2011,7 @@
         unlisten.then((fn) => fn());
         unlistenOsNowPlaying.then((fn) => fn());
         unlistenSpotifyStatus.then((fn) => fn());
+        unlistenYouTubeStatus.then((fn) => fn());
         unlistenTerminal.then((fn) => fn());
         unlistenAutoSwitch.then((fn) => fn());
         window.removeEventListener("astrodeck-core-action", handleCoreAction as EventListener);
@@ -2071,6 +2123,12 @@
         onInstallUpdate={() => void installAppUpdate()}
         onShowUpdatePopupsChange={onShowUpdatePopupsChange}
         spotifyStatus={spotifyStatus}
+        youtubeMusicStatus={youtubeMusicStatus}
+        lyricsProviderOrder={lyricsProviderOrder}
+        onLyricsProviderOrderChange={(order) => {
+          lyricsProviderOrder = order;
+          setLyricsProviderOrder(order);
+        }}
         spotifyBusy={spotifyBusy}
         spotifyAuthHint={spotifyAuthHint}
         bind:spotifyClientIdDraft
@@ -2098,59 +2156,89 @@
       {:else if currentMediaView}
         <MediaPlayerView
           previous={currentMediaView.previous}
-          playPause={currentMediaView.playPause}
-          next={currentMediaView.next}
-          like={isOsMediaScene ? null : currentMediaView.like}
-          shuffle={isOsMediaScene ? null : currentMediaView.shuffle}
+          playPause={isYouTubeMusicActive
+            ? {
+                label: youtubeMusicStatus?.isPlaying ? "Pause" : "Play",
+                emoji: youtubeMusicStatus?.isPlaying ? "⏸️" : "▶️",
+                action: "youtubeMusic.togglePlay",
+              }
+            : currentMediaView.playPause}
+          next={isYouTubeMusicActive ? null : currentMediaView.next}
+          like={isOsMediaScene || isYouTubeMusicActive ? null : currentMediaView.like}
+          shuffle={isOsMediaScene || isYouTubeMusicActive ? null : currentMediaView.shuffle}
           shuffleActive={isSpotifyScene ? effectiveSpotifyShuffle : false}
           trackSaved={isSpotifyScene ? effectiveSpotifySaved : null}
-          lyricsEnabled={isSpotifyScene}
-          trackId={isSpotifyScene ? spotifyStatus?.currentItemId ?? null : null}
+          lyricsEnabled={isSpotifyScene && !!(spotifyStatus?.currentItemId || youtubeMusicStatus?.currentItemId)}
+          trackId={isYouTubeMusicActive
+            ? youtubeMusicStatus?.currentItemId ?? null
+            : isSpotifyScene
+              ? spotifyStatus?.currentItemId ?? null
+              : null}
           title={mediaPlayerTitle}
           subtitle={mediaPlayerSubtitle}
-          albumName={isSpotifyScene
-            ? spotifyStatus?.currentAlbumName
+          albumName={isYouTubeMusicActive
+            ? youtubeMusicStatus?.currentAlbumName
+            : isSpotifyScene
+              ? spotifyStatus?.currentAlbumName
             : isOsMediaScene
               ? osLocalNowPlaying?.album
               : null}
-          artworkUrl={isSpotifyScene
-            ? spotifyStatus?.currentCoverArtUrl
+          artworkUrl={isYouTubeMusicActive
+            ? youtubeMusicStatus?.currentCoverArtUrl
+            : isSpotifyScene
+              ? spotifyStatus?.currentCoverArtUrl
             : isOsMediaScene
               ? osLocalNowPlaying?.coverArtUrl
               : null}
-          playbackState={isSpotifyScene
-            ? effectiveSpotifyPlaybackState
+          playbackState={isYouTubeMusicActive
+            ? (youtubeMusicStatus?.playbackState ?? "stopped")
+            : isSpotifyScene
+              ? effectiveSpotifyPlaybackState
             : isOsMediaScene
               ? effectiveOsMediaPlaybackState
               : "stopped"}
-          progressMs={isSpotifyScene
-            ? spotifyStatus?.progressMs
+          progressMs={isYouTubeMusicActive
+            ? youtubeMusicStatus?.progressMs
+            : isSpotifyScene
+              ? spotifyStatus?.progressMs
             : isOsMediaScene
               ? osLocalNowPlaying?.progressMs
               : null}
-          durationMs={isSpotifyScene
-            ? spotifyStatus?.durationMs
+          durationMs={isYouTubeMusicActive
+            ? youtubeMusicStatus?.durationMs
+            : isSpotifyScene
+              ? spotifyStatus?.durationMs
             : isOsMediaScene
               ? osLocalNowPlaying?.durationMs
               : null}
-          volumeAction={currentMediaView.volumeAction}
-          seekAction={currentMediaView.seekAction}
-          volumePercent={isOsMediaScene ? osVolumePercent : spotifyVolumePercent}
-          volumeBusy={isOsMediaScene ? osVolumeBusy : spotifyVolumeBusy}
-          volumeEnabled={isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
-          seekEnabled={isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
+          volumeAction={isYouTubeMusicActive ? "youtubeMusic.setVolume" : currentMediaView.volumeAction}
+          seekAction={isYouTubeMusicActive ? "youtubeMusic.seek" : currentMediaView.seekAction}
+          volumePercent={isYouTubeMusicActive
+            ? youtubeMusicStatus?.currentVolumePercent ?? 80
+            : isOsMediaScene ? osVolumePercent : spotifyVolumePercent}
+          volumeBusy={isYouTubeMusicActive ? false : isOsMediaScene ? osVolumeBusy : spotifyVolumeBusy}
+          volumeEnabled={isYouTubeMusicActive || isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
+          seekEnabled={isYouTubeMusicActive || isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
           source={`${sceneId} window`}
           onVolumeCommit={(value) =>
-            currentMediaView.volumeAction
-              ? commitSceneVolume(currentMediaView.volumeAction, value)
+            (isYouTubeMusicActive ? "youtubeMusic.setVolume" : currentMediaView.volumeAction)
+              ? commitSceneVolume(
+                  isYouTubeMusicActive ? "youtubeMusic.setVolume" : currentMediaView.volumeAction!,
+                  value
+                )
               : Promise.resolve()}
           onSeekCommit={(positionMs) =>
-            currentMediaView.seekAction
-              ? commitSceneSeek(currentMediaView.seekAction, positionMs)
+            (isYouTubeMusicActive ? "youtubeMusic.seek" : currentMediaView.seekAction)
+              ? commitSceneSeek(
+                  isYouTubeMusicActive ? "youtubeMusic.seek" : currentMediaView.seekAction!,
+                  positionMs
+                )
               : Promise.resolve()}
           showSettingsButton={isTauri}
           onOpenSettings={() => (viewMode = "settings")}
           playlistsEnabled={isSpotifyScene}
+          youtubeMusicEnabled={isSpotifyScene}
+          lyricsProviderOrder={lyricsProviderOrder}
         />
       {:else if sceneId === "teams" && displayedLayout}
         <TeamsScene

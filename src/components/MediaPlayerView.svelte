@@ -3,8 +3,15 @@
   import appIconUrl from "../assets/app-icon.png";
   import microphoneLyricsUrl from "../assets/microphone-reference.png";
   import type { DeckButtonConfig } from "../types";
-  import { executeAction, executeActionValue, getSpotifyLyrics, type SpotifyTrackLyrics } from "../services/api";
+  import {
+    executeAction,
+    executeActionValue,
+    getLyrics,
+    type LyricsDocument,
+    type LyricsProviderId,
+  } from "../services/api";
   import PlaylistBrowser from "./PlaylistBrowser.svelte";
+  import YouTubeMusicSearch from "./YouTubeMusicSearch.svelte";
   import { logError } from "../services/logger";
   import SceneBackground from "./SceneBackground.svelte";
   import { sceneBackgroundId, controlsBackdropEnabled, controlsTransparency, controlsOverlayColor, controlsOverlayCustom } from "../stores/appearance";
@@ -48,6 +55,8 @@
     showSettingsButton?: boolean;
     onOpenSettings?: () => void;
     playlistsEnabled?: boolean;
+    youtubeMusicEnabled?: boolean;
+    lyricsProviderOrder?: LyricsProviderId[];
   }
 
   let {
@@ -79,6 +88,8 @@
     showSettingsButton = false,
     onOpenSettings,
     playlistsEnabled = false,
+    youtubeMusicEnabled = false,
+    lyricsProviderOrder = ["lrclib", "musixmatch", "kugou", "netease"],
   }: Props = $props();
 
   let localVolume = $state(80);
@@ -414,11 +425,12 @@
   }
 
   let playlistsOpen = $state(false);
+  let youtubeMusicOpen = $state(false);
   let lyricsOpen = $state(false);
   let lyricsBusy = $state(false);
   let lyricsError = $state<string | null>(null);
   let lyricsTrackId = $state<string | null>(null);
-  let lyricsDoc = $state<SpotifyTrackLyrics | null>(null);
+  let lyricsDoc = $state<LyricsDocument | null>(null);
 
   const lyricsLines = $derived(lyricsDoc?.lines ?? []);
   const lyricsSynced = $derived(
@@ -486,7 +498,14 @@
     lyricsBusy = true;
     lyricsError = null;
     try {
-      const next = await getSpotifyLyrics(id);
+      const next = await getLyrics({
+        trackId: id,
+        title: title ?? "",
+        artist: subtitle ?? "",
+        album: albumName,
+        durationMs,
+        providerOrder: lyricsProviderOrder,
+      });
       lyricsDoc = next;
       lyricsTrackId = id;
       lyricsError = next.available ? null : "Lyrics aren't available for this track";
@@ -502,7 +521,7 @@
   function lyricsUserMessage(error: unknown): string {
     const text = String(error ?? "");
     if (/403|forbidden|permission denied/i.test(text)) {
-      return "Spotify wouldn't share lyrics for this track.";
+      return "Lyrics could not be loaded for this track.";
     }
     return text.replace(/^Error:\s*/i, "") || "Spotify lyrics could not be loaded";
   }
@@ -563,6 +582,18 @@
           />
         </svg>
         <span>Playlists</span>
+      </button>
+    {/if}
+    {#if youtubeMusicEnabled}
+      <button
+        class="car-youtube-btn"
+        type="button"
+        title="Search YouTube Music"
+        aria-label="Search YouTube Music"
+        onclick={() => (youtubeMusicOpen = true)}
+      >
+        <span aria-hidden="true">YT</span>
+        <span>YouTube</span>
       </button>
     {/if}
 
@@ -822,6 +853,7 @@
   </footer>
 
   <PlaylistBrowser open={playlistsOpen} onClose={() => (playlistsOpen = false)} />
+  <YouTubeMusicSearch open={youtubeMusicOpen} onClose={() => (youtubeMusicOpen = false)} />
 
   {#if volumeAction}
     <aside class="car-fader" aria-label="Volume">
@@ -991,6 +1023,35 @@
   }
 
   .car-playlists-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .car-youtube-btn {
+    position: absolute;
+    top: 18px;
+    right: 180px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 56px;
+    padding: 10px 15px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 999px;
+    background: rgba(12, 12, 12, 0.55);
+    color: #fff;
+    font-size: 0.95rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .car-youtube-btn span:first-child {
+    color: #ff0033;
+    font-size: 0.78rem;
+    font-weight: 900;
+  }
+
+  .car-youtube-btn:hover {
     background: rgba(255, 255, 255, 0.12);
   }
 
