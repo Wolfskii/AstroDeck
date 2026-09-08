@@ -1,23 +1,28 @@
 /// Handle Teams-related actions.
-pub fn handle(command: &str) -> Result<(), String> {
+pub fn handle(command: &str, state: &crate::AppState) -> Result<(), String> {
     match command {
         "toggleMute" => send_teams_shortcut("Ctrl+Shift+M", 0x4D, true),
         "toggleCamera" => send_teams_shortcut("Ctrl+Shift+O", 0x4F, true),
         "shareScreen" => send_teams_shortcut("Ctrl+Shift+E", 0x45, true),
         "raiseHand" => send_teams_shortcut("Ctrl+Shift+K", 0x4B, true),
-        "chat" => send_teams_shortcut("Ctrl+Shift+R", 0x52, true),
+        "chat" => crate::teams_api::command(&state.teams_api, "chat"),
         "leaveMeeting" => send_teams_shortcut("Ctrl+Shift+H", 0x48, true),
         "goCalendar" => send_teams_shortcut("Ctrl+4", 0x34, false),
         "goActivity" => send_teams_shortcut("Ctrl+1", 0x31, false),
-        cmd if cmd.starts_with("reaction.") => Err(
-            "Teams reactions require UI automation; Teams exposes no reaction keyboard shortcut."
-                .to_string(),
-        ),
+        "reaction.like" => send_reaction(state, "like"),
+        "reaction.heart" => send_reaction(state, "love"),
+        "reaction.clap" => send_reaction(state, "applause"),
+        "reaction.laugh" => send_reaction(state, "laugh"),
+        "reaction.wow" => send_reaction(state, "wow"),
         _ => {
             log::warn!("Unknown Teams command: {}", command);
             Err(format!("Unknown Teams command: {}", command))
         }
     }
+}
+
+fn send_reaction(state: &crate::AppState, reaction: &str) -> Result<(), String> {
+    crate::teams_api::command(&state.teams_api, &format!("reaction.{reaction}"))
 }
 
 #[cfg(windows)]

@@ -9,6 +9,7 @@ mod plugin_engine;
 mod prefs;
 mod spotify;
 mod spotify_desktop;
+mod teams_api;
 mod updater;
 mod websocket;
 mod window_prefs;
@@ -32,6 +33,7 @@ pub struct AppState {
     pub os_local_media: Mutex<Option<os_media::OsNowPlaying>>,
     pub spotify: spotify::SpotifyState,
     pub youtube_music: youtube_music::YouTubeMusicState,
+    pub teams_api: teams_api::TeamsState,
     pub log_bus: broadcast::Sender<String>,
 }
 
@@ -47,6 +49,7 @@ impl AppState {
             os_local_media: Mutex::new(None),
             spotify: spotify::SpotifyState::default(),
             youtube_music: youtube_music::YouTubeMusicState::default(),
+            teams_api: teams_api::TeamsState::new(),
             log_bus: log_tx,
         }
     }
@@ -217,6 +220,21 @@ fn get_os_now_playing(state: tauri::State<AppState>) -> Option<os_media::OsNowPl
 #[tauri::command]
 fn get_output_volume() -> Result<u8, String> {
     os_media::get_output_volume()
+}
+
+#[tauri::command]
+fn get_teams_setup_status() -> teams_api::TeamsSetupStatus {
+    teams_api::setup_status()
+}
+
+#[tauri::command]
+fn get_teams_status(state: tauri::State<AppState>) -> teams_api::TeamsStatus {
+    teams_api::status(&state.teams_api)
+}
+
+#[tauri::command]
+fn setup_teams_integration() -> Result<teams_api::TeamsSetupStatus, String> {
+    teams_api::setup()
 }
 
 #[tauri::command]
@@ -524,6 +542,9 @@ pub fn run() {
             log_to_bus,
             get_os_now_playing,
             get_output_volume,
+            get_teams_setup_status,
+            get_teams_status,
+            setup_teams_integration,
             get_spotify_status,
             get_lyrics,
             search_youtube_music,
@@ -606,6 +627,7 @@ pub fn run() {
             crate::audio_viz::sync(&app_handle, prefs::audio_visualizer_enabled(&app_handle));
             spotify::init(&app_handle, &app.state::<AppState>().spotify)?;
             youtube_music::init(&app_handle, &app.state::<AppState>().youtube_music);
+            teams_api::init(&app_handle, &app.state::<AppState>().teams_api);
 
             // Start WebSocket log bus so browser clients see live logs
             let log_tx = app.state::<AppState>().log_bus.clone();

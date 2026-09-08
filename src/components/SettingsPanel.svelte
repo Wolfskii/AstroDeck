@@ -33,6 +33,7 @@
     SpotifyStatus,
     YouTubeMusicStatus,
     YouTubeLocalLibrary,
+    TeamsSetupStatus,
   } from "../services/api";
 
   type SettingsSection =
@@ -41,6 +42,7 @@
     | "updates"
     | "spotify"
     | "youtubeMusic"
+    | "teams"
     | "scenes";
 
   let {
@@ -73,6 +75,8 @@
     spotifyStatus,
     youtubeMusicStatus = null,
     youtubeMusicLibrary = null,
+    teamsSetupStatus = null,
+    onSetupTeams,
     lyricsProviderOrder = [],
     onLyricsProviderOrderChange,
     spotifyBusy,
@@ -125,6 +129,8 @@
     spotifyStatus: SpotifyStatus | null;
     youtubeMusicStatus?: YouTubeMusicStatus | null;
     youtubeMusicLibrary?: YouTubeLocalLibrary | null;
+    teamsSetupStatus?: TeamsSetupStatus | null;
+    onSetupTeams?: () => Promise<void>;
     lyricsProviderOrder?: LyricsProviderId[];
     onLyricsProviderOrderChange?: (order: LyricsProviderId[]) => void;
     spotifyBusy: boolean;
@@ -158,6 +164,7 @@
     updates: "Updates",
     spotify: "Spotify",
     youtubeMusic: "YouTube Music",
+    teams: "Microsoft Teams",
     scenes: "Scenes",
   };
 
@@ -267,6 +274,20 @@
           />
         </svg>
         YouTube Music
+      </button>
+      <button
+        type="button"
+        class="settings-nav-item"
+        class:active={activeSection === "teams"}
+        onclick={() => (section = "teams")}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M4 5a3 3 0 0 1 3-3h7a3 3 0 0 1 3 3v2h2a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2v1a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V5zm4 4v8h2V9H8zm4 0v8h2V9h-2z"
+          />
+        </svg>
+        Microsoft Teams
       </button>
     </nav>
 
@@ -749,6 +770,38 @@
                 ? "Saved"
                 : "Not saved"}
           </strong>
+        </div>
+      </div>
+    {:else if activeSection === "teams"}
+      <div class="settings-card settings-card-pad">
+        <div class="settings-card-toolbar">
+          <div>
+            <p class="setting-title">Teams third-party device API</p>
+            <p class="setting-desc">
+              Enable the local Teams API used for reactions, chat, and state feedback. Restart
+              Teams after setup, then approve AstroDeck if Teams asks for permission.
+            </p>
+          </div>
+          <span class:scene-tag={true} class:current={teamsSetupStatus?.configured}>
+            {teamsSetupStatus?.configured ? "enabled" : "setup"}
+          </span>
+        </div>
+        <div class="spotify-status-line">
+          <span class="status-dot" class:on={teamsSetupStatus?.configured}></span>
+          <span>{teamsSetupStatus?.message ?? "Checking Teams setup…"}</span>
+        </div>
+        {#if teamsSetupStatus?.path}
+          <p class="setting-desc"><code>{teamsSetupStatus.path}</code></p>
+        {/if}
+        <div class="settings-btn-row">
+          <button
+            type="button"
+            class="md-btn md-btn-primary"
+            disabled={!teamsSetupStatus?.supported}
+            onclick={() => void onSetupTeams?.()}
+          >
+            Enable Teams integration
+          </button>
         </div>
       </div>
     {:else if activeSection === "youtubeMusic"}

@@ -64,6 +64,38 @@ export async function getOutputVolume(): Promise<number> {
   return invoke<number>("get_output_volume");
 }
 
+export interface TeamsSetupStatus {
+  supported: boolean;
+  configured: boolean;
+  path?: string | null;
+  message: string;
+}
+
+export async function getTeamsSetupStatus(): Promise<TeamsSetupStatus> {
+  return invoke<TeamsSetupStatus>("get_teams_setup_status");
+}
+
+export async function setupTeamsIntegration(): Promise<TeamsSetupStatus> {
+  return invoke<TeamsSetupStatus>("setup_teams_integration");
+}
+
+export interface TeamsStatus {
+  isConnected: boolean;
+  isInMeeting: boolean;
+  isMuted: boolean;
+  isVideoOn: boolean;
+  isHandRaised: boolean;
+  isSharing: boolean;
+  canReact: boolean;
+  canToggleChat: boolean;
+  canLeave: boolean;
+  message: string;
+}
+
+export async function getTeamsStatus(): Promise<TeamsStatus> {
+  return invoke<TeamsStatus>("get_teams_status");
+}
+
 export interface SpotifyTrackPreview {
   itemId: string;
   itemType: string;

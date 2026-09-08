@@ -3,15 +3,18 @@
   import Icon from "./Icon.svelte";
   import SceneActionButton from "./SceneActionButton.svelte";
   import type { DeckButtonConfig } from "../types";
+  import type { TeamsStatus } from "../services/api";
 
   let {
     buttons,
     showSettingsButton = false,
     onOpenSettings,
+    teamsStatus = null,
   }: {
     buttons: DeckButtonConfig[];
     showSettingsButton?: boolean;
     onOpenSettings?: () => void;
+    teamsStatus?: TeamsStatus | null;
   } = $props();
 
   const reactions = $derived(
@@ -22,6 +25,10 @@
   );
   let muted = $state(false);
   let cameraOff = $state(false);
+  const effectiveMuted = $derived(teamsStatus?.isConnected ? teamsStatus.isMuted : muted);
+  const effectiveCameraOff = $derived(
+    teamsStatus?.isConnected ? !teamsStatus.isVideoOn : cameraOff
+  );
 </script>
 
 <section class="teams" class:has-settings={showSettingsButton && onOpenSettings}>
@@ -68,9 +75,9 @@
       {#each controls as button (button.action)}
         <SceneActionButton
           label={
-            button.action === "teams.toggleMute" && muted
+            button.action === "teams.toggleMute" && effectiveMuted
               ? "Unmute"
-              : button.action === "teams.toggleCamera" && cameraOff
+              : button.action === "teams.toggleCamera" && effectiveCameraOff
                 ? "Turn camera on"
                 : button.label
           }
@@ -80,18 +87,22 @@
           tone={
             button.action === "teams.shareScreen"
               ? "accent"
-              : (button.action === "teams.toggleMute" && muted) ||
-                  (button.action === "teams.toggleCamera" && cameraOff)
+              : (button.action === "teams.toggleMute" && effectiveMuted) ||
+                  (button.action === "teams.toggleCamera" && effectiveCameraOff)
                 ? "danger"
                 : "default"
           }
           active={
-            (button.action === "teams.toggleMute" && muted) ||
-            (button.action === "teams.toggleCamera" && cameraOff)
+            (button.action === "teams.toggleMute" && effectiveMuted) ||
+            (button.action === "teams.toggleCamera" && effectiveCameraOff)
           }
           onAction={() => {
-            if (button.action === "teams.toggleMute") muted = !muted;
-            if (button.action === "teams.toggleCamera") cameraOff = !cameraOff;
+            if (!teamsStatus?.isConnected && button.action === "teams.toggleMute") {
+              muted = !muted;
+            }
+            if (!teamsStatus?.isConnected && button.action === "teams.toggleCamera") {
+              cameraOff = !cameraOff;
+            }
           }}
         />
       {/each}
