@@ -1,5 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
@@ -9,6 +10,110 @@ use std::time::Duration;
 use tauri::{Emitter, Manager};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamsSetupStatus {
+    pub supported: bool,
+    pub configured: bool,
+    pub path: Option<String>,
+    pub message: String,
+}
+
+fn config_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        return std::env::var_os("LOCALAPPDATA").map(|base| {
+            PathBuf::from(base)
+                .join("Packages")
+                .join("MSTeams_8wekyb3d8bbwe")
+                .join("LocalCache")
+                .join("Microsoft")
+                .join("MSTeams")
+                .join("configuration.json")
+        });
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return std::env::var_os("HOME").map(|home| {
+            PathBuf::from(home)
+                .join("Library")
+                .join("Containers")
+                .join("com.microsoft.teams2")
+                .join("Data")
+                .join("Library")
+                .join("Application Support")
+                .join("Microsoft")
+                .join("MSTeams")
+                .join("configuration.json")
+        });
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+pub fn setup_status() -> TeamsSetupStatus {
+    let Some(path) = config_path() else {
+        return TeamsSetupStatus {
+            supported: false,
+            configured: false,
+            path: None,
+            message: "Teams setup is supported on Windows and macOS only.".to_string(),
+        };
+    };
+    let configured = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value.as_object().cloned())
+        .map(|object| {
+            object
+                .get("core/devMenuEnabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                && object
+                    .get("thirdPartyDevices/thirdPartyDevicesManagerEnabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    TeamsSetupStatus {
+        supported: true,
+        configured,
+        path: Some(path.to_string_lossy().to_string()),
+        message: if configured {
+            "Teams third-party device API is enabled. Restart Teams if needed.".to_string()
+        } else {
+            "Enable the Teams third-party device API, then restart Teams and approve AstroDeck."
+                .to_string()
+        },
+    }
+}
+
+pub fn setup() -> Result<TeamsSetupStatus, String> {
+    let path = config_path().ok_or_else(|| {
+        "Teams setup is supported on Windows and macOS only.".to_string()
+    })?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut object = if let Ok(text) = std::fs::read_to_string(&path) {
+        serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_else(Map::new)
+    } else {
+        Map::new()
+    };
+    object.insert("core/devMenuEnabled".to_string(), Value::Bool(true));
+    object.insert(
+        "thirdPartyDevices/thirdPartyDevicesManagerEnabled".to_string(),
+        Value::Bool(true),
+    );
+    let json = serde_json::to_string_pretty(&Value::Object(object))
+        .map_err(|error| error.to_string())?;
+    std::fs::write(&path, format!("{json}\n")).map_err(|error| error.to_string())?;
+    Ok(setup_status())
+}
 
 const TEAMS_URL: &str = "ws://127.0.0.1:8124";
 const PROTOCOL_VERSION: &str = "2.0.0";
@@ -166,7 +271,7 @@ pub fn init(app: &tauri::AppHandle, state: &TeamsState) {
             .unwrap_or_default();
         let app_handle = app.clone();
         let state_clone = state.clone();
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             connection_loop(app_handle, state_clone, token).await;
         });
     }
@@ -239,9 +344,11 @@ pub fn command(state: &TeamsState, command: &str) -> Result<(), String> {
 async fn connection_loop(app: tauri::AppHandle, state: TeamsState, mut token: String) {
     let mut reconnect_delay = Duration::from_secs(2);
     loop {
+        let encoded_token = url::form_urlencoded::byte_serialize(token.as_bytes())
+            .collect::<String>();
         let url = format!(
             "{TEAMS_URL}?token={}&protocol-version={PROTOCOL_VERSION}&manufacturer=AstroDeck&device=AstroDeck&app=AstroDeck&app-version={}",
-            urlencoding::encode(&token),
+            encoded_token,
             env!("CARGO_PKG_VERSION")
         );
         match connect_async(&url).await {

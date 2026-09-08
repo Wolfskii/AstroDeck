@@ -26,7 +26,7 @@ pub fn dispatch(action: &str, _app: &tauri::AppHandle, state: &crate::AppState) 
     let command = parts[1];
 
     match namespace {
-        "teams" => teams_actions::handle(command),
+        "teams" => teams_actions::handle(command, state),
         "spotify" => {
             if matches!(command, "togglePlay" | "nextTrack" | "prevTrack") {
                 crate::youtube_music::pause(&state.youtube_music);

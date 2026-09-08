@@ -25,6 +25,9 @@
     getSpotifyStatus,
     getYouTubeMusicStatus,
     getYouTubeMusicLibrary,
+    getTeamsSetupStatus,
+    getTeamsStatus,
+    setupTeamsIntegration,
     peekSpotifySkipTrack,
     setActiveScene,
     setSpotifyAuthMode,
@@ -36,6 +39,8 @@
     SpotifyTrackPreview,
     YouTubeMusicStatus,
     YouTubeLocalLibrary,
+    TeamsSetupStatus,
+    TeamsStatus,
   } from "./services/api";
   import type { SceneState, LayoutConfig, PluginConfig, DeckButtonConfig } from "./types";
   import {
@@ -104,6 +109,8 @@
   let spotifyStatus = $state<SpotifyStatus | null>(null);
   let youtubeMusicStatus = $state<YouTubeMusicStatus | null>(null);
   let youtubeMusicLibrary = $state<YouTubeLocalLibrary | null>(null);
+  let teamsSetupStatus = $state<TeamsSetupStatus | null>(null);
+  let teamsStatus = $state<TeamsStatus | null>(null);
   let lyricsProviderOrder = $state(getLyricsProviderOrder());
   let spotifyBusy = $state(false);
   let spotifyVolumeBusy = $state(false);
@@ -1970,6 +1977,16 @@
           youtubeMusicLibrary = library;
         })
         .catch((error) => logError(`Failed to load YouTube Music local library: ${String(error)}`, "YouTube Music"));
+      void getTeamsSetupStatus()
+        .then((status) => {
+          teamsSetupStatus = status;
+        })
+        .catch((error) => logError(`Failed to read Teams setup status: ${String(error)}`, "Teams"));
+      void getTeamsStatus()
+        .then((status) => {
+          teamsStatus = status;
+        })
+        .catch(() => {});
 
       const onWindowFocus = () => {
         void refreshSpotifyStatusForDesktop();
@@ -1990,6 +2007,9 @@
       });
       const unlistenYouTubeStatus = listen<YouTubeMusicStatus>("youtube-status", (event) => {
         youtubeMusicStatus = event.payload;
+      });
+      const unlistenTeamsStatus = listen<TeamsStatus>("teams-status", (event) => {
+        teamsStatus = event.payload;
       });
       const unlisten = listen<SceneState>("scene-changed", (event) => {
         sceneId = event.payload.activeSceneId;
@@ -2025,6 +2045,7 @@
         unlistenOsNowPlaying.then((fn) => fn());
         unlistenSpotifyStatus.then((fn) => fn());
         unlistenYouTubeStatus.then((fn) => fn());
+        unlistenTeamsStatus.then((fn) => fn());
         unlistenTerminal.then((fn) => fn());
         unlistenAutoSwitch.then((fn) => fn());
         window.removeEventListener("astrodeck-core-action", handleCoreAction as EventListener);
@@ -2149,6 +2170,10 @@
         spotifyStatus={spotifyStatus}
         youtubeMusicStatus={youtubeMusicStatus}
         youtubeMusicLibrary={youtubeMusicLibrary}
+        teamsSetupStatus={teamsSetupStatus}
+        onSetupTeams={async () => {
+          teamsSetupStatus = await setupTeamsIntegration();
+        }}
         lyricsProviderOrder={lyricsProviderOrder}
         onLyricsProviderOrderChange={(order) => {
           lyricsProviderOrder = order;
@@ -2278,6 +2303,7 @@
       {:else if sceneId === "teams" && displayedLayout}
         <TeamsScene
           buttons={displayedLayout.buttons}
+          teamsStatus={teamsStatus}
           showSettingsButton={isTauri}
           onOpenSettings={() => (viewMode = "launcher")}
         />
