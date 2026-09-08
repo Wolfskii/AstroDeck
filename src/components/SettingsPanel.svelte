@@ -35,7 +35,13 @@
     YouTubeLocalLibrary,
   } from "../services/api";
 
-  type SettingsSection = "general" | "appearance" | "updates" | "spotify" | "scenes";
+  type SettingsSection =
+    | "general"
+    | "appearance"
+    | "updates"
+    | "spotify"
+    | "youtubeMusic"
+    | "scenes";
 
   let {
     isTauri,
@@ -151,6 +157,7 @@
     appearance: "Appearance",
     updates: "Updates",
     spotify: "Spotify",
+    youtubeMusic: "YouTube Music",
     scenes: "Scenes",
   };
 
@@ -246,6 +253,20 @@
           />
         </svg>
         Spotify
+      </button>
+      <button
+        type="button"
+        class="settings-nav-item"
+        class:active={activeSection === "youtubeMusic"}
+        onclick={() => (section = "youtubeMusic")}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M10 4v10.2A3.5 3.5 0 1 0 12 17V8h7V4h-9z"
+          />
+        </svg>
+        YouTube Music
       </button>
       <button
         type="button"
@@ -613,62 +634,6 @@
       </div>
 
       <div class="settings-card settings-card-pad">
-        <div class="settings-card-toolbar">
-          <div>
-            <p class="setting-title">YouTube Music</p>
-            <p class="setting-desc">
-              Guest search and playback through AstroDeck. Account sign-in and YouTube Music
-              library access are not enabled yet.
-            </p>
-          </div>
-          <span class="scene-tag current">guest</span>
-        </div>
-        <div class="spotify-status-line">
-          <span class="status-dot" class:on={youtubeMusicStatus?.hasActiveDevice}></span>
-          <span>
-            {youtubeMusicStatus?.hasActiveDevice
-              ? `Playing ${youtubeMusicStatus.currentTrackName ?? "YouTube Music"}`
-              : "Ready — use the YouTube button in the player to search"}
-          </span>
-        </div>
-        <p class="setting-desc">
-          Local guest profile:
-          {youtubeMusicLibrary?.savedTracks.length ?? 0} saved songs ·
-          {youtubeMusicLibrary?.playlists.length ?? 0} local playlists
-        </p>
-      </div>
-
-      <div class="settings-card settings-card-pad">
-        <p class="setting-title">Lyrics providers</p>
-        <p class="setting-desc">
-          Lyrics are tried in this order for Spotify and YouTube Music. The first provider with
-          synced lyrics wins.
-        </p>
-        <div class="lyrics-provider-list">
-          {#each lyricsProviderOrder as provider, index (provider)}
-            <div class="lyrics-provider-row">
-              <span class="lyrics-provider-rank">{index + 1}</span>
-              <span class="setting-title">{lyricsProviderLabels[provider]}</span>
-              <button
-                type="button"
-                class="md-btn"
-                aria-label={`Move ${lyricsProviderLabels[provider]} up`}
-                disabled={index === 0}
-                onclick={() => moveLyricsProvider(index, -1)}
-              >Up</button>
-              <button
-                type="button"
-                class="md-btn"
-                aria-label={`Move ${lyricsProviderLabels[provider]} down`}
-                disabled={index === lyricsProviderOrder.length - 1}
-                onclick={() => moveLyricsProvider(index, 1)}
-              >Down</button>
-            </div>
-          {/each}
-        </div>
-      </div>
-
-      <div class="settings-card settings-card-pad">
         <p class="setting-title">Login method</p>
         <p class="setting-desc">
           Desktop login is the default. Playback, playlists, and likes stream in AstroDeck without
@@ -798,6 +763,60 @@
                 ? "Saved"
                 : "Not saved"}
           </strong>
+        </div>
+      </div>
+    {:else if activeSection === "youtubeMusic"}
+      <div class="settings-card settings-card-pad">
+        <div class="settings-card-toolbar">
+          <div>
+            <p class="setting-title">YouTube Music guest account</p>
+            <p class="setting-desc">
+              Search and play YouTube Music without Google sign-in. AstroDeck keeps saved songs
+              and local playlists in a local guest profile.
+            </p>
+          </div>
+          <span class="scene-tag current">guest</span>
+        </div>
+        <div class="spotify-status-line">
+          <span class="status-dot" class:on={youtubeMusicStatus?.hasActiveDevice}></span>
+          <span>
+            {youtubeMusicStatus?.hasActiveDevice
+              ? `Playing ${youtubeMusicStatus.currentTrackName ?? "YouTube Music"}`
+              : "Ready — open the YouTube Music scene to search"}
+          </span>
+        </div>
+        <p class="setting-desc">
+          Local profile: {youtubeMusicLibrary?.savedTracks.length ?? 0} saved songs ·
+          {youtubeMusicLibrary?.playlists.length ?? 0} playlists
+        </p>
+      </div>
+
+      <div class="settings-card settings-card-pad">
+        <p class="setting-title">YouTube lyrics providers</p>
+        <p class="setting-desc">
+          YouTube lyrics use this fallback order. Spotify continues using Spotify’s native lyrics.
+        </p>
+        <div class="lyrics-provider-list">
+          {#each lyricsProviderOrder as provider, index (provider)}
+            <div class="lyrics-provider-row">
+              <span class="lyrics-provider-rank">{index + 1}</span>
+              <span class="setting-title">{lyricsProviderLabels[provider]}</span>
+              <button
+                type="button"
+                class="md-btn"
+                aria-label={`Move ${lyricsProviderLabels[provider]} up`}
+                disabled={index === 0}
+                onclick={() => moveLyricsProvider(index, -1)}
+              >Up</button>
+              <button
+                type="button"
+                class="md-btn"
+                aria-label={`Move ${lyricsProviderLabels[provider]} down`}
+                disabled={index === lyricsProviderOrder.length - 1}
+                onclick={() => moveLyricsProvider(index, 1)}
+              >Down</button>
+            </div>
+          {/each}
         </div>
       </div>
     {:else}
