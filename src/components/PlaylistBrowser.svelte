@@ -478,6 +478,7 @@
     display: flex;
     flex-direction: column;
     align-items: stretch;
+    box-sizing: border-box;
     width: 100%;
     min-height: 300px;
     padding: 12px;
@@ -488,6 +489,7 @@
     text-align: left;
     cursor: pointer;
     touch-action: manipulation;
+    overflow: hidden;
   }
 
   .playlist-card:hover:not(:disabled) {
@@ -513,15 +515,23 @@
   .playlist-card-art-wrap {
     position: relative;
     display: block;
+    flex: 0 0 auto;
+    width: 100%;
     aspect-ratio: 1;
     margin-bottom: 14px;
+    overflow: hidden;
+    border-radius: 12px;
   }
 
   .playlist-art,
   .playlist-art-fallback {
+    position: absolute;
+    inset: 0;
     display: block;
     width: 100%;
     height: 100%;
+    min-width: 0;
+    min-height: 0;
     border-radius: 12px;
     object-fit: cover;
   }
@@ -578,6 +588,8 @@
     flex-direction: column;
     gap: 8px;
     min-width: 0;
+    min-height: 3.8em;
+    overflow: hidden;
     flex: 1 1 auto;
   }
 
