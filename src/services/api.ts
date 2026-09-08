@@ -257,6 +257,42 @@ export interface YouTubeMusicStatus {
   message: string;
 }
 
+export interface YouTubeLocalPlaylist {
+  id: string;
+  name: string;
+  trackIds: string[];
+}
+
+export interface YouTubeLocalLibrary {
+  profileName: string;
+  savedTracks: YouTubeSearchTrack[];
+  playlists: YouTubeLocalPlaylist[];
+}
+
+export async function getYouTubeMusicLibrary(): Promise<YouTubeLocalLibrary> {
+  return invoke<YouTubeLocalLibrary>("get_youtube_music_library");
+}
+
+export async function saveYouTubeMusicTrack(
+  track: YouTubeSearchTrack
+): Promise<YouTubeLocalLibrary> {
+  return invoke<YouTubeLocalLibrary>("save_youtube_music_track", { track });
+}
+
+export async function createYouTubeMusicPlaylist(name: string): Promise<YouTubeLocalLibrary> {
+  return invoke<YouTubeLocalLibrary>("create_youtube_music_playlist", { name });
+}
+
+export async function addYouTubeMusicTrackToPlaylist(
+  playlistId: string,
+  trackId: string
+): Promise<YouTubeLocalLibrary> {
+  return invoke<YouTubeLocalLibrary>("add_youtube_music_track_to_playlist", {
+    playlistId,
+    trackId,
+  });
+}
+
 export async function searchYouTubeMusic(query: string): Promise<YouTubeSearchTrack[]> {
   return invoke<YouTubeSearchTrack[]>("search_youtube_music", { query });
 }

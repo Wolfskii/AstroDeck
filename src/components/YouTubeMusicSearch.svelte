@@ -1,7 +1,12 @@
 <script lang="ts">
   import {
+    addYouTubeMusicTrackToPlaylist,
+    createYouTubeMusicPlaylist,
+    getYouTubeMusicLibrary,
     playYouTubeMusic,
+    saveYouTubeMusicTrack,
     searchYouTubeMusic,
+    type YouTubeLocalLibrary,
     type YouTubeSearchTrack,
   } from "../services/api";
 
@@ -17,6 +22,11 @@
   let results = $state<YouTubeSearchTrack[]>([]);
   let loading = $state(false);
   let playingId = $state<string | null>(null);
+  let savingId = $state<string | null>(null);
+  let addingId = $state<string | null>(null);
+  let library = $state<YouTubeLocalLibrary | null>(null);
+  let newPlaylistName = $state("");
+  let selectedPlaylistByTrack = $state<Record<string, string>>({});
   let error = $state<string | null>(null);
   let sawOpen = false;
 
@@ -25,6 +35,7 @@
       query = "";
       results = [];
       error = null;
+      void getYouTubeMusicLibrary().then((next) => (library = next)).catch(() => {});
     }
     sawOpen = open;
   });
@@ -60,6 +71,41 @@
       playingId = null;
     }
   }
+
+  async function save(track: YouTubeSearchTrack) {
+    savingId = track.videoId;
+    error = null;
+    try {
+      library = await saveYouTubeMusicTrack(track);
+    } catch (e) {
+      error = String(e).replace(/^Error:\s*/i, "");
+    } finally {
+      savingId = null;
+    }
+  }
+
+  async function createPlaylist() {
+    if (!newPlaylistName.trim()) return;
+    try {
+      library = await createYouTubeMusicPlaylist(newPlaylistName);
+      newPlaylistName = "";
+    } catch (e) {
+      error = String(e).replace(/^Error:\s*/i, "");
+    }
+  }
+
+  async function addToPlaylist(track: YouTubeSearchTrack) {
+    const playlistId = selectedPlaylistByTrack[track.videoId];
+    if (!playlistId) return;
+    addingId = track.videoId;
+    try {
+      library = await addYouTubeMusicTrackToPlaylist(playlistId, track.videoId);
+    } catch (e) {
+      error = String(e).replace(/^Error:\s*/i, "");
+    } finally {
+      addingId = null;
+    }
+  }
 </script>
 
 <svelte:window
@@ -90,28 +136,75 @@
           {loading ? "Searching…" : "Search"}
         </button>
       </form>
+      <div class="youtube-library-bar">
+        <span>
+          Local guest library:
+          {library?.savedTracks.length ?? 0} saved songs ·
+          {library?.playlists.length ?? 0} playlists
+        </span>
+        <form
+          onsubmit={(event) => {
+            event.preventDefault();
+            void createPlaylist();
+          }}
+        >
+          <input bind:value={newPlaylistName} placeholder="New local playlist" />
+          <button type="submit" disabled={!newPlaylistName.trim()}>Create</button>
+        </form>
+      </div>
       {#if error}
         <p class="youtube-error">{error}</p>
       {/if}
       <div class="youtube-results">
         {#each results as track (track.videoId)}
-          <button
-            type="button"
-            class="youtube-result"
-            disabled={playingId === track.videoId}
-            onclick={() => void play(track)}
-          >
-            {#if track.coverArtUrl}
-              <img src={track.coverArtUrl} alt="" />
-            {:else}
-              <span class="youtube-art-fallback">♪</span>
+          <div class="youtube-result">
+            <button
+              type="button"
+              class="youtube-result-main"
+              disabled={playingId === track.videoId}
+              onclick={() => void play(track)}
+            >
+              {#if track.coverArtUrl}
+                <img src={track.coverArtUrl} alt="" />
+              {:else}
+                <span class="youtube-art-fallback">♪</span>
+              {/if}
+              <span class="youtube-result-copy">
+                <strong>{track.title}</strong>
+                <span>{track.artistName}{track.albumName ? ` · ${track.albumName}` : ""}</span>
+              </span>
+              <span class="youtube-play">{playingId === track.videoId ? "Starting…" : "Play"}</span>
+            </button>
+            <button
+              type="button"
+              class="youtube-save"
+              disabled={savingId === track.videoId}
+              onclick={() => void save(track)}
+            >
+              {savingId === track.videoId ? "Saving…" : "Save"}
+            </button>
+            {#if library?.playlists.length}
+              <select
+                aria-label={`Choose local playlist for ${track.title}`}
+                value={selectedPlaylistByTrack[track.videoId] ?? ""}
+                onchange={(event) => {
+                  selectedPlaylistByTrack[track.videoId] =
+                    (event.currentTarget as HTMLSelectElement).value;
+                }}
+              >
+                <option value="">Add to playlist…</option>
+                {#each library.playlists as playlist (playlist.id)}
+                  <option value={playlist.id}>{playlist.name}</option>
+                {/each}
+              </select>
+              <button
+                type="button"
+                class="youtube-add"
+                disabled={addingId === track.videoId || !selectedPlaylistByTrack[track.videoId]}
+                onclick={() => void addToPlaylist(track)}
+              >{addingId === track.videoId ? "Adding…" : "Add"}</button>
             {/if}
-            <span class="youtube-result-copy">
-              <strong>{track.title}</strong>
-              <span>{track.artistName}{track.albumName ? ` · ${track.albumName}` : ""}</span>
-            </span>
-            <span class="youtube-play">{playingId === track.videoId ? "Starting…" : "Play"}</span>
-          </button>
+          </div>
         {/each}
       </div>
     </div>
@@ -208,6 +301,42 @@
     cursor: default;
   }
 
+  .youtube-library-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: #aab4c0;
+    font-size: 0.88rem;
+  }
+
+  .youtube-library-bar form {
+    display: flex;
+    gap: 6px;
+  }
+
+  .youtube-library-bar input {
+    width: 150px;
+    min-height: 38px;
+    padding: 7px 9px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    background: #090909;
+    color: #fff;
+  }
+
+  .youtube-library-bar button,
+  .youtube-add {
+    min-height: 38px;
+    padding: 7px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    background: rgba(29, 185, 84, 0.14);
+    color: #1db954;
+    font-weight: 750;
+    cursor: pointer;
+  }
+
   .youtube-results {
     display: flex;
     flex-direction: column;
@@ -218,7 +347,7 @@
 
   .youtube-result {
     display: grid;
-    grid-template-columns: 64px minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 14px;
     min-height: 80px;
@@ -231,13 +360,27 @@
     cursor: pointer;
   }
 
-  .youtube-result:hover:not(:disabled) {
+  .youtube-result:hover {
     border-color: rgba(29, 185, 84, 0.55);
     background: #252525;
   }
 
-  .youtube-result img,
-  .youtube-art-fallback {
+  .youtube-result-main {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .youtube-result-main img,
+  .youtube-result-main .youtube-art-fallback {
     width: 64px;
     height: 64px;
     border-radius: 9px;
@@ -279,6 +422,31 @@
     font-weight: 800;
   }
 
+  .youtube-save {
+    min-height: 42px;
+    padding: 9px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    background: transparent;
+    color: #cbd5e1;
+    font-weight: 750;
+    cursor: pointer;
+  }
+
+  .youtube-save:hover:not(:disabled) {
+    border-color: #1db954;
+    color: #1db954;
+  }
+
+  .youtube-result select {
+    max-width: 150px;
+    min-height: 38px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    background: #090909;
+    color: #cbd5e1;
+  }
+
   .youtube-error {
     color: #fca5a5;
   }
@@ -294,6 +462,20 @@
 
     .youtube-search {
       grid-template-columns: 1fr;
+    }
+
+    .youtube-library-bar {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .youtube-library-bar form {
+      width: 100%;
+    }
+
+    .youtube-library-bar input {
+      flex: 1;
+      width: auto;
     }
   }
 </style>
