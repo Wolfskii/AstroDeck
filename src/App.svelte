@@ -2279,13 +2279,13 @@
         <TeamsScene
           buttons={displayedLayout.buttons}
           showSettingsButton={isTauri}
-          onOpenSettings={() => (viewMode = "settings")}
+          onOpenSettings={() => (viewMode = "launcher")}
         />
       {:else if sceneId === "vscode" && displayedLayout}
         <VsCodeScene
           buttons={displayedLayout.buttons}
           showSettingsButton={isTauri}
-          onOpenSettings={() => (viewMode = "settings")}
+          onOpenSettings={() => (viewMode = "launcher")}
         />
       {:else if displayedLayout}
         <DeckGrid

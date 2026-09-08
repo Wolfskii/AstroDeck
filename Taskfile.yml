@@ -44,19 +44,19 @@ tasks:
   deploy:
     desc: Build and package native app for current OS
     cmds:
-      - node scripts/package-app.mjs
+      - node scripts/package-app.mjs --clean
 
   deploy:windows:
     desc: Build Windows native package artifacts
     cmds:
-      - node scripts/package-app.mjs --platform windows --target x86_64-pc-windows-msvc
+      - node scripts/package-app.mjs --clean --platform windows --target x86_64-pc-windows-msvc
 
   deploy:macos:
     desc: Build macOS native package artifacts
     cmds:
-      - node scripts/package-app.mjs --platform macos --target aarch64-apple-darwin
+      - node scripts/package-app.mjs --clean --platform macos --target aarch64-apple-darwin
 
   deploy:linux:
     desc: Build Linux native package artifacts
     cmds:
-      - node scripts/package-app.mjs --platform linux --target x86_64-unknown-linux-gnu
+      - node scripts/package-app.mjs --clean --platform linux --target x86_64-unknown-linux-gnu

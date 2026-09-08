@@ -11,13 +11,17 @@
     variant = "tile",
     icon = null,
     tone = "default",
+    active = false,
+    onAction,
   }: {
     label: string;
     action: string;
     source: string;
     variant?: "reaction" | "call" | "tile";
     icon?: SceneIconName | null;
-    tone?: "default" | "accent";
+    tone?: "default" | "accent" | "danger";
+    active?: boolean;
+    onAction?: () => void;
   } = $props();
 
   let pressed = $state(false);
@@ -28,6 +32,7 @@
   async function handleClick() {
     pressed = true;
     await runDeckAction(action, label, source);
+    onAction?.();
     setTimeout(() => (pressed = false), 180);
   }
 </script>
@@ -39,6 +44,8 @@
   class:call={variant === "call"}
   class:tile={variant === "tile"}
   class:accent={tone === "accent"}
+  class:danger={tone === "danger"}
+  class:active={active}
   class:pressed
   class:tint-run={action === "vscode.run"}
   class:tint-debug={action === "vscode.debug"}
@@ -101,22 +108,26 @@
   }
 
   .reaction {
-    min-width: 76px;
-    padding: 4px;
+    min-width: 148px;
+    padding: 12px 10px;
+    gap: 12px;
     background: transparent;
     color: #f3f2f1;
   }
 
   .reaction .glyph {
-    width: 72px;
-    height: 72px;
-    border-radius: 20px;
-    background: transparent;
+    width: 132px;
+    height: 132px;
+    border-radius: 26px;
+    background: #2d2c35;
     color: #f3f2f1;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+      0 8px 20px rgba(0, 0, 0, 0.22);
   }
 
   .reaction:hover .glyph {
-    background: rgba(255, 255, 255, 0.08);
+    background: #3a3944;
   }
 
   .emoji {
@@ -128,26 +139,31 @@
   }
 
   .call .emoji {
-    width: 48px;
-    height: 48px;
+    width: 72px;
+    height: 72px;
   }
 
   .reaction .caption {
-    font-size: 0.78rem;
+    font-size: 0.92rem;
     color: #d2d0ce;
   }
 
+  .reaction .emoji {
+    width: 102px;
+    height: 102px;
+  }
+
   .call {
-    min-width: 92px;
-    padding: 4px;
+    min-width: 128px;
+    padding: 10px;
     background: transparent;
     color: #f3f2f1;
   }
 
   .call .glyph {
-    width: 84px;
-    height: 84px;
-    border-radius: 50%;
+    width: 112px;
+    height: 112px;
+    border-radius: 24px;
     background: #2d2c35;
     color: #fff;
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
@@ -163,6 +179,18 @@
 
   .call.accent:hover .glyph {
     background: #6e74d8;
+  }
+
+  .call.danger .glyph {
+    background: #8f2e36;
+    color: #fff;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+      0 8px 18px rgba(143, 46, 54, 0.28);
+  }
+
+  .call.danger:hover .glyph {
+    background: #ad3943;
   }
 
   .call .caption {

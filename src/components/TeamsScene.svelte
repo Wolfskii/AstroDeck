@@ -20,6 +20,8 @@
   const controls = $derived(
     buttons.filter((button) => !button.action.startsWith("teams.reaction."))
   );
+  let muted = $state(false);
+  let cameraOff = $state(false);
 </script>
 
 <section class="teams" class:has-settings={showSettingsButton && onOpenSettings}>
@@ -65,11 +67,32 @@
     <div class="call-bar">
       {#each controls as button (button.action)}
         <SceneActionButton
-          label={button.label}
+          label={
+            button.action === "teams.toggleMute" && muted
+              ? "Unmute"
+              : button.action === "teams.toggleCamera" && cameraOff
+                ? "Turn camera on"
+                : button.label
+          }
           action={button.action}
           source="Teams window"
           variant="call"
-          tone={button.action === "teams.shareScreen" ? "accent" : "default"}
+          tone={
+            button.action === "teams.shareScreen"
+              ? "accent"
+              : (button.action === "teams.toggleMute" && muted) ||
+                  (button.action === "teams.toggleCamera" && cameraOff)
+                ? "danger"
+                : "default"
+          }
+          active={
+            (button.action === "teams.toggleMute" && muted) ||
+            (button.action === "teams.toggleCamera" && cameraOff)
+          }
+          onAction={() => {
+            if (button.action === "teams.toggleMute") muted = !muted;
+            if (button.action === "teams.toggleCamera") cameraOff = !cameraOff;
+          }}
         />
       {/each}
     </div>
@@ -174,7 +197,11 @@
   .reactions {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px 6px;
+    justify-content: center;
+    gap: 20px;
+    width: 100%;
+    max-width: 980px;
+    margin: 0 auto;
   }
 
   .call-bar {
