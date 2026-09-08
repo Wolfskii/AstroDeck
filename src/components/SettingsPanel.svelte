@@ -27,7 +27,12 @@
   import type { SettingsThemeId } from "../services/prefs";
   import type { PluginConfig } from "../types";
   import type { AppUpdateInfo } from "../services/updater";
-  import type { SpotifyAuthMode, SpotifyStatus } from "../services/api";
+  import type {
+    LyricsProviderId,
+    SpotifyAuthMode,
+    SpotifyStatus,
+    YouTubeMusicStatus,
+  } from "../services/api";
 
   type SettingsSection = "general" | "appearance" | "updates" | "spotify" | "scenes";
 
@@ -59,6 +64,9 @@
     onInstallUpdate,
     onShowUpdatePopupsChange,
     spotifyStatus,
+    youtubeMusicStatus = null,
+    lyricsProviderOrder = [],
+    onLyricsProviderOrderChange,
     spotifyBusy,
     spotifyAuthHint,
     spotifyClientIdDraft = $bindable(""),
@@ -107,6 +115,9 @@
     onInstallUpdate: () => void;
     onShowUpdatePopupsChange: (event: Event) => void;
     spotifyStatus: SpotifyStatus | null;
+    youtubeMusicStatus?: YouTubeMusicStatus | null;
+    lyricsProviderOrder?: LyricsProviderId[];
+    onLyricsProviderOrderChange?: (order: LyricsProviderId[]) => void;
     spotifyBusy: boolean;
     spotifyAuthHint: string | null;
     spotifyClientIdDraft: string;
@@ -141,6 +152,20 @@
   };
 
   const updateBadge = $derived(installableUpdate ? "1" : null);
+  const lyricsProviderLabels: Record<LyricsProviderId, string> = {
+    lrclib: "LRCLIB",
+    musixmatch: "Musixmatch",
+    kugou: "Kugou",
+    netease: "NetEase",
+  };
+
+  function moveLyricsProvider(index: number, direction: -1 | 1) {
+    const next = [...lyricsProviderOrder];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    onLyricsProviderOrderChange?.(next);
+  }
 
   const THEME_OPTIONS: { id: SettingsThemeId; label: string }[] = [
     { id: "system", label: "System" },
@@ -585,6 +610,57 @@
       </div>
 
       <div class="settings-card settings-card-pad">
+        <div class="settings-card-toolbar">
+          <div>
+            <p class="setting-title">YouTube Music</p>
+            <p class="setting-desc">
+              Guest search and playback through AstroDeck. Account sign-in and YouTube Music
+              library access are not enabled yet.
+            </p>
+          </div>
+          <span class="scene-tag current">guest</span>
+        </div>
+        <div class="spotify-status-line">
+          <span class="status-dot" class:on={youtubeMusicStatus?.hasActiveDevice}></span>
+          <span>
+            {youtubeMusicStatus?.hasActiveDevice
+              ? `Playing ${youtubeMusicStatus.currentTrackName ?? "YouTube Music"}`
+              : "Ready — use the YouTube button in the player to search"}
+          </span>
+        </div>
+      </div>
+
+      <div class="settings-card settings-card-pad">
+        <p class="setting-title">Lyrics providers</p>
+        <p class="setting-desc">
+          Lyrics are tried in this order for Spotify and YouTube Music. The first provider with
+          synced lyrics wins.
+        </p>
+        <div class="lyrics-provider-list">
+          {#each lyricsProviderOrder as provider, index (provider)}
+            <div class="lyrics-provider-row">
+              <span class="lyrics-provider-rank">{index + 1}</span>
+              <span class="setting-title">{lyricsProviderLabels[provider]}</span>
+              <button
+                type="button"
+                class="md-btn"
+                aria-label={`Move ${lyricsProviderLabels[provider]} up`}
+                disabled={index === 0}
+                onclick={() => moveLyricsProvider(index, -1)}
+              >Up</button>
+              <button
+                type="button"
+                class="md-btn"
+                aria-label={`Move ${lyricsProviderLabels[provider]} down`}
+                disabled={index === lyricsProviderOrder.length - 1}
+                onclick={() => moveLyricsProvider(index, 1)}
+              >Down</button>
+            </div>
+          {/each}
+        </div>
+      </div>
+
+      <div class="settings-card settings-card-pad">
         <p class="setting-title">Login method</p>
         <p class="setting-desc">
           Desktop login is the default. Playback, playlists, and likes stream in AstroDeck without
@@ -863,6 +939,35 @@
     color: var(--md-ink);
     user-select: text;
     -webkit-user-select: text;
+  }
+
+  .lyrics-provider-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .lyrics-provider-row {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 6px 8px;
+    border: 1px solid var(--md-line);
+    border-radius: 10px;
+  }
+
+  .lyrics-provider-rank {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--md-sidebar);
+    color: #fff;
+    font-weight: 800;
   }
 
   .settings-shell.theme-dark {

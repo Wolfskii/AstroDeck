@@ -178,6 +178,16 @@ export interface SpotifyTrackLyrics {
   lines: SpotifyLyricLine[];
 }
 
+export type LyricsProviderId = "lrclib" | "musixmatch" | "kugou" | "netease";
+
+export interface LyricsDocument {
+  trackId: string;
+  provider: string;
+  syncType: string;
+  available: boolean;
+  lines: SpotifyLyricLine[];
+}
+
 const DEMO_LYRICS: SpotifyTrackLyrics = {
   trackId: "demo",
   syncType: "LINE_SYNCED",
@@ -196,6 +206,79 @@ export async function getSpotifyLyrics(trackId: string): Promise<SpotifyTrackLyr
     return { ...DEMO_LYRICS, trackId };
   }
   return invoke<SpotifyTrackLyrics>("get_spotify_lyrics", { trackId });
+}
+
+export async function getLyrics(options: {
+  trackId: string;
+  title: string;
+  artist: string;
+  album?: string | null;
+  durationMs?: number | null;
+  providerOrder: LyricsProviderId[];
+}): Promise<LyricsDocument> {
+  if (!isTauri) {
+    const demo = await getSpotifyLyrics(options.trackId);
+    return { ...demo, provider: "demo" };
+  }
+  return invoke<LyricsDocument>("get_lyrics", {
+    trackId: options.trackId,
+    title: options.title,
+    artist: options.artist,
+    album: options.album ?? null,
+    durationMs: options.durationMs ?? null,
+    providerOrder: options.providerOrder,
+  });
+}
+
+export interface YouTubeSearchTrack {
+  videoId: string;
+  title: string;
+  artistName: string;
+  albumName?: string | null;
+  coverArtUrl?: string | null;
+  durationMs?: number | null;
+}
+
+export interface YouTubeMusicStatus {
+  provider: "youtubeMusic";
+  isConfigured: boolean;
+  isAuthenticated: boolean;
+  hasActiveDevice: boolean;
+  currentTrackName?: string | null;
+  currentArtistName?: string | null;
+  currentAlbumName?: string | null;
+  currentCoverArtUrl?: string | null;
+  currentItemId?: string | null;
+  progressMs?: number | null;
+  durationMs?: number | null;
+  playbackState: string;
+  isPlaying: boolean;
+  currentVolumePercent: number;
+  message: string;
+}
+
+export async function searchYouTubeMusic(query: string): Promise<YouTubeSearchTrack[]> {
+  return invoke<YouTubeSearchTrack[]>("search_youtube_music", { query });
+}
+
+export async function getYouTubeMusicStatus(): Promise<YouTubeMusicStatus> {
+  return invoke<YouTubeMusicStatus>("get_youtube_music_status");
+}
+
+export async function playYouTubeMusic(track: YouTubeSearchTrack): Promise<void> {
+  return invoke("play_youtube_music", { track });
+}
+
+export async function toggleYouTubeMusicPlay(): Promise<void> {
+  return invoke("toggle_youtube_music_play");
+}
+
+export async function setYouTubeMusicVolume(volumePercent: number): Promise<number> {
+  return invoke<number>("set_youtube_music_volume", { volumePercent });
+}
+
+export async function seekYouTubeMusic(positionMs: number): Promise<void> {
+  return invoke("seek_youtube_music", { positionMs });
 }
 
 export async function setSpotifyVolume(volumePercent: number): Promise<number> {

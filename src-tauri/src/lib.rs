@@ -2,6 +2,7 @@ mod actions;
 mod audio_viz;
 mod detectors;
 mod layout_engine;
+mod lyrics;
 mod mode_engine;
 mod os_media;
 mod plugin_engine;
@@ -11,6 +12,7 @@ mod spotify_desktop;
 mod updater;
 mod websocket;
 mod window_prefs;
+mod youtube_music;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -29,6 +31,7 @@ pub struct AppState {
     pub last_matched_ids: Mutex<Vec<String>>,
     pub os_local_media: Mutex<Option<os_media::OsNowPlaying>>,
     pub spotify: spotify::SpotifyState,
+    pub youtube_music: youtube_music::YouTubeMusicState,
     pub log_bus: broadcast::Sender<String>,
 }
 
@@ -43,6 +46,7 @@ impl AppState {
             last_matched_ids: Mutex::new(Vec::new()),
             os_local_media: Mutex::new(None),
             spotify: spotify::SpotifyState::default(),
+            youtube_music: youtube_music::YouTubeMusicState::default(),
             log_bus: log_tx,
         }
     }
@@ -215,6 +219,71 @@ fn get_spotify_status(
 }
 
 #[tauri::command]
+fn get_lyrics(
+    track_id: String,
+    title: String,
+    artist: String,
+    album: Option<String>,
+    duration_ms: Option<u64>,
+    provider_order: Vec<String>,
+) -> Result<lyrics::LyricsDocument, String> {
+    lyrics::fetch(
+        &provider_order,
+        &track_id,
+        &title,
+        &artist,
+        album.as_deref(),
+        duration_ms,
+    )
+}
+
+#[tauri::command]
+fn search_youtube_music(
+    query: String,
+    state: tauri::State<AppState>,
+) -> Result<Vec<youtube_music::YouTubeSearchTrack>, String> {
+    youtube_music::search(&state.youtube_music, &query)
+}
+
+#[tauri::command]
+fn get_youtube_music_status(
+    state: tauri::State<AppState>,
+) -> youtube_music::YouTubeStatus {
+    youtube_music::status(&state.youtube_music)
+}
+
+#[tauri::command]
+fn play_youtube_music(
+    track: youtube_music::YouTubeSearchTrack,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    youtube_music::play(&state.youtube_music, track)
+}
+
+#[tauri::command]
+fn toggle_youtube_music_play(
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    youtube_music::toggle_play(&state.youtube_music)
+}
+
+#[tauri::command]
+fn set_youtube_music_volume(
+    volume_percent: u8,
+    state: tauri::State<AppState>,
+) -> Result<u8, String> {
+    youtube_music::set_volume(&state.youtube_music, volume_percent)
+}
+
+#[tauri::command]
+fn seek_youtube_music(
+    position_ms: u64,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    youtube_music::seek(&state.youtube_music, position_ms)
+}
+
+#[tauri::command]
 fn peek_spotify_skip_track(
     direction: String,
     state: tauri::State<AppState>,
@@ -282,6 +351,7 @@ fn play_spotify_playlist(
     playlist: String,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
+    youtube_music::stop(&state.youtube_music);
     spotify::play_playlist(&state.spotify, &playlist)?;
     if let Ok(status) = spotify::get_status_fresh(&state.spotify) {
         let payload = serde_json::json!({
@@ -402,6 +472,13 @@ pub fn run() {
             get_os_now_playing,
             get_output_volume,
             get_spotify_status,
+            get_lyrics,
+            search_youtube_music,
+            get_youtube_music_status,
+            play_youtube_music,
+            toggle_youtube_music_play,
+            set_youtube_music_volume,
+            seek_youtube_music,
             peek_spotify_skip_track,
             set_spotify_volume,
             start_spotify_auth,
@@ -470,6 +547,7 @@ pub fn run() {
             os_media::start(app_handle.clone());
             crate::audio_viz::sync(&app_handle, prefs::audio_visualizer_enabled(&app_handle));
             spotify::init(&app_handle, &app.state::<AppState>().spotify)?;
+            youtube_music::init(&app_handle, &app.state::<AppState>().youtube_music);
 
             // Start WebSocket log bus so browser clients see live logs
             let log_tx = app.state::<AppState>().log_bus.clone();
