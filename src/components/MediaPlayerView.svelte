@@ -1407,7 +1407,7 @@
   }
 
   .car-controls {
-    grid-column: 1;
+    grid-column: 1 / -1;
     grid-row: 3;
     flex-shrink: 0;
     padding: 12px 24px max(20px, env(safe-area-inset-bottom, 0px));
