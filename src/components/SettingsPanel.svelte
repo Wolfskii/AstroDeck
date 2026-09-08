@@ -268,20 +268,6 @@
         </svg>
         YouTube Music
       </button>
-      <button
-        type="button"
-        class="settings-nav-item"
-        class:active={activeSection === "scenes"}
-        onclick={() => (section = "scenes")}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M4 5a2 2 0 0 1 2-2h4v18H6a2 2 0 0 1-2-2zm8-2h6a2 2 0 0 1 2 2v4h-8zm0 8h8v6a2 2 0 0 1-2 2h-6z"
-          />
-        </svg>
-        Scenes
-      </button>
     </nav>
 
     {#if isTauri && onBackToDeck}

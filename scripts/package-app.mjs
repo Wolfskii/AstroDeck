@@ -26,6 +26,7 @@ function parseArgs(argv) {
   const parsed = {
     platform: hostPlatformMap[process.platform] ?? "windows",
     target: "",
+    clean: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -36,6 +37,8 @@ function parseArgs(argv) {
     } else if (arg === "--target" && argv[i + 1]) {
       parsed.target = argv[i + 1];
       i += 1;
+    } else if (arg === "--clean") {
+      parsed.clean = true;
     }
   }
 
@@ -241,7 +244,7 @@ function requireDockerReady(targetPlatform) {
   console.log("[package] Docker is available and running");
 }
 
-function buildLinuxViaDocker(platform, target) {
+function buildLinuxViaDocker(platform, target, clean) {
   requireDockerReady(platform);
 
   console.log("[package] Building Linux artifacts inside Docker");
@@ -272,13 +275,14 @@ function buildLinuxViaDocker(platform, target) {
     "--platform",
     platform,
     ...(target ? ["--target", target] : []),
+    ...(clean ? ["--clean"] : []),
   ]);
 
   printArtifactLinks(path.join(artifactsRoot, platform));
 }
 
 function main() {
-  const { platform, target } = parseArgs(process.argv.slice(2));
+  const { platform, target, clean } = parseArgs(process.argv.slice(2));
   const resolvedTarget = resolveBuildTarget(platform, target);
   const hostPlatform = hostPlatformMap[process.platform];
 
@@ -304,11 +308,18 @@ function main() {
     hostPlatform !== "linux" &&
     process.env.ASTRODECK_IN_DOCKER !== "1"
   ) {
-    buildLinuxViaDocker(platform, resolvedTarget);
+    buildLinuxViaDocker(platform, resolvedTarget, clean);
     return;
   }
 
   ensureDependenciesInstalled();
+
+  if (clean) {
+    const cleanArgs = ["clean"];
+    if (resolvedTarget) cleanArgs.push("--target", resolvedTarget);
+    run("cargo", cleanArgs, { cwd: tauriDir });
+    console.log("[package] Cleared Cargo target outputs before deployment");
+  }
 
   if (process.env.GITHUB_ACTIONS !== "true" && process.env.ASTRODECK_IN_DOCKER !== "1") {
     run("node", ["scripts/sync-version.mjs", "--bump-dev"]);

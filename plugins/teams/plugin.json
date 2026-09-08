@@ -18,7 +18,11 @@
       { "label": "Raise Hand", "emoji": "✋", "action": "teams.raiseHand" },
       { "label": "Mute", "emoji": "🎤", "action": "teams.toggleMute" },
       { "label": "Camera", "emoji": "📷", "action": "teams.toggleCamera" },
-      { "label": "Share", "emoji": "🖥️", "action": "teams.shareScreen" }
+      { "label": "Share", "emoji": "🖥️", "action": "teams.shareScreen" },
+      { "label": "Chat Window", "emoji": "💬", "action": "teams.chat" },
+      { "label": "Leave Meeting", "emoji": "🚪", "action": "teams.leaveMeeting" },
+      { "label": "Calendar", "emoji": "📅", "action": "teams.goCalendar" },
+      { "label": "Activity", "emoji": "🔔", "action": "teams.goActivity" }
     ]
   }
 }
