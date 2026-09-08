@@ -7,11 +7,13 @@
     executeAction,
     executeActionValue,
     getLyrics,
+    getSpotifyLyrics,
     type LyricsDocument,
     type LyricsProviderId,
   } from "../services/api";
   import PlaylistBrowser from "./PlaylistBrowser.svelte";
   import YouTubeMusicSearch from "./YouTubeMusicSearch.svelte";
+  import YouTubeMusicLibrary from "./YouTubeMusicLibrary.svelte";
   import { logError } from "../services/logger";
   import SceneBackground from "./SceneBackground.svelte";
   import { sceneBackgroundId, controlsBackdropEnabled, controlsTransparency, controlsOverlayColor, controlsOverlayCustom } from "../stores/appearance";
@@ -44,6 +46,7 @@
     volumePercent?: number;
     volumeBusy?: boolean;
     volumeEnabled?: boolean;
+    volumeLiveEnabled?: boolean;
     seekEnabled?: boolean;
     shuffleActive?: boolean;
     trackSaved?: boolean | null;
@@ -56,7 +59,9 @@
     onOpenSettings?: () => void;
     playlistsEnabled?: boolean;
     youtubeMusicEnabled?: boolean;
+    youtubeMusicLibraryEnabled?: boolean;
     lyricsProviderOrder?: LyricsProviderId[];
+    useLyricsFallback?: boolean;
   }
 
   let {
@@ -77,6 +82,7 @@
     volumePercent = 80,
     volumeBusy = false,
     volumeEnabled = true,
+    volumeLiveEnabled = true,
     seekEnabled = true,
     shuffleActive = false,
     trackSaved = null,
@@ -89,7 +95,9 @@
     onOpenSettings,
     playlistsEnabled = false,
     youtubeMusicEnabled = false,
+    youtubeMusicLibraryEnabled = false,
     lyricsProviderOrder = ["lrclib", "musixmatch", "kugou", "netease"],
+    useLyricsFallback = false,
   }: Props = $props();
 
   let localVolume = $state(80);
@@ -101,6 +109,8 @@
   let faderTrackEl = $state<HTMLElement | null>(null);
   let faderSlotEl = $state<HTMLElement | null>(null);
   let faderDragging = $state(false);
+  let liveVolumeQueued = $state<number | null>(null);
+  let liveVolumeInFlight = false;
   const FADER_THUMB_HEIGHT_PX = 78;
   const FADER_THUMB_HALF_PX = FADER_THUMB_HEIGHT_PX / 2;
   let seekHoldMs = $state<number | null>(null);
@@ -280,19 +290,42 @@
     faderDragging = true;
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     localVolume = volumeFromClientY(event.clientY);
+    if (volumeLiveEnabled) queueLiveVolume(localVolume);
   }
 
   function handleFaderPointerMove(event: PointerEvent) {
     if (!faderDragging) return;
     localVolume = volumeFromClientY(event.clientY);
+    if (volumeLiveEnabled) queueLiveVolume(localVolume);
   }
 
   function handleFaderPointerUp(event: PointerEvent) {
     if (!faderDragging) return;
     faderDragging = false;
     (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
-    if (!volumeAction || !onVolumeCommit) return;
+    if (!volumeAction || !onVolumeCommit || volumeLiveEnabled) return;
     void onVolumeCommit(localVolume);
+  }
+
+  function queueLiveVolume(value: number) {
+    if (!volumeAction || !onVolumeCommit || !volumeLiveEnabled) return;
+    liveVolumeQueued = value;
+    void flushLiveVolume();
+  }
+
+  async function flushLiveVolume() {
+    if (liveVolumeInFlight || !onVolumeCommit || !volumeLiveEnabled) return;
+    liveVolumeInFlight = true;
+    try {
+      while (liveVolumeQueued != null) {
+        const next = liveVolumeQueued;
+        liveVolumeQueued = null;
+        await onVolumeCommit(next);
+      }
+    } finally {
+      liveVolumeInFlight = false;
+      if (liveVolumeQueued != null) void flushLiveVolume();
+    }
   }
 
   $effect(() => {
@@ -426,6 +459,7 @@
 
   let playlistsOpen = $state(false);
   let youtubeMusicOpen = $state(false);
+  let youtubeMusicLibraryOpen = $state(false);
   let lyricsOpen = $state(false);
   let lyricsBusy = $state(false);
   let lyricsError = $state<string | null>(null);
@@ -498,14 +532,19 @@
     lyricsBusy = true;
     lyricsError = null;
     try {
-      const next = await getLyrics({
-        trackId: id,
-        title: title ?? "",
-        artist: subtitle ?? "",
-        album: albumName,
-        durationMs,
-        providerOrder: lyricsProviderOrder,
-      });
+      const next = useLyricsFallback
+        ? await getLyrics({
+            trackId: id,
+            title: title ?? "",
+            artist: subtitle ?? "",
+            album: albumName,
+            durationMs,
+            providerOrder: lyricsProviderOrder,
+          })
+        : {
+            ...(await getSpotifyLyrics(id)),
+            provider: "spotify",
+          };
       lyricsDoc = next;
       lyricsTrackId = id;
       lyricsError = next.available ? null : "Lyrics aren't available for this track";
@@ -560,8 +599,8 @@
       <button
         type="button"
         class="car-settings-btn"
-        title="Settings"
-        aria-label="Open settings"
+        title="Choose view"
+        aria-label="Choose view"
         onclick={() => onOpenSettings()}
       >
         <img class="car-app-icon" src={appIconUrl} alt="" aria-hidden="true" />
@@ -593,7 +632,19 @@
         onclick={() => (youtubeMusicOpen = true)}
       >
         <span aria-hidden="true">YT</span>
-        <span>YouTube</span>
+        <span>Explore</span>
+      </button>
+    {/if}
+    {#if youtubeMusicLibraryEnabled}
+      <button
+        class="car-youtube-library-btn"
+        type="button"
+        title="Saved YouTube Music"
+        aria-label="Saved YouTube Music"
+        onclick={() => (youtubeMusicLibraryOpen = true)}
+      >
+        <span aria-hidden="true">▦</span>
+        <span>Library</span>
       </button>
     {/if}
 
@@ -854,6 +905,10 @@
 
   <PlaylistBrowser open={playlistsOpen} onClose={() => (playlistsOpen = false)} />
   <YouTubeMusicSearch open={youtubeMusicOpen} onClose={() => (youtubeMusicOpen = false)} />
+  <YouTubeMusicLibrary
+    open={youtubeMusicLibraryOpen}
+    onClose={() => (youtubeMusicLibraryOpen = false)}
+  />
 
   {#if volumeAction}
     <aside class="car-fader" aria-label="Volume">
@@ -1052,6 +1107,35 @@
   }
 
   .car-youtube-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .car-youtube-library-btn {
+    position: absolute;
+    top: 18px;
+    right: 20px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 56px;
+    padding: 10px 15px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 999px;
+    background: rgba(12, 12, 12, 0.55);
+    color: #fff;
+    font-size: 0.95rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .car-youtube-library-btn span:first-child {
+    color: #1db954;
+    font-size: 1.25rem;
+    font-weight: 900;
+  }
+
+  .car-youtube-library-btn:hover {
     background: rgba(255, 255, 255, 0.12);
   }
 

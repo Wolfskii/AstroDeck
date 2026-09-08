@@ -1,4 +1,5 @@
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -60,6 +61,8 @@ pub struct YouTubeStatus {
     pub playback_state: String,
     pub is_playing: bool,
     pub current_volume_percent: u8,
+    pub is_current_track_saved: bool,
+    pub is_shuffle: bool,
     pub message: String,
 }
 
@@ -70,6 +73,7 @@ struct YouTubePlayback {
     progress_at: Option<Instant>,
     is_playing: bool,
     volume_percent: u8,
+    shuffle: bool,
 }
 
 impl Default for YouTubePlayback {
@@ -80,6 +84,7 @@ impl Default for YouTubePlayback {
             progress_at: None,
             is_playing: false,
             volume_percent: 80,
+            shuffle: false,
         }
     }
 }
@@ -160,6 +165,27 @@ pub fn save_track(
     let mut library = get_library(state)?;
     library.saved_tracks.retain(|saved| saved.video_id != track.video_id);
     library.saved_tracks.insert(0, track);
+    let saved_track_id = library.saved_tracks.first().map(|track| track.video_id.clone());
+    if let Some(liked) = library.playlists.iter_mut().find(|playlist| playlist.id == "liked") {
+        if let Some(track_id) = saved_track_id {
+            if !liked.track_ids.iter().any(|id| id == &track_id) {
+                liked.track_ids.insert(0, track_id);
+            }
+        }
+    } else {
+        library.playlists.insert(
+            0,
+            YouTubeLocalPlaylist {
+                id: "liked".to_string(),
+                name: "Liked songs".to_string(),
+                track_ids: library
+                    .saved_tracks
+                    .iter()
+                    .map(|track| track.video_id.clone())
+                    .collect(),
+            },
+        );
+    }
     save_library(state, &library)?;
     Ok(library)
 }
@@ -217,6 +243,7 @@ pub fn search(state: &YouTubeMusicState, query: &str) -> Result<Vec<YouTubeSearc
         .map_err(|error| format!("YouTube Music search failed: {error}"))?;
     Ok(tracks
         .into_iter()
+        .filter(|track| track.available && !track.is_video())
         .filter_map(|track| {
             let video_id = track.video_id?;
             let artist_name = track
@@ -242,6 +269,19 @@ pub fn search(state: &YouTubeMusicState, query: &str) -> Result<Vec<YouTubeSearc
         .collect())
 }
 
+pub fn discover(
+    state: &YouTubeMusicState,
+    category: &str,
+) -> Result<Vec<YouTubeSearchTrack>, String> {
+    let query = match category {
+        "popular" => "popular music hits",
+        "playlists" => "popular music playlist",
+        "chill" => "chill music playlist",
+        _ => "trending music",
+    };
+    search(state, query)
+}
+
 pub fn status(state: &YouTubeMusicState) -> YouTubeStatus {
     let playback = state
         .playback
@@ -260,6 +300,11 @@ pub fn status(state: &YouTubeMusicState) -> YouTubeStatus {
         Some(playback.progress_ms)
     };
     let track = playback.track;
+    let is_current_track_saved = track.as_ref().and_then(|track| {
+        get_library(state).ok().map(|library| {
+            library.saved_tracks.iter().any(|saved| saved.video_id == track.video_id)
+        })
+    }).unwrap_or(false);
     YouTubeStatus {
         provider: "youtubeMusic",
         is_configured: true,
@@ -281,6 +326,8 @@ pub fn status(state: &YouTubeMusicState) -> YouTubeStatus {
         },
         is_playing: playback.is_playing,
         current_volume_percent: playback.volume_percent,
+        is_current_track_saved,
+        is_shuffle: playback.shuffle,
         message: "YouTube Music guest playback is ready. Sign-in and account libraries are not enabled."
             .to_string(),
     }
@@ -306,6 +353,15 @@ pub fn play(
     state: &YouTubeMusicState,
     track: YouTubeSearchTrack,
 ) -> Result<(), String> {
+    if let Some(app) = state
+        .app_handle
+        .lock()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+    {
+        let app_state = app.state::<crate::AppState>();
+        crate::spotify_desktop::stop(&app_state.spotify);
+    }
     let (_format, bytes) = runtime()
         .block_on(state.api.load_audio(&track.video_id))
         .map_err(|error| format!("YouTube Music could not play this track: {error}"))?;
@@ -366,6 +422,28 @@ pub fn toggle_play(state: &YouTubeMusicState) -> Result<(), String> {
     Ok(())
 }
 
+pub fn pause(state: &YouTubeMusicState) {
+    let sink = state
+        .sink
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().cloned());
+    if let Some(sink) = sink {
+        sink.pause();
+    }
+    if let Ok(mut playback) = state.playback.lock() {
+        if playback.is_playing {
+            playback.progress_ms += playback
+                .progress_at
+                .map(|started| started.elapsed().as_millis() as u64)
+                .unwrap_or(0);
+            playback.progress_at = None;
+            playback.is_playing = false;
+        }
+    }
+    publish_status(state);
+}
+
 pub fn set_volume(state: &YouTubeMusicState, volume_percent: u8) -> Result<u8, String> {
     let volume_percent = volume_percent.min(100);
     if let Some(sink) = state
@@ -383,20 +461,74 @@ pub fn set_volume(state: &YouTubeMusicState, volume_percent: u8) -> Result<u8, S
     Ok(volume_percent)
 }
 
-pub fn stop(state: &YouTubeMusicState) {
-    if let Ok(mut sink) = state.sink.lock() {
-        sink.take();
+pub fn set_saved(state: &YouTubeMusicState, saved: bool) -> Result<bool, String> {
+    let track = state
+        .playback
+        .lock()
+        .map_err(|error| error.to_string())?
+        .track
+        .clone()
+        .ok_or_else(|| "YouTube Music has no selected track.".to_string())?;
+    if saved {
+        save_track(state, track)?;
+        return Ok(true);
     }
-    if let Ok(mut stream) = state.output_stream.lock() {
-        stream.take();
+    let mut library = get_library(state)?;
+    library.saved_tracks.retain(|item| item.video_id != track.video_id);
+    if let Some(liked) = library.playlists.iter_mut().find(|playlist| playlist.id == "liked") {
+        liked.track_ids.retain(|id| id != &track.video_id);
     }
-    if let Ok(mut playback) = state.playback.lock() {
-        playback.track = None;
-        playback.progress_ms = 0;
-        playback.progress_at = None;
-        playback.is_playing = false;
-    }
+    save_library(state, &library)?;
+    Ok(false)
+}
+
+pub fn toggle_shuffle(state: &YouTubeMusicState) -> Result<bool, String> {
+    let mut playback = state.playback.lock().map_err(|error| error.to_string())?;
+    playback.shuffle = !playback.shuffle;
+    let value = playback.shuffle;
+    drop(playback);
     publish_status(state);
+    Ok(value)
+}
+
+pub fn navigate(state: &YouTubeMusicState, direction: i32) -> Result<(), String> {
+    let current_id = state
+        .playback
+        .lock()
+        .map_err(|error| error.to_string())?
+        .track
+        .as_ref()
+        .map(|track| track.video_id.clone())
+        .ok_or_else(|| "YouTube Music has no selected track.".to_string())?;
+    let library = get_library(state)?;
+    let index = library
+        .saved_tracks
+        .iter()
+        .position(|track| track.video_id == current_id)
+        .ok_or_else(|| "Save more songs to use previous and next.".to_string())?;
+    if library.saved_tracks.is_empty() {
+        return Err("Save more songs to use previous and next.".to_string());
+    }
+    let shuffle = state
+        .playback
+        .lock()
+        .map(|playback| playback.shuffle)
+        .unwrap_or(false);
+    let next = if shuffle && library.saved_tracks.len() > 1 {
+        let mut rng = rand::thread_rng();
+        let mut selected = rng.gen_range(0..library.saved_tracks.len());
+        while selected == index {
+            selected = rng.gen_range(0..library.saved_tracks.len());
+        }
+        selected
+    } else if direction > 0 {
+        (index + 1) % library.saved_tracks.len()
+    } else if index == 0 {
+        library.saved_tracks.len() - 1
+    } else {
+        index - 1
+    };
+    play(state, library.saved_tracks[next].clone())
 }
 
 pub fn seek(state: &YouTubeMusicState, position_ms: u64) -> Result<(), String> {

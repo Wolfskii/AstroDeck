@@ -2,6 +2,7 @@
   import {
     addYouTubeMusicTrackToPlaylist,
     createYouTubeMusicPlaylist,
+    discoverYouTubeMusic,
     getYouTubeMusicLibrary,
     playYouTubeMusic,
     saveYouTubeMusicTrack,
@@ -27,6 +28,8 @@
   let library = $state<YouTubeLocalLibrary | null>(null);
   let newPlaylistName = $state("");
   let selectedPlaylistByTrack = $state<Record<string, string>>({});
+  let discoveryFilter = $state<"trending" | "popular" | "playlists" | "chill">("trending");
+  let discoveryMenuOpen = $state(false);
   let error = $state<string | null>(null);
   let sawOpen = false;
 
@@ -35,7 +38,12 @@
       query = "";
       results = [];
       error = null;
-      void getYouTubeMusicLibrary().then((next) => (library = next)).catch(() => {});
+      void getYouTubeMusicLibrary().then((next) => {
+        library = next;
+        if (next.savedTracks.length === 0 && next.playlists.length === 0) {
+          void loadDiscovery();
+        }
+      }).catch(() => {});
     }
     sawOpen = open;
   });
@@ -53,6 +61,33 @@
     } finally {
       loading = false;
     }
+  }
+
+  async function loadDiscovery() {
+    loading = true;
+    error = null;
+    try {
+      results = await discoverYouTubeMusic(discoveryFilter);
+    } catch (e) {
+      error = String(e).replace(/^Error:\s*/i, "");
+    } finally {
+      loading = false;
+    }
+  }
+
+  const discoveryLabels = {
+    trending: "Trending now",
+    popular: "Most popular",
+    playlists: "Popular playlists",
+    chill: "Chill playlists",
+  } as const;
+
+  function chooseDiscoveryFilter(
+    filter: "trending" | "popular" | "playlists" | "chill"
+  ) {
+    discoveryFilter = filter;
+    discoveryMenuOpen = false;
+    void loadDiscovery();
   }
 
   async function play(track: YouTubeSearchTrack) {
@@ -136,6 +171,41 @@
           {loading ? "Searching…" : "Search"}
         </button>
       </form>
+      <div class="youtube-discovery-filter">
+        <span>Discover</span>
+        <div class="youtube-discovery-select">
+          <button
+            type="button"
+            class="youtube-discovery-trigger"
+            aria-haspopup="listbox"
+            aria-expanded={discoveryMenuOpen}
+            onclick={() => (discoveryMenuOpen = !discoveryMenuOpen)}
+          >
+            <span>{discoveryLabels[discoveryFilter]}</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 9 6 6 6-6" />
+            </svg>
+          </button>
+          {#if discoveryMenuOpen}
+            <div class="youtube-discovery-menu" role="listbox" aria-label="Discovery filter">
+              {#each Object.entries(discoveryLabels) as [value, label]}
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={discoveryFilter === value}
+                  class:active={discoveryFilter === value}
+                  onclick={() =>
+                    chooseDiscoveryFilter(
+                      value as "trending" | "popular" | "playlists" | "chill"
+                    )}
+                >
+                  {label}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
       <div class="youtube-library-bar">
         <span>
           Local guest library:
@@ -299,6 +369,88 @@
   .youtube-search button:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+
+  .youtube-discovery-filter {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #cbd5e1;
+    font-size: 1rem;
+    font-weight: 750;
+  }
+
+  .youtube-discovery-select {
+    flex: 1;
+    position: relative;
+  }
+
+  .youtube-discovery-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    min-height: 54px;
+    padding: 10px 16px 10px 15px;
+    border: 1px solid rgba(29, 185, 84, 0.5);
+    border-radius: 14px;
+    outline: none;
+    background: #0c0c0c;
+    color: #fff;
+    font-size: 1.05rem;
+    font-weight: 750;
+    cursor: pointer;
+  }
+
+  .youtube-discovery-trigger svg {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    margin-left: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 2.4;
+  }
+
+  .youtube-discovery-trigger:focus-visible {
+    box-shadow: 0 0 0 3px rgba(29, 185, 84, 0.2);
+  }
+
+  .youtube-discovery-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    left: 0;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 7px;
+    border: 1px solid rgba(29, 185, 84, 0.55);
+    border-radius: 14px;
+    background: #151515;
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.55);
+  }
+
+  .youtube-discovery-menu button {
+    min-height: 48px;
+    padding: 9px 12px;
+    border: none;
+    border-radius: 9px;
+    background: transparent;
+    color: #e8edf2;
+    font-size: 1rem;
+    font-weight: 700;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .youtube-discovery-menu button:hover,
+  .youtube-discovery-menu button.active {
+    background: rgba(29, 185, 84, 0.18);
+    color: #1db954;
   }
 
   .youtube-library-bar {

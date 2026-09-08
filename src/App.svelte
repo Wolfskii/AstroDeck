@@ -9,6 +9,7 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import DeckGrid from "./components/DeckGrid.svelte";
   import MediaPlayerView from "./components/MediaPlayerView.svelte";
+  import SceneLauncher from "./components/SceneLauncher.svelte";
   import ReleaseNotes from "./components/ReleaseNotes.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
   import TeamsScene from "./components/TeamsScene.svelte";
@@ -87,12 +88,13 @@
   let windowLabel = $state("");
   let seenScenes = $state<string[]>([]);
   // Tauri: main window can show deck or settings (viewMode). Browser: always settings/debug.
-  let viewMode = $state<"deck" | "settings">("deck");
+  let viewMode = $state<"deck" | "launcher" | "settings">("deck");
   let showSettingsTerminal = $state(!isTauri);
   let showSettingsTerminalBusy = $state(false);
   let autoSwitchScenes = $state<Record<string, boolean>>({});
   let autoSwitchBusyId = $state<string | null>(null);
   const isSettingsWindow = $derived(!isTauri || viewMode === "settings");
+  const isLauncherView = $derived(isTauri && viewMode === "launcher");
   const showLogsPanel = $derived(isSettingsWindow && showSettingsTerminal);
   let logStatus = $state<"connecting" | "connected" | "disconnected">("connecting");
   let autoScroll = $state(true);
@@ -241,6 +243,7 @@
     () =>
       isTauri &&
       !isSettingsWindow &&
+      !isLauncherView &&
       (currentMediaView !== null || sceneId === "teams" || sceneId === "vscode")
   );
   const displayedLayout = $derived.by(() => {
@@ -1404,7 +1407,7 @@
   }
 
   async function showAstroDeckFromTray() {
-    viewMode = isIdleScene(sceneId) ? "settings" : "deck";
+    viewMode = isIdleScene(sceneId) ? "launcher" : "deck";
     await revealMainWindow();
     await setTrayToggleVisible(true);
     logInfo(
@@ -1512,6 +1515,7 @@
     if (!id) return;
     markSceneSeen(id);
     if (isTauri) {
+      viewMode = "deck";
       setActiveScene(id).catch((e) => {
         logError(`Failed to set active scene to ${id}: ${String(e)}`, "Settings window");
       });
@@ -2033,7 +2037,7 @@
 </script>
 
 <div class="app" class:app-settings={isSettingsWindow}>
-  {#if !isImmersiveDeckView && !isSettingsWindow}
+  {#if !isImmersiveDeckView && !isSettingsWindow && !isLauncherView}
     <header class="app-header">
       <div class="app-header-left">
         <h1 class="app-title">AstroDeck</h1>
@@ -2070,9 +2074,9 @@
           <button
             type="button"
             class="header-settings-btn"
-            title="Settings"
-            aria-label="Open settings"
-            onclick={() => (viewMode = "settings")}
+            title="Choose view"
+            aria-label="Choose view"
+            onclick={() => (viewMode = "launcher")}
           >
             <img class="header-app-icon" src={appIconUrl} alt="" aria-hidden="true" />
           </button>
@@ -2103,10 +2107,21 @@
   {/if}
 
   <main class="app-main">
-    {#if isSettingsWindow}
+    {#if isLauncherView}
+      <SceneLauncher
+        sceneIds={settingsSceneIds}
+        pluginsById={pluginsById}
+        sceneId={sceneId}
+        seenScenes={seenScenes}
+        onSelectScene={selectScene}
+        onOpenSettings={() => (viewMode = "settings")}
+      />
+    {:else if isSettingsWindow}
       <SettingsPanel
         isTauri={isTauri}
-        onBackToDeck={isTauri ? () => (viewMode = "deck") : undefined}
+        onBackToDeck={isTauri
+          ? () => (viewMode = isIdleScene(sceneId) ? "launcher" : "deck")
+          : undefined}
         startOnBoot={startOnBoot}
         startOnBootBusy={startOnBootBusy}
         startMinimized={startMinimized}
@@ -2173,11 +2188,15 @@
                 action: "youtubeMusic.togglePlay",
               }
             : currentMediaView.playPause}
-          next={isYouTubeMusicActive ? null : currentMediaView.next}
-          like={isOsMediaScene || isYouTubeMusicActive ? null : currentMediaView.like}
-          shuffle={isOsMediaScene || isYouTubeMusicActive ? null : currentMediaView.shuffle}
-          shuffleActive={isSpotifyScene ? effectiveSpotifyShuffle : false}
-          trackSaved={isSpotifyScene ? effectiveSpotifySaved : null}
+          next={currentMediaView.next}
+          like={isOsMediaScene ? null : currentMediaView.like}
+          shuffle={isOsMediaScene ? null : currentMediaView.shuffle}
+          shuffleActive={isYouTubeMusicActive
+            ? youtubeMusicStatus?.isShuffle ?? false
+            : isSpotifyScene ? effectiveSpotifyShuffle : false}
+          trackSaved={isYouTubeMusicActive
+            ? youtubeMusicStatus?.isCurrentTrackSaved ?? false
+            : isSpotifyScene ? effectiveSpotifySaved : null}
           lyricsEnabled={
             (isSpotifyScene || isYouTubeMusicScene) &&
             !!(spotifyStatus?.currentItemId || youtubeMusicStatus?.currentItemId)
@@ -2230,6 +2249,7 @@
             ? youtubeMusicStatus?.currentVolumePercent ?? 80
             : isOsMediaScene ? osVolumePercent : spotifyVolumePercent}
           volumeBusy={isYouTubeMusicActive ? false : isOsMediaScene ? osVolumeBusy : spotifyVolumeBusy}
+          volumeLiveEnabled={!(isSpotifyScene && spotifyAuthMode === "custom")}
           volumeEnabled={isYouTubeMusicActive || isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
           seekEnabled={isYouTubeMusicActive || isOsMediaScene || !isSpotifyScene || !!spotifyStatus?.hasActiveDevice}
           source={`${sceneId} window`}
@@ -2248,10 +2268,12 @@
                 )
               : Promise.resolve()}
           showSettingsButton={isTauri}
-          onOpenSettings={() => (viewMode = "settings")}
+          onOpenSettings={() => (viewMode = "launcher")}
           playlistsEnabled={isSpotifyScene}
           youtubeMusicEnabled={isYouTubeMusicScene}
+          youtubeMusicLibraryEnabled={isYouTubeMusicScene}
           lyricsProviderOrder={lyricsProviderOrder}
+          useLyricsFallback={isYouTubeMusicScene}
         />
       {:else if sceneId === "teams" && displayedLayout}
         <TeamsScene

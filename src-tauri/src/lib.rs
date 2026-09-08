@@ -68,6 +68,19 @@ pub fn apply_scene_change(
         "idle".to_string()
     };
 
+    let previous_scene = state
+        .active_scene_id
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    if previous_scene != target_id {
+        match previous_scene.as_str() {
+            "youtubeMusic" => youtube_music::pause(&state.youtube_music),
+            "spotify" => spotify_desktop::stop(&state.spotify),
+            _ => {}
+        }
+    }
+
     {
         let mut override_state = state
             .manual_scene_override
@@ -246,6 +259,14 @@ fn search_youtube_music(
 }
 
 #[tauri::command]
+fn discover_youtube_music(
+    category: String,
+    state: tauri::State<AppState>,
+) -> Result<Vec<youtube_music::YouTubeSearchTrack>, String> {
+    youtube_music::discover(&state.youtube_music, &category)
+}
+
+#[tauri::command]
 fn get_youtube_music_status(
     state: tauri::State<AppState>,
 ) -> youtube_music::YouTubeStatus {
@@ -383,7 +404,7 @@ fn play_spotify_playlist(
     playlist: String,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
-    youtube_music::stop(&state.youtube_music);
+    youtube_music::pause(&state.youtube_music);
     spotify::play_playlist(&state.spotify, &playlist)?;
     if let Ok(status) = spotify::get_status_fresh(&state.spotify) {
         let payload = serde_json::json!({
@@ -506,6 +527,7 @@ pub fn run() {
             get_spotify_status,
             get_lyrics,
             search_youtube_music,
+            discover_youtube_music,
             get_youtube_music_status,
             get_youtube_music_library,
             save_youtube_music_track,

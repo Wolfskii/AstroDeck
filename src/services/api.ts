@@ -254,6 +254,8 @@ export interface YouTubeMusicStatus {
   playbackState: string;
   isPlaying: boolean;
   currentVolumePercent: number;
+  isCurrentTrackSaved: boolean;
+  isShuffle: boolean;
   message: string;
 }
 
@@ -295,6 +297,12 @@ export async function addYouTubeMusicTrackToPlaylist(
 
 export async function searchYouTubeMusic(query: string): Promise<YouTubeSearchTrack[]> {
   return invoke<YouTubeSearchTrack[]>("search_youtube_music", { query });
+}
+
+export async function discoverYouTubeMusic(
+  category: "trending" | "popular" | "playlists" | "chill"
+): Promise<YouTubeSearchTrack[]> {
+  return invoke<YouTubeSearchTrack[]>("discover_youtube_music", { category });
 }
 
 export async function getYouTubeMusicStatus(): Promise<YouTubeMusicStatus> {

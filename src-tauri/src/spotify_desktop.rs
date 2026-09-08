@@ -465,6 +465,19 @@ pub fn handle_transport(spotify: &SpotifyState, command: &str) -> Result<(), Str
     }
 }
 
+pub fn stop(spotify: &SpotifyState) {
+    if let Ok(guard) = spotify.desktop_player.lock() {
+        if let Some(player) = guard.as_ref() {
+            player.stop();
+        }
+    }
+    if let Ok(mut playback) = spotify.desktop_playback.lock() {
+        playback.is_playing = false;
+        playback.progress_at = None;
+    }
+    crate::spotify::publish_status(spotify);
+}
+
 pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
     ensure_player(spotify)?;
     let next = {

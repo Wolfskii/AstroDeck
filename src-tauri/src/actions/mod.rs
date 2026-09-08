@@ -28,14 +28,38 @@ pub fn dispatch(action: &str, _app: &tauri::AppHandle, state: &crate::AppState) 
     match namespace {
         "teams" => teams_actions::handle(command),
         "spotify" => {
+            if matches!(command, "togglePlay" | "nextTrack" | "prevTrack") {
+                crate::youtube_music::pause(&state.youtube_music);
+            }
             spotify_actions::handle(command, &state.spotify)?;
             Ok(())
         }
         "youtubeMusic" => match command {
             "togglePlay" => crate::youtube_music::toggle_play(&state.youtube_music),
+            "prevTrack" => crate::youtube_music::navigate(&state.youtube_music, -1),
+            "nextTrack" => crate::youtube_music::navigate(&state.youtube_music, 1),
+            "toggleShuffle" => {
+                crate::youtube_music::toggle_shuffle(&state.youtube_music)?;
+                Ok(())
+            }
+            "like" => {
+                let current = crate::youtube_music::status(&state.youtube_music);
+                crate::youtube_music::set_saved(
+                    &state.youtube_music,
+                    !current.is_current_track_saved,
+                )?;
+                crate::youtube_music::publish_status(&state.youtube_music);
+                Ok(())
+            }
             _ => Err(format!("Unknown YouTube Music command: {command}")),
         },
-        "media" => crate::os_media::handle(command, state),
+        "media" => {
+            if matches!(command, "togglePlay" | "nextTrack" | "prevTrack") {
+                crate::youtube_music::pause(&state.youtube_music);
+                crate::spotify_desktop::stop(&state.spotify);
+            }
+            crate::os_media::handle(command, state)
+        }
         "core" => handle_core(command),
         _ => {
             log::warn!("Unknown action namespace: {}", namespace);
@@ -77,6 +101,14 @@ pub fn dispatch_value(
                     .as_u64()
                     .ok_or_else(|| "youtubeMusic.seek expects a numeric position".to_string())?;
                 crate::youtube_music::seek(&state.youtube_music, position)
+            }
+            "like" => {
+                let saved = value
+                    .as_bool()
+                    .ok_or_else(|| "youtubeMusic.like expects a boolean".to_string())?;
+                crate::youtube_music::set_saved(&state.youtube_music, saved)?;
+                crate::youtube_music::publish_status(&state.youtube_music);
+                Ok(())
             }
             _ => Err(format!("Unknown YouTube Music value command: {command}")),
         },
