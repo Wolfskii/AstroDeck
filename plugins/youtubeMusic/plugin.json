@@ -1,0 +1,20 @@
+{
+  "id": "youtubeMusic",
+  "name": "YouTube Music",
+  "description": "Guest YouTube Music search and playback.",
+  "priority": 75,
+  "view": {
+    "type": "mediaPlayer",
+    "mediaPlayer": {
+      "playPause": { "label": "Play", "emoji": "▶️", "action": "youtubeMusic.togglePlay" },
+      "volumeAction": "youtubeMusic.setVolume",
+      "seekAction": "youtubeMusic.seek"
+    }
+  },
+  "layout": {
+    "grid": [2, 2],
+    "buttons": [
+      { "label": "Play/Pause", "emoji": "⏯️", "action": "youtubeMusic.togglePlay" }
+    ]
+  }
+}
