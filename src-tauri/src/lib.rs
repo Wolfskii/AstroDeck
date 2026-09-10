@@ -324,11 +324,29 @@ fn add_youtube_music_track_to_playlist(
 }
 
 #[tauri::command]
+fn remove_youtube_music_track_from_playlist(
+    playlist_id: String,
+    track_id: String,
+    state: tauri::State<AppState>,
+) -> Result<youtube_music::YouTubeLocalLibrary, String> {
+    youtube_music::remove_track_from_playlist(&state.youtube_music, playlist_id, track_id)
+}
+
+#[tauri::command]
+fn add_current_youtube_music_track_to_playlist(
+    playlist_id: String,
+    state: tauri::State<AppState>,
+) -> Result<youtube_music::YouTubeLocalLibrary, String> {
+    youtube_music::add_current_track_to_playlist(&state.youtube_music, playlist_id)
+}
+
+#[tauri::command]
 fn play_youtube_music(
     track: youtube_music::YouTubeSearchTrack,
+    playlist_id: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
-    youtube_music::play(&state.youtube_music, track)
+    youtube_music::play(&state.youtube_music, track, playlist_id)
 }
 
 #[tauri::command]
@@ -432,6 +450,33 @@ fn play_spotify_playlist(
         let _ = state.log_bus.send(payload.to_string());
     }
     Ok(())
+}
+
+#[tauri::command]
+fn list_spotify_add_playlists(
+    track_id: String,
+    state: tauri::State<AppState>,
+) -> Result<Vec<spotify::SpotifyAddPlaylist>, String> {
+    spotify::list_add_playlists(&state.spotify, &track_id)
+}
+
+#[tauri::command]
+fn set_spotify_playlist_track(
+    playlist_id: String,
+    track_id: String,
+    add: bool,
+    state: tauri::State<AppState>,
+) -> Result<Vec<spotify::SpotifyAddPlaylist>, String> {
+    spotify::set_playlist_track(&state.spotify, &playlist_id, &track_id, add)
+}
+
+#[tauri::command]
+fn create_spotify_playlist(
+    name: String,
+    track_id: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<Vec<spotify::SpotifyAddPlaylist>, String> {
+    spotify::create_owned_playlist(&state.spotify, &name, track_id.as_deref())
 }
 
 #[tauri::command]
@@ -554,6 +599,8 @@ pub fn run() {
             save_youtube_music_track,
             create_youtube_music_playlist,
             add_youtube_music_track_to_playlist,
+            remove_youtube_music_track_from_playlist,
+            add_current_youtube_music_track_to_playlist,
             play_youtube_music,
             toggle_youtube_music_play,
             set_youtube_music_volume,
@@ -567,6 +614,9 @@ pub fn run() {
             set_spotify_auth_mode,
             list_spotify_playlists,
             play_spotify_playlist,
+            list_spotify_add_playlists,
+            set_spotify_playlist_track,
+            create_spotify_playlist,
             get_spotify_lyrics,
             open_settings_window,
             persist_window_state,

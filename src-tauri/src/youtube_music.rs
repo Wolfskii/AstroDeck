@@ -67,6 +67,7 @@ pub struct YouTubeStatus {
     pub current_volume_percent: u8,
     pub is_current_track_saved: bool,
     pub is_shuffle: bool,
+    pub current_playlist_id: Option<String>,
     pub message: String,
 }
 
@@ -78,6 +79,7 @@ struct YouTubePlayback {
     is_playing: bool,
     volume_percent: u8,
     shuffle: bool,
+    current_playlist_id: Option<String>,
 }
 
 impl Default for YouTubePlayback {
@@ -89,6 +91,7 @@ impl Default for YouTubePlayback {
             is_playing: false,
             volume_percent: 80,
             shuffle: false,
+            current_playlist_id: None,
         }
     }
 }
@@ -312,10 +315,65 @@ pub fn add_track_to_playlist(
         .find(|playlist| playlist.id == playlist_id)
         .ok_or_else(|| "Local YouTube playlist was not found.".to_string())?;
     if !playlist.track_ids.iter().any(|id| id == &track_id) {
-        playlist.track_ids.push(track_id);
+        playlist.track_ids.push(track_id.clone());
+    }
+    if playlist_id == "liked" {
+        if let Some(current) = state
+            .playback
+            .lock()
+            .ok()
+            .and_then(|playback| playback.track.clone())
+            .filter(|track| track.video_id == track_id)
+        {
+            if !library.saved_tracks.iter().any(|saved| saved.video_id == track_id) {
+                library.saved_tracks.insert(0, current);
+            }
+        }
     }
     save_library(state, &library)?;
     Ok(library)
+}
+
+pub fn remove_track_from_playlist(
+    state: &YouTubeMusicState,
+    playlist_id: String,
+    track_id: String,
+) -> Result<YouTubeLocalLibrary, String> {
+    let mut library = get_library(state)?;
+    let playlist = library
+        .playlists
+        .iter_mut()
+        .find(|playlist| playlist.id == playlist_id)
+        .ok_or_else(|| "Local YouTube playlist was not found.".to_string())?;
+    playlist.track_ids.retain(|id| id != &track_id);
+    if playlist_id == "liked" {
+        library.saved_tracks.retain(|saved| saved.video_id != track_id);
+    }
+    save_library(state, &library)?;
+    Ok(library)
+}
+
+pub fn add_current_track_to_playlist(
+    state: &YouTubeMusicState,
+    playlist_id: String,
+) -> Result<YouTubeLocalLibrary, String> {
+    let track = state
+        .playback
+        .lock()
+        .map_err(|error| error.to_string())?
+        .track
+        .clone()
+        .ok_or_else(|| "YouTube Music has no selected track.".to_string())?;
+    let mut library = get_library(state)?;
+    if !library
+        .saved_tracks
+        .iter()
+        .any(|saved| saved.video_id == track.video_id)
+    {
+        library.saved_tracks.insert(0, track.clone());
+        save_library(state, &library)?;
+    }
+    add_track_to_playlist(state, playlist_id, track.video_id)
 }
 
 pub fn search(state: &YouTubeMusicState, query: &str) -> Result<Vec<YouTubeSearchTrack>, String> {
@@ -413,6 +471,7 @@ pub fn status(state: &YouTubeMusicState) -> YouTubeStatus {
         current_volume_percent: playback.volume_percent,
         is_current_track_saved,
         is_shuffle: playback.shuffle,
+        current_playlist_id: playback.current_playlist_id.clone(),
         message: "YouTube Music guest playback is ready. Sign-in and account libraries are not enabled."
             .to_string(),
     }
@@ -437,6 +496,7 @@ pub fn publish_status(state: &YouTubeMusicState) {
 pub fn play(
     state: &YouTubeMusicState,
     track: YouTubeSearchTrack,
+    playlist_id: Option<String>,
 ) -> Result<(), String> {
     if let Some(app) = state
         .app_handle
@@ -473,6 +533,7 @@ pub fn play(
         playback.progress_ms = 0;
         playback.progress_at = Some(Instant::now());
         playback.is_playing = true;
+        playback.current_playlist_id = playlist_id;
     }
     publish_status(state);
     Ok(())
@@ -598,7 +659,15 @@ pub fn navigate(state: &YouTubeMusicState, direction: i32) -> Result<(), String>
     } else {
         index - 1
     };
-    play(state, library.saved_tracks[next].clone())
+    play(
+        state,
+        library.saved_tracks[next].clone(),
+        state
+            .playback
+            .lock()
+            .ok()
+            .and_then(|playback| playback.current_playlist_id.clone()),
+    )
 }
 
 pub fn seek(state: &YouTubeMusicState, position_ms: u64) -> Result<(), String> {

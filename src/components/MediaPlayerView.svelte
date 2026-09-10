@@ -12,6 +12,7 @@
     type LyricsProviderId,
   } from "../services/api";
   import PlaylistBrowser from "./PlaylistBrowser.svelte";
+  import AddToPlaylistMenu from "./AddToPlaylistMenu.svelte";
   import YouTubeMusicSearch from "./YouTubeMusicSearch.svelte";
   import YouTubeMusicLibrary from "./YouTubeMusicLibrary.svelte";
   import { logError } from "../services/logger";
@@ -60,6 +61,11 @@
     playlistsEnabled?: boolean;
     youtubeMusicEnabled?: boolean;
     youtubeMusicLibraryEnabled?: boolean;
+    addToPlaylistEnabled?: boolean;
+    currentPlaylistId?: string | null;
+    trackInCurrentOwnedPlaylist?: boolean;
+    playlistProvider?: "spotify" | "youtubeMusic" | null;
+    onPlaylistMembershipChange?: () => void;
     lyricsProviderOrder?: LyricsProviderId[];
     useLyricsFallback?: boolean;
   }
@@ -96,6 +102,11 @@
     playlistsEnabled = false,
     youtubeMusicEnabled = false,
     youtubeMusicLibraryEnabled = false,
+    addToPlaylistEnabled = false,
+    currentPlaylistId = null,
+    trackInCurrentOwnedPlaylist = false,
+    playlistProvider = null,
+    onPlaylistMembershipChange,
     lyricsProviderOrder = ["lrclib", "musixmatch", "kugou", "netease"],
     useLyricsFallback = false,
   }: Props = $props();
@@ -195,6 +206,11 @@
 
     if (Math.abs(delta) <= PROGRESS_SYNC_SLACK_MS) return;
     playbackDisplayMs = incoming;
+  });
+
+  $effect(() => {
+    trackId;
+    addedToCurrentPlaylist = trackInCurrentOwnedPlaylist;
   });
 
   $effect(() => {
@@ -460,6 +476,8 @@
   let playlistsOpen = $state(false);
   let youtubeMusicOpen = $state(false);
   let youtubeMusicLibraryOpen = $state(false);
+  let addToPlaylistOpen = $state(false);
+  let addedToCurrentPlaylist = $state(false);
   let lyricsOpen = $state(false);
   let lyricsBusy = $state(false);
   let lyricsError = $state<string | null>(null);
@@ -794,8 +812,50 @@
   </div>
 
   <footer class="car-controls">
-    <div class="car-controls-row" class:car-controls-row--lyrics={lyricsEnabled}>
-        {#if shuffle}
+    <div
+      class="car-controls-row"
+      class:car-controls-row--lyrics={lyricsEnabled}
+      class:car-controls-row--add={addToPlaylistEnabled}
+    >
+        {#if addToPlaylistEnabled}
+          <button
+            type="button"
+            class="car-transport-btn"
+            class:car-transport-added={addedToCurrentPlaylist}
+            aria-label={addedToCurrentPlaylist ? "Added to this playlist" : "Add to playlist"}
+            aria-pressed={addedToCurrentPlaylist}
+            disabled={!trackId}
+            onclick={() => (addToPlaylistOpen = true)}
+          >
+            {#if addedToCurrentPlaylist}
+              <span class="car-add-check" aria-hidden="true">
+                <svg class="car-transport-icon car-add-check-icon" viewBox="0 0 24 24">
+                  <path
+                    fill="currentColor"
+                    d="M9.2 16.2 5.5 12.5l1.4-1.4 2.3 2.3 6-6 1.4 1.4-7.4 7.4z"
+                  />
+                </svg>
+              </span>
+            {:else}
+              <svg class="car-transport-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  d="M12 4.5v15M4.5 12h15"
+                />
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="9.2"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                />
+              </svg>
+            {/if}
+          </button>
+        {/if}
           <button
             type="button"
             class="car-transport-btn"
@@ -904,6 +964,17 @@
   </footer>
 
   <PlaylistBrowser open={playlistsOpen} onClose={() => (playlistsOpen = false)} />
+  <AddToPlaylistMenu
+    open={addToPlaylistOpen}
+    provider={playlistProvider ?? "spotify"}
+    trackId={trackId}
+    currentPlaylistId={currentPlaylistId}
+    onClose={() => (addToPlaylistOpen = false)}
+    onMembershipChange={(inCurrent) => {
+      addedToCurrentPlaylist = inCurrent;
+      onPlaylistMembershipChange?.();
+    }}
+  />
   <YouTubeMusicSearch open={youtubeMusicOpen} onClose={() => (youtubeMusicOpen = false)} />
   <YouTubeMusicLibrary
     open={youtubeMusicLibraryOpen}
@@ -1582,6 +1653,16 @@
     max-width: min(100%, 860px);
   }
 
+  .car-controls-row--add {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    max-width: min(100%, 860px);
+  }
+
+  .car-controls-row--add.car-controls-row--lyrics {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    max-width: min(100%, 980px);
+  }
+
   .car-transport-lyrics-on {
     color: #1db954;
   }
@@ -1656,6 +1737,26 @@
 
   .car-transport-liked {
     color: #1db954;
+  }
+
+  .car-add-check {
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: #1db954;
+    color: transparent;
+  }
+
+  .car-add-check-icon {
+    width: 28px;
+    height: 28px;
+    color: var(--car-footer-bg, #0c0808);
+  }
+
+  .car-transport-added .car-add-check {
+    box-shadow: 0 0 0 0 rgba(29, 185, 84, 0.2);
   }
 
   .car-fader {

@@ -37,11 +37,11 @@
     }
   }
 
-  async function playTrack(track: YouTubeSearchTrack) {
+  async function playTrack(track: YouTubeSearchTrack, playlistId?: string) {
     startingId = track.videoId;
     error = null;
     try {
-      await playYouTubeMusic(track);
+      await playYouTubeMusic(track, playlistId);
       onClose();
     } catch (e) {
       error = String(e).replace(/^Error:\s*/i, "");
@@ -89,7 +89,7 @@
                   type="button"
                   class="youtube-library-card"
                   disabled={!track || startingId === track.videoId}
-                  onclick={() => track && void playTrack(track)}
+                  onclick={() => track && void playTrack(track, playlist.id)}
                 >
                   {#if track?.coverArtUrl}
                     <img src={track.coverArtUrl} alt="" />

@@ -56,6 +56,7 @@
       imageUrl: null,
       trackCount: 50,
       ownerName: "Spotify",
+      owned: false,
     },
     {
       id: "demo-liked",
@@ -64,6 +65,7 @@
       imageUrl: null,
       trackCount: 128,
       ownerName: "You",
+      owned: true,
     },
     {
       id: "demo-focus",
@@ -72,6 +74,7 @@
       imageUrl: null,
       trackCount: 42,
       ownerName: "AstroDeck",
+      owned: false,
     },
   ];
 
