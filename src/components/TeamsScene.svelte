@@ -29,6 +29,7 @@
   const effectiveCameraOff = $derived(
     teamsStatus?.isConnected ? !teamsStatus.isVideoOn : cameraOff
   );
+  const effectiveSharing = $derived(teamsStatus?.isConnected ? teamsStatus.isSharing : false);
 </script>
 
 <section class="teams" class:has-settings={showSettingsButton && onOpenSettings}>
@@ -79,14 +80,18 @@
               ? "Unmute"
               : button.action === "teams.toggleCamera" && effectiveCameraOff
                 ? "Turn camera on"
+                : button.action === "teams.shareScreen" && effectiveSharing
+                  ? "Stop sharing"
                 : button.label
           }
           action={button.action}
           source="Teams window"
           variant="call"
           tone={
-            button.action === "teams.shareScreen"
+              button.action === "teams.shareScreen" && !effectiveSharing
               ? "accent"
+              : button.action === "teams.shareScreen" && effectiveSharing
+                ? "danger"
               : (button.action === "teams.toggleMute" && effectiveMuted) ||
                   (button.action === "teams.toggleCamera" && effectiveCameraOff)
                 ? "danger"
@@ -94,7 +99,8 @@
           }
           active={
             (button.action === "teams.toggleMute" && effectiveMuted) ||
-            (button.action === "teams.toggleCamera" && effectiveCameraOff)
+            (button.action === "teams.toggleCamera" && effectiveCameraOff) ||
+            (button.action === "teams.shareScreen" && effectiveSharing)
           }
           onAction={() => {
             if (!teamsStatus?.isConnected && button.action === "teams.toggleMute") {
