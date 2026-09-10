@@ -124,6 +124,8 @@ export interface SpotifyStatus {
   currentItemId?: string | null;
   isCurrentTrackSaved?: boolean | null;
   isShuffle?: boolean;
+  currentPlaylistId?: string | null;
+  currentTrackInOwnedPlaylist?: boolean;
   grantedScopes?: string[];
   nextTrackPreview?: SpotifyTrackPreview | null;
   prevTrackPreview?: SpotifyTrackPreview | null;
@@ -174,6 +176,17 @@ export interface SpotifyPlaylist {
   imageUrl?: string | null;
   trackCount: number;
   ownerName?: string | null;
+  owned?: boolean;
+}
+
+export interface SpotifyAddPlaylist {
+  id: string;
+  name: string;
+  uri: string;
+  imageUrl?: string | null;
+  trackCount: number;
+  containsTrack: boolean;
+  isCurrent: boolean;
 }
 
 export interface SpotifyPlaylistPage {
@@ -196,6 +209,56 @@ export async function listSpotifyPlaylists(options?: {
 
 export async function playSpotifyPlaylist(playlist: string): Promise<void> {
   return invoke("play_spotify_playlist", { playlist });
+}
+
+export async function listSpotifyAddPlaylists(trackId: string): Promise<SpotifyAddPlaylist[]> {
+  if (!isTauri) {
+    return [
+      {
+        id: "demo-liked",
+        name: "Liked Songs",
+        uri: "spotify:playlist:demo-liked",
+        imageUrl: null,
+        trackCount: 128,
+        containsTrack: true,
+        isCurrent: true,
+      },
+      {
+        id: "demo-focus",
+        name: "Focus Flow",
+        uri: "spotify:playlist:demo-focus",
+        imageUrl: null,
+        trackCount: 42,
+        containsTrack: false,
+        isCurrent: false,
+      },
+    ];
+  }
+  return invoke<SpotifyAddPlaylist[]>("list_spotify_add_playlists", { trackId });
+}
+
+export async function setSpotifyPlaylistTrack(
+  playlistId: string,
+  trackId: string,
+  add: boolean
+): Promise<SpotifyAddPlaylist[]> {
+  if (!isTauri) return listSpotifyAddPlaylists(trackId);
+  return invoke<SpotifyAddPlaylist[]>("set_spotify_playlist_track", {
+    playlistId,
+    trackId,
+    add,
+  });
+}
+
+export async function createSpotifyPlaylist(
+  name: string,
+  trackId?: string | null
+): Promise<SpotifyAddPlaylist[]> {
+  if (!isTauri) return listSpotifyAddPlaylists(trackId ?? "");
+  return invoke<SpotifyAddPlaylist[]>("create_spotify_playlist", {
+    name,
+    trackId: trackId ?? null,
+  });
 }
 
 export interface SpotifyLyricLine {
@@ -288,6 +351,7 @@ export interface YouTubeMusicStatus {
   currentVolumePercent: number;
   isCurrentTrackSaved: boolean;
   isShuffle: boolean;
+  currentPlaylistId?: string | null;
   message: string;
 }
 
@@ -327,6 +391,24 @@ export async function addYouTubeMusicTrackToPlaylist(
   });
 }
 
+export async function removeYouTubeMusicTrackFromPlaylist(
+  playlistId: string,
+  trackId: string
+): Promise<YouTubeLocalLibrary> {
+  return invoke<YouTubeLocalLibrary>("remove_youtube_music_track_from_playlist", {
+    playlistId,
+    trackId,
+  });
+}
+
+export async function addCurrentYouTubeMusicTrackToPlaylist(
+  playlistId: string
+): Promise<YouTubeLocalLibrary> {
+  return invoke<YouTubeLocalLibrary>("add_current_youtube_music_track_to_playlist", {
+    playlistId,
+  });
+}
+
 export async function searchYouTubeMusic(query: string): Promise<YouTubeSearchTrack[]> {
   return invoke<YouTubeSearchTrack[]>("search_youtube_music", { query });
 }
@@ -341,8 +423,11 @@ export async function getYouTubeMusicStatus(): Promise<YouTubeMusicStatus> {
   return invoke<YouTubeMusicStatus>("get_youtube_music_status");
 }
 
-export async function playYouTubeMusic(track: YouTubeSearchTrack): Promise<void> {
-  return invoke("play_youtube_music", { track });
+export async function playYouTubeMusic(
+  track: YouTubeSearchTrack,
+  playlistId?: string | null
+): Promise<void> {
+  return invoke("play_youtube_music", { track, playlistId: playlistId ?? null });
 }
 
 export async function toggleYouTubeMusicPlay(): Promise<void> {

@@ -12,7 +12,9 @@ use librespot_playback::audio_backend;
 use librespot_playback::config::{AudioFormat, PlayerConfig, VolumeCtrl};
 use librespot_playback::mixer::{self, Mixer, MixerConfig};
 use librespot_playback::player::{Player, PlayerEvent};
-use librespot_protocol::playlist4_external::SelectedListContent;
+use librespot_protocol::playlist4_external::{
+    Add, CreateListReply, Delta, Item, ListAttributes, ListChanges, Op, Rem, SelectedListContent,
+};
 use protobuf::Message;
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -98,16 +100,39 @@ pub struct PlayQueue {
     tracks: Vec<SpotifyUri>,
     order: Vec<usize>,
     position: usize,
+    context_uri: Option<String>,
 }
 
 impl PlayQueue {
     fn replace(&mut self, tracks: Vec<SpotifyUri>, shuffle: bool) {
+        self.replace_context(tracks, shuffle, None);
+    }
+
+    fn replace_context(
+        &mut self,
+        tracks: Vec<SpotifyUri>,
+        shuffle: bool,
+        context_uri: Option<String>,
+    ) {
         self.tracks = tracks;
         self.order = (0..self.tracks.len()).collect();
         self.position = 0;
+        self.context_uri = context_uri;
         if shuffle {
             self.shuffle_rest();
         }
+    }
+
+    pub fn context_uri(&self) -> Option<&str> {
+        self.context_uri.as_deref()
+    }
+
+    pub fn contains_track_id(&self, track_id: &str) -> bool {
+        self.tracks.iter().any(|uri| {
+            uri.to_id()
+                .ok()
+                .is_some_and(|id| id.eq_ignore_ascii_case(track_id))
+        })
     }
 
     fn current(&self) -> Option<&SpotifyUri> {
@@ -290,7 +315,7 @@ pub fn play_context_uri(spotify: &SpotifyState, context_uri: &str) -> Result<(),
         .unwrap_or(false);
     {
         let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
-        queue.replace(tracks, shuffle);
+        queue.replace_context(tracks, shuffle, Some(context_uri.to_string()));
     }
 
     let epoch = playback_snapshot(spotify).metadata_epoch;
@@ -1111,6 +1136,7 @@ fn playlists_from_rootlist(root: &SelectedListContent, username: &str) -> Vec<Sp
                     owner.to_string()
                 }
             });
+        let owned = owner_name.as_deref() == Some("You");
         items.push(SpotifyPlaylist {
             id: id.to_string(),
             name,
@@ -1120,6 +1146,7 @@ fn playlists_from_rootlist(root: &SelectedListContent, username: &str) -> Vec<Sp
                 .map(|entry| entry.length().max(0) as u32)
                 .unwrap_or(0),
             owner_name,
+            owned,
         });
     }
     items
@@ -1139,7 +1166,7 @@ fn page_from_playlists(
 ) -> SpotifyPlaylistPage {
     // Make playlists created by the authenticated account immediately visible
     // instead of burying them behind followed playlists and "Load more".
-    items.sort_by_key(|playlist| playlist.owner_name.as_deref() != Some("You"));
+    items.sort_by_key(|playlist| !playlist.owned);
     let total = items.len() as u32;
     let start = (offset as usize).min(items.len());
     let end = (start + limit as usize).min(items.len());
@@ -1375,6 +1402,208 @@ fn image_url(file_id: &[u8]) -> Option<String> {
     Some(format!("{IMAGE_CDN}{hex}"))
 }
 
+pub fn current_playlist_id(spotify: &SpotifyState) -> Option<String> {
+    let queue = spotify.desktop_queue.lock().ok()?;
+    playlist_id_from_uri(queue.context_uri()?).map(str::to_string)
+}
+
+pub fn current_playlist_contains_track(spotify: &SpotifyState, track_id: &str) -> bool {
+    let Ok(queue) = spotify.desktop_queue.lock() else {
+        return false;
+    };
+    queue.contains_track_id(track_id)
+}
+
+pub fn playlist_contains_track(
+    spotify: &SpotifyState,
+    playlist_id: &str,
+    track_id: &str,
+) -> Result<bool, String> {
+    if current_playlist_id(spotify).as_deref() == Some(playlist_id) {
+        return Ok(current_playlist_contains_track(spotify, track_id));
+    }
+    let session = ensure_session(spotify)?;
+    let context_uri = format!("spotify:playlist:{playlist_id}");
+    let tracks = fetch_context_tracks(&session, &context_uri)?;
+    Ok(tracks.iter().any(|uri| {
+        uri.to_id()
+            .ok()
+            .is_some_and(|id| id.eq_ignore_ascii_case(track_id))
+    }))
+}
+
+pub fn set_playlist_track(
+    spotify: &SpotifyState,
+    playlist_id: &str,
+    track_id: &str,
+    add: bool,
+) -> Result<(), String> {
+    let session = ensure_session(spotify)?;
+    let playlist_uri = format!("spotify:playlist:{playlist_id}");
+    apply_playlist_track_change(&session, &playlist_uri, track_id, add)?;
+    Ok(())
+}
+
+pub fn create_playlist(spotify: &SpotifyState, name: &str) -> Result<SpotifyPlaylist, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Playlist name is required.".to_string());
+    }
+    let session = ensure_session(spotify)?;
+    let username = session.username();
+    if username.trim().is_empty() {
+        return Err("Spotify desktop playlists need a fresh login.".to_string());
+    }
+
+    runtime().block_on(async {
+        let mut attributes = ListAttributes::new();
+        attributes.set_name(name.to_string());
+        let created = tokio::time::timeout(
+            Duration::from_secs(20),
+            session.spclient().request_with_protobuf(
+                &Method::POST,
+                "/playlist/v2/playlist",
+                None,
+                &attributes,
+            ),
+        )
+        .await
+        .map_err(|_| "Spotify playlist create timed out".to_string())?
+        .map_err(|e| format!("Spotify playlist could not be created: {e}"))?;
+        let reply = CreateListReply::parse_from_bytes(&created)
+            .map_err(|e| format!("Spotify playlist create could not be decoded: {e}"))?;
+        let uri = reply.uri().to_string();
+        let id = playlist_id_from_uri(&uri)
+            .ok_or_else(|| "Spotify created playlist did not return an id.".to_string())?
+            .to_string();
+
+        let root_body = tokio::time::timeout(
+            Duration::from_secs(20),
+            session.spclient().get_rootlist(0, Some(1)),
+        )
+        .await
+        .map_err(|_| "Spotify playlist list timed out".to_string())?
+        .map_err(|e| format!("Spotify playlist list failed: {e}"))?;
+        let root = SelectedListContent::parse_from_bytes(&root_body)
+            .map_err(|e| format!("Spotify playlist list could not be decoded: {e}"))?;
+        let revision = root.revision().to_vec();
+        if !revision.is_empty() {
+            let mut item = Item::new();
+            item.set_uri(uri.clone());
+            let mut add = Add::new();
+            add.set_add_first(true);
+            add.items.push(item);
+            let changes = playlist_changes(revision, librespot_protocol::playlist4_external::op::Kind::ADD, add, None);
+            let endpoint = format!("/playlist/v2/user/{username}/rootlist/changes");
+            let _ = tokio::time::timeout(
+                Duration::from_secs(20),
+                session
+                    .spclient()
+                    .request_with_protobuf(&Method::POST, &endpoint, None, &changes),
+            )
+            .await;
+        }
+
+        Ok(SpotifyPlaylist {
+            id,
+            name: name.to_string(),
+            uri,
+            image_url: None,
+            track_count: 0,
+            owner_name: Some("You".to_string()),
+            owned: true,
+        })
+    })
+}
+
+fn apply_playlist_track_change(
+    session: &Session,
+    context_uri: &str,
+    track_id: &str,
+    add: bool,
+) -> Result<(), String> {
+    let playlist_id = playlist_id_from_uri(context_uri)
+        .ok_or_else(|| format!("Unsupported Spotify context: {context_uri}"))?;
+    let playlist_id = SpotifyId::from_base62(playlist_id)
+        .map_err(|e| format!("Spotify playlist id is invalid: {e}"))?;
+    let track_uri = format!("spotify:track:{track_id}");
+
+    runtime().block_on(async {
+        let id62 = playlist_id
+            .to_base62()
+            .map_err(|e| format!("Spotify playlist id is invalid: {e}"))?;
+        let endpoint = format!("/playlist/v2/playlist/{id62}");
+        let body = tokio::time::timeout(
+            Duration::from_secs(20),
+            session.spclient().request(&Method::GET, &endpoint, None, None),
+        )
+        .await
+        .map_err(|_| "Spotify playlist timed out".to_string())?
+        .map_err(|e| format!("Spotify playlist could not be loaded: {e}"))?;
+        let content = SelectedListContent::parse_from_bytes(&body)
+            .map_err(|e| format!("Spotify playlist could not be decoded: {e}"))?;
+        let revision = content.revision().to_vec();
+        if revision.is_empty() {
+            return Err("Spotify playlist revision is missing.".to_string());
+        }
+
+        let mut item = Item::new();
+        item.set_uri(track_uri);
+        let kind = if add {
+            librespot_protocol::playlist4_external::op::Kind::ADD
+        } else {
+            librespot_protocol::playlist4_external::op::Kind::REM
+        };
+        let mut add_op = Add::new();
+        let mut rem_op = Rem::new();
+        let changes = if add {
+            add_op.set_add_last(true);
+            add_op.items.push(item);
+            playlist_changes(revision, kind, add_op, None)
+        } else {
+            rem_op.set_items_as_key(true);
+            rem_op.items.push(item);
+            playlist_changes(revision, kind, Add::new(), Some(rem_op))
+        };
+        let change_endpoint = format!("/playlist/v2/playlist/{id62}/changes");
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            session
+                .spclient()
+                .request_with_protobuf(&Method::POST, &change_endpoint, None, &changes),
+        )
+        .await
+        .map_err(|_| "Spotify playlist update timed out".to_string())?
+        .map_err(|e| format!("Spotify playlist could not be updated: {e}"))?;
+        Ok(())
+    })
+}
+
+fn playlist_changes(
+    revision: Vec<u8>,
+    kind: librespot_protocol::playlist4_external::op::Kind,
+    add: Add,
+    rem: Option<Rem>,
+) -> ListChanges {
+    let mut operation = Op::new();
+    operation.set_kind(kind);
+    if kind == librespot_protocol::playlist4_external::op::Kind::ADD {
+        operation.add = protobuf::MessageField::some(add);
+    } else if let Some(rem) = rem {
+        operation.rem = protobuf::MessageField::some(rem);
+    }
+
+    let mut delta = Delta::new();
+    delta.set_base_version(revision.clone());
+    delta.ops.push(operation);
+
+    let mut changes = ListChanges::new();
+    changes.set_base_revision(revision);
+    changes.deltas.push(delta);
+    changes.set_want_resulting_revisions(true);
+    changes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1431,6 +1660,7 @@ mod tests {
             image_url: None,
             track_count: 1,
             owner_name: Some(owner.to_string()),
+            owned: owner == "You",
         };
         let page = page_from_playlists(
             vec![

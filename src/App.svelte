@@ -174,6 +174,16 @@
   const effectiveSpotifyShuffle = $derived(
     optimisticSpotifyShuffle ?? spotifyStatus?.isShuffle ?? false
   );
+  const youtubeTrackInCurrentOwnedPlaylist = $derived.by(() => {
+    const playlistId = youtubeMusicStatus?.currentPlaylistId;
+    const trackId = youtubeMusicStatus?.currentItemId;
+    if (!playlistId || !trackId) return false;
+    return (
+      youtubeMusicLibrary?.playlists.some(
+        (playlist) => playlist.id === playlistId && playlist.trackIds.includes(trackId)
+      ) ?? false
+    );
+  });
   const effectiveSpotifyPlaybackState = $derived(
     optimisticSpotifyPlaying !== null
       ? optimisticSpotifyPlaying
@@ -2297,6 +2307,28 @@
           playlistsEnabled={isSpotifyScene}
           youtubeMusicEnabled={isYouTubeMusicScene}
           youtubeMusicLibraryEnabled={isYouTubeMusicScene}
+          addToPlaylistEnabled={isSpotifyScene || isYouTubeMusicScene}
+          playlistProvider={isYouTubeMusicScene ? "youtubeMusic" : isSpotifyScene ? "spotify" : null}
+          currentPlaylistId={isYouTubeMusicActive
+            ? youtubeMusicStatus?.currentPlaylistId ?? null
+            : isSpotifyScene
+              ? spotifyStatus?.currentPlaylistId ?? null
+              : null}
+          trackInCurrentOwnedPlaylist={isYouTubeMusicActive
+            ? youtubeTrackInCurrentOwnedPlaylist
+            : isSpotifyScene
+              ? spotifyStatus?.currentTrackInOwnedPlaylist ?? false
+              : false}
+          onPlaylistMembershipChange={() => {
+            if (isYouTubeMusicScene) {
+              void getYouTubeMusicLibrary()
+                .then((library) => {
+                  youtubeMusicLibrary = library;
+                })
+                .catch(() => {});
+            }
+            if (isSpotifyScene) requestSpotifyStatus();
+          }}
           lyricsProviderOrder={lyricsProviderOrder}
           useLyricsFallback={isYouTubeMusicScene}
         />

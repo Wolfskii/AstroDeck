@@ -24,6 +24,7 @@ const SPOTIFY_LIBRARY_URL: &str = "https://api.spotify.com/v1/me/library";
 const SPOTIFY_LIBRARY_CONTAINS_URL: &str = "https://api.spotify.com/v1/me/library/contains";
 const SPOTIFY_QUEUE_URL: &str = "https://api.spotify.com/v1/me/player/queue";
 const SPOTIFY_PLAYLISTS_URL: &str = "https://api.spotify.com/v1/me/playlists";
+const SPOTIFY_ME_URL: &str = "https://api.spotify.com/v1/me";
 const SPOTIFY_PLAY_URL: &str = "https://api.spotify.com/v1/me/player/play";
 const SPOTIFY_RECENTLY_PLAYED_URL: &str =
     "https://api.spotify.com/v1/me/player/recently-played?limit=1";
@@ -36,7 +37,7 @@ struct LibraryUrisBody {
     uris: Vec<String>,
 }
 const CUSTOM_SPOTIFY_SCOPES: &str =
-    "user-library-modify user-library-read user-read-playback-state user-modify-playback-state user-read-recently-played playlist-read-private playlist-read-collaborative";
+    "user-library-modify user-library-read user-read-playback-state user-modify-playback-state user-read-recently-played playlist-read-private playlist-read-collaborative playlist-modify-public playlist-modify-private";
 /// Librespot's access-point login only accepts tokens that include `streaming`.
 /// Library scopes let official login like/unlike via the Web API after reconnect;
 /// collection-v2 still works without them.
@@ -150,7 +151,7 @@ const SPOTIFY_MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
 /// Playlist browse should not freeze the overlay for a long Retry-After.
 const SPOTIFY_PLAYLIST_RETRY_WAIT: Duration = Duration::from_secs(5);
 const SPOTIFY_PLAYLIST_FIELDS: &str =
-    "items(id,name,uri,images(url),owner(display_name),tracks(total)),total,limit,offset";
+    "items(id,name,uri,images(url),owner(id,display_name),tracks(total)),total,limit,offset";
 
 #[derive(Default)]
 pub struct SpotifyState {
@@ -172,6 +173,7 @@ pub struct SpotifyState {
     pub(crate) desktop_playback: Arc<Mutex<crate::spotify_desktop::OfficialPlayback>>,
     pub(crate) app_handle: Mutex<Option<tauri::AppHandle>>,
     lyrics_cache: Mutex<Option<SpotifyTrackLyrics>>,
+    current_user_id: Mutex<Option<String>>,
 }
 
 pub fn invalidate_playback_cache(spotify: &SpotifyState) {
@@ -505,6 +507,19 @@ pub struct SpotifyPlaylist {
     pub image_url: Option<String>,
     pub track_count: u32,
     pub owner_name: Option<String>,
+    pub owned: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotifyAddPlaylist {
+    pub id: String,
+    pub name: String,
+    pub uri: String,
+    pub image_url: Option<String>,
+    pub track_count: u32,
+    pub contains_track: bool,
+    pub is_current: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -547,6 +562,7 @@ struct PlaylistTracks {
 
 #[derive(Debug, Deserialize)]
 struct PlaylistOwner {
+    id: Option<String>,
     display_name: Option<String>,
 }
 
@@ -591,6 +607,10 @@ pub struct SpotifyStatus {
     pub is_current_track_saved: Option<bool>,
     #[serde(rename = "isShuffle")]
     pub is_shuffle: bool,
+    #[serde(rename = "currentPlaylistId")]
+    pub current_playlist_id: Option<String>,
+    #[serde(rename = "currentTrackInOwnedPlaylist")]
+    pub current_track_in_owned_playlist: bool,
     #[serde(rename = "grantedScopes")]
     pub granted_scopes: Vec<String>,
     #[serde(rename = "usesWebApi")]
@@ -644,6 +664,7 @@ pub struct PlaybackSummary {
     pub progress_ms: Option<u64>,
     pub duration_ms: Option<u64>,
     pub shuffle_state: bool,
+    pub context_playlist_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -676,6 +697,14 @@ struct PlaybackResponse {
     item: Option<PlaybackItem>,
     #[serde(default)]
     shuffle_state: bool,
+    context: Option<PlaybackContext>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaybackContext {
+    uri: Option<String>,
+    #[serde(rename = "type")]
+    context_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1283,6 +1312,7 @@ fn preview_to_playback_summary(preview: &TrackPreview, base: &PlaybackSummary) -
         progress_ms: Some(0),
         duration_ms: preview.duration_ms,
         shuffle_state: base.shuffle_state,
+        context_playlist_id: base.context_playlist_id.clone(),
     }
 }
 
@@ -1537,6 +1567,8 @@ fn official_desktop_status(spotify: &SpotifyState, fresh: bool) -> Result<Spotif
             current_item_id: None,
             is_current_track_saved: None,
             is_shuffle: false,
+            current_playlist_id: None,
+            current_track_in_owned_playlist: false,
             granted_scopes,
             uses_web_api: false,
             next_track_preview: None,
@@ -1580,6 +1612,8 @@ fn official_desktop_status(spotify: &SpotifyState, fresh: bool) -> Result<Spotif
             None
         },
         is_shuffle: playback.shuffle,
+        current_playlist_id: crate::spotify_desktop::current_playlist_id(spotify),
+        current_track_in_owned_playlist: current_track_in_owned_playlist(spotify),
         granted_scopes,
         uses_web_api: false,
         next_track_preview: None,
@@ -1625,6 +1659,8 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
             current_item_id: None,
             is_current_track_saved: None,
             is_shuffle: false,
+            current_playlist_id: None,
+            current_track_in_owned_playlist: false,
             granted_scopes,
             uses_web_api: true,
             next_track_preview: None,
@@ -1653,6 +1689,8 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
             current_item_id: None,
             is_current_track_saved: None,
             is_shuffle: false,
+            current_playlist_id: None,
+            current_track_in_owned_playlist: false,
             granted_scopes,
             uses_web_api: true,
             next_track_preview: None,
@@ -1712,6 +1750,8 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
                     current_item_id: None,
                     is_current_track_saved: None,
                     is_shuffle: false,
+            current_playlist_id: None,
+            current_track_in_owned_playlist: false,
                     granted_scopes,
                     uses_web_api: true,
                     next_track_preview: None,
@@ -1739,6 +1779,8 @@ fn build_status(spotify: &SpotifyState, fresh_playback: bool) -> Result<SpotifyS
                     current_item_id: None,
                     is_current_track_saved: None,
                     is_shuffle: false,
+            current_playlist_id: None,
+            current_track_in_owned_playlist: false,
                     granted_scopes,
                     uses_web_api: true,
                     next_track_preview: None,
@@ -1799,6 +1841,12 @@ fn build_spotify_status_from_playback(
         current_item_id: playback.item_id.clone(),
         is_current_track_saved,
         is_shuffle: playback.shuffle_state,
+        current_playlist_id: playback.context_playlist_id.clone(),
+        current_track_in_owned_playlist: web_current_track_in_owned_playlist(
+            spotify,
+            playback.context_playlist_id.as_deref(),
+            playback.item_id.as_deref(),
+        ),
         granted_scopes,
         uses_web_api: true,
         next_track_preview: next_preview_from_cache(spotify, playback.item_id.as_deref()),
@@ -2634,6 +2682,15 @@ fn fetch_current_playback(spotify: &SpotifyState) -> Result<PlaybackSummary, Str
             .as_ref()
             .and_then(|item| item.duration_ms),
         shuffle_state: playback.shuffle_state,
+        context_playlist_id: playback
+            .context
+            .as_ref()
+            .filter(|context| context.context_type.as_deref() == Some("playlist"))
+            .and_then(|context| context.uri.as_deref())
+            .and_then(|uri| {
+                uri.strip_prefix("spotify:playlist:")
+                    .map(str::to_string)
+            }),
     };
     Ok(store_playback_from_api(spotify, &summary))
 }
@@ -2770,6 +2827,12 @@ fn store_playlist_cache(spotify: &SpotifyState, offset: u32, limit: u32, page: &
     cache.fetched_at = Some(SystemTime::now());
 }
 
+fn invalidate_playlist_cache(spotify: &SpotifyState) {
+    let mut cache = spotify.playlist_cache.lock().unwrap();
+    cache.page = None;
+    cache.fetched_at = None;
+}
+
 fn playlists_rate_limited_error(spotify: &SpotifyState) -> String {
     let seconds = scope_rate_limit_wait_remaining(spotify, RateLimitScope::Playlists)
         .map(|duration| duration.as_secs().max(1))
@@ -2813,12 +2876,18 @@ fn fetch_playlists_page(
 
     clear_scope_rate_limit(spotify, RateLimitScope::Playlists);
     let page: PlaylistsResponse = response.json().map_err(|e| e.to_string())?;
+    let user_id = current_user_id(spotify).ok();
     let items = page
         .items
         .into_iter()
         .filter_map(|item| {
             let id = item.id?;
             let name = item.name.filter(|value| !value.is_empty())?;
+            let owner_id = item.owner.as_ref().and_then(|owner| owner.id.clone());
+            let owned = user_id
+                .as_deref()
+                .zip(owner_id.as_deref())
+                .is_some_and(|(me, owner)| me == owner);
             Some(SpotifyPlaylist {
                 uri: item
                     .uri
@@ -2826,6 +2895,7 @@ fn fetch_playlists_page(
                 image_url: item.images.first().map(|image| image.url.clone()),
                 track_count: item.tracks.map(|tracks| tracks.total).unwrap_or(0),
                 owner_name: item.owner.and_then(|owner| owner.display_name),
+                owned,
                 id,
                 name,
             })
@@ -3159,6 +3229,344 @@ pub fn play_playlist(spotify: &SpotifyState, playlist: &str) -> Result<(), Strin
     }
 
     Err(playlists_rate_limited_error(spotify))
+}
+
+fn current_track_in_owned_playlist(spotify: &SpotifyState) -> bool {
+    let Some(playlist_id) = crate::spotify_desktop::current_playlist_id(spotify) else {
+        return false;
+    };
+    let Some(track_id) = crate::spotify_desktop::playback_snapshot(spotify).item_id else {
+        return false;
+    };
+    if !cached_playlist_is_owned(spotify, &playlist_id) {
+        return false;
+    }
+    crate::spotify_desktop::current_playlist_contains_track(spotify, &track_id)
+}
+
+fn web_current_track_in_owned_playlist(
+    spotify: &SpotifyState,
+    playlist_id: Option<&str>,
+    track_id: Option<&str>,
+) -> bool {
+    let (Some(playlist_id), Some(track_id)) = (playlist_id, track_id) else {
+        return false;
+    };
+    if !cached_playlist_is_owned(spotify, playlist_id) {
+        return false;
+    }
+    web_playlist_contains_track(spotify, playlist_id, track_id).unwrap_or(false)
+}
+
+fn cached_playlist_is_owned(spotify: &SpotifyState, playlist_id: &str) -> bool {
+    if let Some(complete) = read_complete_playlist_cache(spotify, PLAYLIST_CACHE_TTL) {
+        return complete
+            .items
+            .iter()
+            .any(|playlist| playlist.id == playlist_id && playlist.owned);
+    }
+    if let Some(page) = read_playlist_cache_stale(spotify, 0, 50) {
+        return page
+            .items
+            .iter()
+            .any(|playlist| playlist.id == playlist_id && playlist.owned);
+    }
+    false
+}
+
+fn current_user_id(spotify: &SpotifyState) -> Result<String, String> {
+    if let Some(id) = spotify
+        .current_user_id
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+    {
+        return Ok(id);
+    }
+    let access_token = get_access_token(spotify)?;
+    let client = spotify_http_client()?;
+    let response = client
+        .get(SPOTIFY_ME_URL)
+        .bearer_auth(&access_token)
+        .send()
+        .map_err(|e| format!("Spotify profile request failed: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("Spotify profile request failed: {status} {body}"));
+    }
+    #[derive(Deserialize)]
+    struct MeResponse {
+        id: String,
+    }
+    let me: MeResponse = response.json().map_err(|e| e.to_string())?;
+    if let Ok(mut guard) = spotify.current_user_id.lock() {
+        *guard = Some(me.id.clone());
+    }
+    Ok(me.id)
+}
+
+pub fn list_add_playlists(
+    spotify: &SpotifyState,
+    track_id: &str,
+) -> Result<Vec<SpotifyAddPlaylist>, String> {
+    let owned = load_owned_playlists(spotify)?;
+    let current_id = if uses_web_api(spotify) {
+        read_playback_cache_stale(spotify)
+            .and_then(|summary| summary.context_playlist_id)
+            .or_else(|| {
+                read_playback_cache(spotify, Duration::from_secs(30))
+                    .and_then(|summary| summary.context_playlist_id)
+            })
+    } else {
+        crate::spotify_desktop::current_playlist_id(spotify)
+    };
+    let mut items = Vec::new();
+    for playlist in owned {
+        let is_current = current_id.as_deref() == Some(playlist.id.as_str());
+        let contains_track = if is_current && !uses_web_api(spotify) {
+            crate::spotify_desktop::current_playlist_contains_track(spotify, track_id)
+        } else if uses_web_api(spotify) {
+            web_playlist_contains_track(spotify, &playlist.id, track_id).unwrap_or(false)
+        } else {
+            crate::spotify_desktop::playlist_contains_track(spotify, &playlist.id, track_id)
+                .unwrap_or(false)
+        };
+        items.push(SpotifyAddPlaylist {
+            id: playlist.id,
+            name: playlist.name,
+            uri: playlist.uri,
+            image_url: playlist.image_url,
+            track_count: playlist.track_count,
+            contains_track,
+            is_current,
+        });
+    }
+    items.sort_by_key(|playlist| (!playlist.is_current, !playlist.contains_track, playlist.name.clone()));
+    Ok(items)
+}
+
+pub fn set_playlist_track(
+    spotify: &SpotifyState,
+    playlist_id: &str,
+    track_id: &str,
+    add: bool,
+) -> Result<Vec<SpotifyAddPlaylist>, String> {
+    if uses_web_api(spotify) {
+        web_set_playlist_track(spotify, playlist_id, track_id, add)?;
+    } else {
+        crate::spotify_desktop::set_playlist_track(spotify, playlist_id, track_id, add)?;
+    }
+    invalidate_playlist_cache(spotify);
+    list_add_playlists(spotify, track_id)
+}
+
+pub fn create_owned_playlist(
+    spotify: &SpotifyState,
+    name: &str,
+    track_id: Option<&str>,
+) -> Result<Vec<SpotifyAddPlaylist>, String> {
+    if uses_web_api(spotify) {
+        let created = web_create_playlist(spotify, name)?;
+        invalidate_playlist_cache(spotify);
+        if let Some(track_id) = track_id.filter(|id| !id.is_empty()) {
+            web_set_playlist_track(spotify, &created.id, track_id, true)?;
+            return list_add_playlists(spotify, track_id);
+        }
+        return list_add_playlists(spotify, "");
+    }
+    let created = crate::spotify_desktop::create_playlist(spotify, name)?;
+    invalidate_playlist_cache(spotify);
+    if let Some(track_id) = track_id.filter(|id| !id.is_empty()) {
+        crate::spotify_desktop::set_playlist_track(spotify, &created.id, track_id, true)?;
+        return list_add_playlists(spotify, track_id);
+    }
+    list_add_playlists(spotify, "")
+}
+
+fn load_owned_playlists(spotify: &SpotifyState) -> Result<Vec<SpotifyPlaylist>, String> {
+    let mut owned = Vec::new();
+    let mut offset = 0u32;
+    loop {
+        let page = list_playlists(spotify, offset, 50)?;
+        owned.extend(page.items.into_iter().filter(|playlist| playlist.owned));
+        match page.next_offset {
+            Some(next) => offset = next,
+            None => break,
+        }
+        if offset > 1000 {
+            break;
+        }
+    }
+    Ok(owned)
+}
+
+fn web_playlist_contains_track(
+    spotify: &SpotifyState,
+    playlist_id: &str,
+    track_id: &str,
+) -> Result<bool, String> {
+    let access_token = get_access_token(spotify)?;
+    let client = spotify_http_client()?;
+    let mut offset = 0u32;
+    loop {
+        let url = format!("https://api.spotify.com/v1/playlists/{playlist_id}/tracks");
+        let response = client
+            .get(&url)
+            .bearer_auth(&access_token)
+            .query(&[
+                ("fields", "items(track(id)),next".to_string()),
+                ("limit", "100".to_string()),
+                ("offset", offset.to_string()),
+            ])
+            .send()
+            .map_err(|e| format!("Spotify playlist tracks request failed: {e}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Spotify playlist tracks request failed: {status} {body}"
+            ));
+        }
+        #[derive(Deserialize)]
+        struct PlaylistTracksPage {
+            items: Vec<PlaylistTrackItem>,
+            next: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct PlaylistTrackItem {
+            track: Option<PlaybackItem>,
+        }
+        let page: PlaylistTracksPage = response.json().map_err(|e| e.to_string())?;
+        if page.items.iter().any(|item| {
+            item.track
+                .as_ref()
+                .and_then(|track| track.id.as_deref())
+                .is_some_and(|id| id.eq_ignore_ascii_case(track_id))
+        }) {
+            return Ok(true);
+        }
+        if page.next.is_none() || page.items.is_empty() {
+            return Ok(false);
+        }
+        offset += page.items.len() as u32;
+        if offset > 2000 {
+            return Ok(false);
+        }
+    }
+}
+
+fn web_set_playlist_track(
+    spotify: &SpotifyState,
+    playlist_id: &str,
+    track_id: &str,
+    add: bool,
+) -> Result<(), String> {
+    if add {
+        if has_scope(spotify, "playlist-modify-private")? {
+            // either public or private modify is enough for owned lists
+        } else {
+            ensure_scope(spotify, "playlist-modify-public")?;
+        }
+    } else if !has_scope(spotify, "playlist-modify-private")?
+        && !has_scope(spotify, "playlist-modify-public")?
+    {
+        return Err(
+            "Spotify token is missing playlist edit access. Disconnect and reconnect Spotify."
+                .to_string(),
+        );
+    }
+    if add && web_playlist_contains_track(spotify, playlist_id, track_id).unwrap_or(false) {
+        return Ok(());
+    }
+    if !add && !web_playlist_contains_track(spotify, playlist_id, track_id).unwrap_or(true) {
+        return Ok(());
+    }
+    let access_token = get_access_token(spotify)?;
+    let client = spotify_http_client()?;
+    let url = format!("https://api.spotify.com/v1/playlists/{playlist_id}/tracks");
+    let uri = library_track_uri(track_id);
+    let response = if add {
+        #[derive(Serialize)]
+        struct AddBody {
+            uris: Vec<String>,
+        }
+        client
+            .post(&url)
+            .bearer_auth(&access_token)
+            .json(&AddBody { uris: vec![uri] })
+            .send()
+            .map_err(|e| format!("Spotify playlist add failed: {e}"))?
+    } else {
+        #[derive(Serialize)]
+        struct RemoveBody {
+            tracks: Vec<RemoveTrack>,
+        }
+        #[derive(Serialize)]
+        struct RemoveTrack {
+            uri: String,
+        }
+        client
+            .delete(&url)
+            .bearer_auth(&access_token)
+            .json(&RemoveBody {
+                tracks: vec![RemoveTrack { uri }],
+            })
+            .send()
+            .map_err(|e| format!("Spotify playlist remove failed: {e}"))?
+    };
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("Spotify playlist update failed: {status} {body}"));
+    }
+    Ok(())
+}
+
+fn web_create_playlist(spotify: &SpotifyState, name: &str) -> Result<SpotifyPlaylist, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Playlist name is required.".to_string());
+    }
+    let access_token = get_access_token(spotify)?;
+    let client = spotify_http_client()?;
+    #[derive(Serialize)]
+    struct CreateBody {
+        name: String,
+        public: bool,
+    }
+    let response = client
+        .post(SPOTIFY_PLAYLISTS_URL)
+        .bearer_auth(&access_token)
+        .json(&CreateBody {
+            name: name.to_string(),
+            public: false,
+        })
+        .send()
+        .map_err(|e| format!("Spotify playlist create failed: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("Spotify playlist create failed: {status} {body}"));
+    }
+    #[derive(Deserialize)]
+    struct CreatedPlaylist {
+        id: String,
+        name: Option<String>,
+        uri: Option<String>,
+    }
+    let created: CreatedPlaylist = response.json().map_err(|e| e.to_string())?;
+    Ok(SpotifyPlaylist {
+        uri: created
+            .uri
+            .unwrap_or_else(|| format!("spotify:playlist:{}", created.id)),
+        image_url: None,
+        track_count: 0,
+        owner_name: Some("You".to_string()),
+        owned: true,
+        id: created.id,
+        name: created.name.unwrap_or_else(|| name.to_string()),
+    })
 }
 
 fn playback_item_image_url(item: &PlaybackItem) -> Option<String> {
@@ -3537,6 +3945,8 @@ mod tests {
         assert!(oauth_scopes(SpotifyAuthMode::Custom).contains("playlist-read-private"));
         assert!(oauth_scopes(SpotifyAuthMode::Custom)
             .contains("user-read-recently-played"));
+        assert!(oauth_scopes(SpotifyAuthMode::Custom).contains("playlist-modify-private"));
+        assert!(oauth_scopes(SpotifyAuthMode::Custom).contains("playlist-modify-public"));
         assert!(!oauth_scopes(SpotifyAuthMode::Custom)
             .split_whitespace()
             .any(|scope| scope == "streaming"));
