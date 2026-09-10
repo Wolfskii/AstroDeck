@@ -1,8 +1,12 @@
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
+use rodio::{Decoder, OutputStreamBuilder, Sink};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    mpsc::{self, Sender},
+};
+use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 use ytmusic::YtMusic;
@@ -92,8 +96,7 @@ impl Default for YouTubePlayback {
 pub struct YouTubeMusicState {
     api: Arc<YtMusic>,
     playback: Mutex<YouTubePlayback>,
-    output_stream: Mutex<Option<OutputStream>>,
-    sink: Mutex<Option<Arc<Sink>>>,
+    audio_tx: Mutex<Option<Sender<AudioCommand>>>,
     app_handle: Mutex<Option<tauri::AppHandle>>,
     library_path: Mutex<Option<std::path::PathBuf>>,
 }
@@ -103,10 +106,92 @@ impl Default for YouTubeMusicState {
         Self {
             api: Arc::new(YtMusic::anonymous()),
             playback: Mutex::new(YouTubePlayback::default()),
-            output_stream: Mutex::new(None),
-            sink: Mutex::new(None),
+            audio_tx: Mutex::new(None),
             app_handle: Mutex::new(None),
             library_path: Mutex::new(None),
+        }
+    }
+}
+
+enum AudioCommand {
+    Play {
+        bytes: Vec<u8>,
+        volume: u8,
+        result: Sender<Result<(), String>>,
+    },
+    Pause,
+    Resume,
+    Volume(u8),
+    Seek(Duration),
+}
+
+fn ensure_audio_worker(state: &YouTubeMusicState) -> Result<Sender<AudioCommand>, String> {
+    let mut guard = state.audio_tx.lock().map_err(|error| error.to_string())?;
+    if let Some(sender) = guard.as_ref() {
+        return Ok(sender.clone());
+    }
+    let (sender, receiver) = mpsc::channel();
+    thread::Builder::new()
+        .name("youtube-audio".to_string())
+        .spawn(move || audio_worker(receiver))
+        .map_err(|error| format!("Audio worker could not start: {error}"))?;
+    *guard = Some(sender.clone());
+    Ok(sender)
+}
+
+fn audio_worker(receiver: mpsc::Receiver<AudioCommand>) {
+    let Ok(output_stream) = OutputStreamBuilder::open_default_stream() else {
+        while let Ok(command) = receiver.recv() {
+            if let AudioCommand::Play { result, .. } = command {
+                let _ = result.send(Err("Audio output could not be opened.".to_string()));
+            }
+        }
+        return;
+    };
+    let mut sink: Option<Sink> = None;
+    while let Ok(command) = receiver.recv() {
+        match command {
+            AudioCommand::Play {
+                bytes,
+                volume,
+                result,
+            } => {
+                let decoded = Decoder::try_from(Cursor::new(bytes))
+                    .map_err(|error| format!("YouTube Music audio could not be decoded: {error}"));
+                match decoded {
+                    Ok(source) => {
+                        let player = Sink::connect_new(output_stream.mixer());
+                        player.set_volume(f32::from(volume) / 100.0);
+                        player.append(source);
+                        player.play();
+                        sink = Some(player);
+                        let _ = result.send(Ok(()));
+                    }
+                    Err(error) => {
+                        let _ = result.send(Err(error));
+                    }
+                }
+            }
+            AudioCommand::Pause => {
+                if let Some(player) = sink.as_ref() {
+                    player.pause();
+                }
+            }
+            AudioCommand::Resume => {
+                if let Some(player) = sink.as_ref() {
+                    player.play();
+                }
+            }
+            AudioCommand::Volume(volume) => {
+                if let Some(player) = sink.as_ref() {
+                    player.set_volume(f32::from(volume) / 100.0);
+                }
+            }
+            AudioCommand::Seek(position) => {
+                if let Some(player) = sink.as_ref() {
+                    let _ = player.try_seek(position);
+                }
+            }
         }
     }
 }
@@ -365,25 +450,23 @@ pub fn play(
     let (_format, bytes) = runtime()
         .block_on(state.api.load_audio(&track.video_id))
         .map_err(|error| format!("YouTube Music could not play this track: {error}"))?;
-    let source = Decoder::try_from(Cursor::new(bytes))
-        .map_err(|error| format!("YouTube Music audio could not be decoded: {error}"))?;
-    let output_stream = OutputStreamBuilder::open_default_stream()
-        .map_err(|error| format!("Audio output could not be opened: {error}"))?;
-    let sink = Sink::connect_new(output_stream.mixer());
     let volume = state
         .playback
         .lock()
         .map(|playback| playback.volume_percent)
         .unwrap_or(80);
-    sink.set_volume(f32::from(volume) / 100.0);
-    sink.append(source);
-    sink.play();
-
-    *state
-        .output_stream
-        .lock()
-        .map_err(|error| error.to_string())? = Some(output_stream);
-    *state.sink.lock().map_err(|error| error.to_string())? = Some(Arc::new(sink));
+    let sender = ensure_audio_worker(state)?;
+    let (result_tx, result_rx) = mpsc::channel();
+    sender
+        .send(AudioCommand::Play {
+            bytes,
+            volume,
+            result: result_tx,
+        })
+        .map_err(|error| format!("Audio worker is unavailable: {error}"))?;
+    result_rx
+        .recv_timeout(Duration::from_secs(20))
+        .map_err(|error| format!("Audio worker timed out: {error}"))??;
     {
         let mut playback = state.playback.lock().map_err(|error| error.to_string())?;
         playback.track = Some(track);
@@ -396,13 +479,6 @@ pub fn play(
 }
 
 pub fn toggle_play(state: &YouTubeMusicState) -> Result<(), String> {
-    let sink = {
-        let guard = state.sink.lock().map_err(|error| error.to_string())?;
-        guard
-            .as_ref()
-            .ok_or_else(|| "YouTube Music has no selected track.".to_string())?
-            .clone()
-    };
     let mut playback = state.playback.lock().map_err(|error| error.to_string())?;
     if playback.is_playing {
         playback.progress_ms += playback
@@ -411,11 +487,15 @@ pub fn toggle_play(state: &YouTubeMusicState) -> Result<(), String> {
             .unwrap_or(0);
         playback.progress_at = None;
         playback.is_playing = false;
-        sink.pause();
+        ensure_audio_worker(state)?
+            .send(AudioCommand::Pause)
+            .map_err(|error| error.to_string())?;
     } else {
         playback.progress_at = Some(Instant::now());
         playback.is_playing = true;
-        sink.play();
+        ensure_audio_worker(state)?
+            .send(AudioCommand::Resume)
+            .map_err(|error| error.to_string())?;
     }
     drop(playback);
     publish_status(state);
@@ -423,13 +503,8 @@ pub fn toggle_play(state: &YouTubeMusicState) -> Result<(), String> {
 }
 
 pub fn pause(state: &YouTubeMusicState) {
-    let sink = state
-        .sink
-        .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().cloned());
-    if let Some(sink) = sink {
-        sink.pause();
+    if let Ok(sender) = ensure_audio_worker(state) {
+        let _ = sender.send(AudioCommand::Pause);
     }
     if let Ok(mut playback) = state.playback.lock() {
         if playback.is_playing {
@@ -446,14 +521,9 @@ pub fn pause(state: &YouTubeMusicState) {
 
 pub fn set_volume(state: &YouTubeMusicState, volume_percent: u8) -> Result<u8, String> {
     let volume_percent = volume_percent.min(100);
-    if let Some(sink) = state
-        .sink
-        .lock()
-        .map_err(|error| error.to_string())?
-        .as_ref()
-    {
-        sink.set_volume(f32::from(volume_percent) / 100.0);
-    }
+    ensure_audio_worker(state)?
+        .send(AudioCommand::Volume(volume_percent))
+        .map_err(|error| error.to_string())?;
     if let Ok(mut playback) = state.playback.lock() {
         playback.volume_percent = volume_percent;
     }
@@ -532,15 +602,9 @@ pub fn navigate(state: &YouTubeMusicState, direction: i32) -> Result<(), String>
 }
 
 pub fn seek(state: &YouTubeMusicState, position_ms: u64) -> Result<(), String> {
-    let sink = {
-        let guard = state.sink.lock().map_err(|error| error.to_string())?;
-        guard
-            .as_ref()
-            .ok_or_else(|| "YouTube Music has no selected track.".to_string())?
-            .clone()
-    };
-    sink.try_seek(Duration::from_millis(position_ms))
-        .map_err(|error| format!("YouTube Music seek failed: {error}"))?;
+    ensure_audio_worker(state)?
+        .send(AudioCommand::Seek(Duration::from_millis(position_ms)))
+        .map_err(|error| error.to_string())?;
     if let Ok(mut playback) = state.playback.lock() {
         playback.progress_ms = position_ms;
         playback.progress_at = playback.is_playing.then(Instant::now);
