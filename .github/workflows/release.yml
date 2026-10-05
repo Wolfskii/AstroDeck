@@ -132,7 +132,26 @@ jobs:
         run: npm run build
 
       - name: Build Tauri bundles
-        run: npx tauri build --target ${{ matrix.rust_target }}
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.platform }}" = "linux" ]; then
+            # deb/rpm do not need the flaky AppRun download used by AppImage.
+            npx tauri build --target "${{ matrix.rust_target }}" --bundles deb,rpm
+            appimage_ok=0
+            for attempt in 1 2 3; do
+              echo "AppImage bundle attempt ${attempt}/3"
+              if npx tauri build --target "${{ matrix.rust_target }}" --bundles appimage; then
+                appimage_ok=1
+                break
+              fi
+              sleep $((attempt * 8))
+            done
+            if [ "$appimage_ok" -ne 1 ]; then
+              echo "::warning::AppImage bundling failed after retries (often a transient AppRun download). Continuing with deb/rpm."
+            fi
+          else
+            npx tauri build --target "${{ matrix.rust_target }}"
+          fi
         env:
           CI: true
 
