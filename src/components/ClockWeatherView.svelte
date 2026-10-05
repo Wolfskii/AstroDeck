@@ -17,6 +17,7 @@
   let {
     nowPlaying = null,
     onOpenPlaying,
+    weatherEnabled = true,
   }: {
     nowPlaying?: {
       sceneId: "spotify" | "youtubeMusic" | "media";
@@ -25,6 +26,7 @@
       playing: boolean;
     } | null;
     onOpenPlaying?: (sceneId: "spotify" | "youtubeMusic" | "media") => void;
+    weatherEnabled?: boolean;
   } = $props();
 
   const nowPlayingLabel = $derived(
@@ -278,13 +280,18 @@
       <div
         class="weather"
         class:weather-card={$clockWeatherCard}
+        class:weather-open={weatherEnabled}
         style={$clockWeatherCard
-          ? "background-color: rgba(10, 14, 22, 0.38); border: none; border-radius: 32px; padding: 5.4rem 6.8rem 5.6rem; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);"
+          ? "background-color: rgba(10, 14, 22, 0.38); border: none; border-radius: 32px; padding: 5.4rem 8.2rem 5.6rem 5.4rem; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);"
           : undefined}
         role="button"
+        aria-disabled={!weatherEnabled}
         tabindex="0"
-        onclick={() => weatherDetailOpen.set(true)}
+        onclick={() => {
+          if (weatherEnabled) weatherDetailOpen.set(true);
+        }}
         onkeydown={(event) => {
+          if (!weatherEnabled) return;
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             weatherDetailOpen.set(true);
@@ -517,13 +524,17 @@
     background: transparent;
     color: inherit;
     text-align: left;
+    cursor: default;
+  }
+
+  .weather.weather-open {
     cursor: pointer;
   }
 
   .weather.weather-card {
     border: none;
     border-radius: 32px;
-    padding: 5.4rem 6.8rem 5.6rem;
+    padding: 5.4rem 8.2rem 5.6rem 5.4rem;
     background-color: rgba(10, 14, 22, 0.38);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
   }

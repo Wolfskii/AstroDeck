@@ -21,15 +21,16 @@ These are dispatched in `src-tauri/src/actions/mod.rs`.
 
 ## Value-Based Actions
 
-Some actions also accept a numeric payload through `execute_action_value`.
+Some actions also accept a payload through `execute_action_value`.
 
-Current built-in value action:
+| Action | Payload |
+|--------|---------|
+| `spotify.setVolume`, `youtubeMusic.setVolume`, `media.setVolume` | Volume `0-100` |
+| `spotify.seek`, `youtubeMusic.seek`, `media.seek` | Position in milliseconds |
+| `youtubeMusic.like` | Boolean saved state |
+| `spotify.playPlaylist` | Playlist id or URI |
 
-| Action | Description |
-|--------|-------------|
-| `spotify.setVolume` | Sets Spotify device volume to `0-100` |
-
-This is used by the reusable media-player scene slider.
+The media player uses these for the volume slider and the progress bar.
 
 ## Declarative Plugin Actions
 
@@ -61,8 +62,10 @@ Examples:
 
 | Namespace | Description |
 |-----------|-------------|
+| `spotify` | Spotify playback, library, and playlists |
+| `youtubeMusic` | Guest YouTube Music playback and saved tracks |
+| `media` | System now-playing transport, seek, and output volume |
 | `teams` | Teams meeting controls |
-| `spotify` | Spotify controls and Spotify Web API integration |
 | `core` | App-level actions such as settings and refresh |
 
 ## Spotify Actions
@@ -73,7 +76,47 @@ Examples:
 | `spotify.nextTrack` | Next track |
 | `spotify.prevTrack` | Previous track |
 | `spotify.like` | Toggle saved-track state in the user library |
-| `spotify.setVolume` | Set Spotify device volume using a slider/value payload |
+| `spotify.toggleShuffle` | Toggle shuffle |
+| `spotify.setVolume` | Set volume from `0-100` |
+| `spotify.seek` | Seek to a position in milliseconds |
+| `spotify.playPlaylist` | Play a playlist id or `spotify:playlist:` URI |
+| `spotify.volumeUp` / `spotify.volumeDown` | Nudge device volume |
+
+Official Spotify sign-in plays inside AstroDeck. Transport for that mode does not require the Spotify desktop app. A custom Client ID uses the Web API.
+
+## YouTube Music Actions
+
+| Action | Description |
+|--------|-------------|
+| `youtubeMusic.togglePlay` | Toggle play/pause |
+| `youtubeMusic.nextTrack` | Next track |
+| `youtubeMusic.prevTrack` | Previous track |
+| `youtubeMusic.like` | Save or unsave the current track in the local guest library |
+| `youtubeMusic.toggleShuffle` | Toggle shuffle |
+| `youtubeMusic.setVolume` | Set volume from `0-100` |
+| `youtubeMusic.seek` | Seek to a position in milliseconds |
+
+## System Media Actions
+
+| Action | Description |
+|--------|-------------|
+| `media.togglePlay` | Toggle play/pause on the system session |
+| `media.nextTrack` | Next track |
+| `media.prevTrack` | Previous track |
+| `media.setVolume` | Set the computer's output volume from `0-100` |
+| `media.seek` | Seek to a position in milliseconds |
+
+## Teams Actions
+
+| Action | Description |
+|--------|-------------|
+| `teams.reaction.like` / `.heart` / `.clap` / `.laugh` / `.wow` | Send a meeting reaction through the Teams device API |
+| `teams.toggleMute` | Mute or unmute (`Ctrl+Shift+M`) |
+| `teams.toggleCamera` | Camera (`Ctrl+Shift+O`) |
+| `teams.shareScreen` | Share (`Ctrl+Shift+E`) |
+| `teams.raiseHand` | Raise hand (`Ctrl+Shift+K`) |
+| `teams.chat` | Open chat through the Teams API |
+| `teams.leaveMeeting` | Leave (`Ctrl+Shift+H`) |
 
 ## Notes
 

@@ -64,6 +64,61 @@ export async function setHideTaskbarIcon(enabled: boolean): Promise<void> {
   await invoke("set_hide_taskbar_icon", { enabled });
 }
 
+const CUSTOM_VIEWS_KEY = "astrodeck:customViews";
+
+export type CustomViewPref = {
+  id: string;
+  name: string;
+  url: string;
+  icon: string;
+  color: string;
+};
+
+export async function getCustomViews(): Promise<CustomViewPref[]> {
+  if (!isTauri) {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(CUSTOM_VIEWS_KEY) ?? "[]");
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return invoke<CustomViewPref[]>("get_custom_views");
+}
+
+export async function setCustomViews(views: CustomViewPref[]): Promise<CustomViewPref[]> {
+  if (!isTauri) {
+    window.localStorage.setItem(CUSTOM_VIEWS_KEY, JSON.stringify(views));
+    return views;
+  }
+  return invoke<CustomViewPref[]>("set_custom_views", { views });
+}
+
+const DISABLED_APPS_KEY = "astrodeck:disabledApps";
+
+export async function getDisabledApps(): Promise<string[]> {
+  if (!isTauri) {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(DISABLED_APPS_KEY) ?? "[]");
+      return Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+  return invoke<string[]>("get_disabled_apps");
+}
+
+export async function setAppEnabled(appId: string, enabled: boolean): Promise<string[]> {
+  if (!isTauri) {
+    const current = await getDisabledApps();
+    const next = current.filter((id) => id !== appId);
+    if (!enabled) next.push(appId);
+    window.localStorage.setItem(DISABLED_APPS_KEY, JSON.stringify(next));
+    return next;
+  }
+  return invoke<string[]>("set_app_enabled", { appId, enabled });
+}
+
 export async function getStartFullscreen(): Promise<boolean> {
   if (!isTauri) return false;
   return invoke<boolean>("get_start_fullscreen");

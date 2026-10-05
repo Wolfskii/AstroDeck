@@ -18,14 +18,15 @@ Each cycle:
 
 ## Built-In Detectors
 
-Built-in detectors still exist for:
+Built-in detectors exist for:
 
-- `default`
 - `teams`
 - `spotify`
 - `vscode`
 
-If a plugin defines explicit trigger rules, those trigger rules are used as the authoritative match instead of letting the hardcoded detector bypass stricter filters.
+System media is added when a local now-playing session is active. YouTube Music, Home, Weather, and saved websites are opened from the sidebar and are not detected from running processes.
+
+If a plugin defines explicit trigger rules, those rules are the match. The hardcoded detector does not bypass them.
 
 ## Trigger Fields
 

@@ -53,6 +53,10 @@ pub struct AppPreferences {
     pub clock_weather_card: bool,
     #[serde(default = "default_clock_weather_card_color")]
     pub clock_weather_card_color: String,
+    #[serde(default)]
+    pub custom_views: Vec<CustomViewPref>,
+    #[serde(default)]
+    pub disabled_apps: Vec<String>,
 }
 
 impl Default for AppPreferences {
@@ -81,6 +85,8 @@ impl Default for AppPreferences {
             clock_bg_color: default_clock_bg_color(),
             clock_weather_card: false,
             clock_weather_card_color: default_clock_weather_card_color(),
+            custom_views: Vec::new(),
+            disabled_apps: Vec::new(),
         }
     }
 }
@@ -142,6 +148,98 @@ fn default_clock_bg_color() -> String {
 
 fn default_clock_weather_card_color() -> String {
     "#c5dbe8".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CustomViewPref {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub color: String,
+}
+
+fn sanitize_custom_view(view: CustomViewPref) -> Result<CustomViewPref, String> {
+    let id = view.id.trim().to_string();
+    if id.len() < 12
+        || id.len() > 64
+        || !id.starts_with("view-")
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("Custom view id is invalid".to_string());
+    }
+    let name = view.name.trim();
+    if name.is_empty() || name.chars().count() > 40 {
+        return Err("Give the app a name of 40 characters or fewer".to_string());
+    }
+    let url = sanitize_embed_url(&view.url)?;
+    let icon = view.icon.trim().to_ascii_lowercase();
+    if icon.is_empty()
+        || icon.len() > 48
+        || !icon
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err("Choose an icon for the app".to_string());
+    }
+    Ok(CustomViewPref {
+        id,
+        name: name.to_string(),
+        url,
+        icon,
+        color: parse_hex_color(&view.color, "#38bdf8"),
+    })
+}
+
+fn sanitize_embed_url(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 2000 {
+        return Err("Enter an http or https website address".to_string());
+    }
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("https://{trimmed}")
+    };
+    let scheme = with_scheme
+        .split_once("://")
+        .map(|(scheme, _)| scheme.to_ascii_lowercase());
+    if scheme.as_deref() != Some("http") && scheme.as_deref() != Some("https") {
+        return Err("Only http and https websites can be embedded".to_string());
+    }
+    if with_scheme.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
+        return Err("That website address has invalid characters".to_string());
+    }
+    if let Some(rest) = with_scheme.split_once("://").map(|(_, rest)| rest) {
+        let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+        if host.is_empty() || host.contains('@') {
+            return Err("Enter a website address without a username or password".to_string());
+        }
+    }
+    Ok(with_scheme)
+}
+
+fn sanitize_custom_views(views: Vec<CustomViewPref>) -> Result<Vec<CustomViewPref>, String> {
+    if views.len() > 30 {
+        return Err("You can add up to 30 apps".to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut clean = Vec::with_capacity(views.len());
+    for view in views {
+        let next = sanitize_custom_view(view)?;
+        if !seen.insert(next.id.clone()) {
+            return Err("Two apps have the same id".to_string());
+        }
+        clean.push(next);
+    }
+    Ok(clean)
 }
 
 fn parse_clock_digit_border_width(value: u8) -> u8 {
@@ -317,6 +415,65 @@ pub fn set_hide_taskbar_icon(app: tauri::AppHandle, enabled: bool) -> Result<(),
     save_preferences(&path, &preferences)?;
     crate::window_prefs::refresh_taskbar_button(&app);
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_custom_views(app: tauri::AppHandle) -> Result<Vec<CustomViewPref>, String> {
+    let views = load_preferences(&preferences_path(&app)?)?.custom_views;
+    Ok(views
+        .into_iter()
+        .filter_map(|view| sanitize_custom_view(view).ok())
+        .take(30)
+        .collect())
+}
+
+#[tauri::command]
+pub fn set_custom_views(
+    app: tauri::AppHandle,
+    views: Vec<CustomViewPref>,
+) -> Result<Vec<CustomViewPref>, String> {
+    let views = sanitize_custom_views(views)?;
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.custom_views = views.clone();
+    save_preferences(&path, &preferences)?;
+    Ok(views)
+}
+
+fn known_app_id(id: &str) -> bool {
+    matches!(
+        id,
+        "clock" | "spotify" | "youtubeMusic" | "media" | "teams" | "vscode" | "weather"
+    ) || (id.starts_with("view-")
+        && (12..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+}
+
+#[tauri::command]
+pub fn get_disabled_apps(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let apps = load_preferences(&preferences_path(&app)?)?.disabled_apps;
+    Ok(apps.into_iter().filter(|id| known_app_id(id)).collect())
+}
+
+#[tauri::command]
+pub fn set_app_enabled(
+    app: tauri::AppHandle,
+    app_id: String,
+    enabled: bool,
+) -> Result<Vec<String>, String> {
+    if !known_app_id(&app_id) {
+        return Err("That app is not available".to_string());
+    }
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.disabled_apps.retain(|id| id != &app_id && known_app_id(id));
+    if !enabled {
+        preferences.disabled_apps.push(app_id);
+    }
+    save_preferences(&path, &preferences)?;
+    Ok(preferences.disabled_apps)
 }
 
 #[tauri::command]
@@ -579,7 +736,12 @@ pub fn set_audio_visualizer_emit(app: tauri::AppHandle, emit: bool) -> Result<()
 pub fn auto_switch_enabled(app: &tauri::AppHandle, scene_id: &str) -> bool {
     preferences_path(app)
         .and_then(|path| load_preferences(&path))
-        .map(|preferences| auto_switch_from_map(&preferences.auto_switch_scenes, scene_id))
+        .map(|preferences| {
+            if preferences.disabled_apps.iter().any(|id| id == scene_id) {
+                return false;
+            }
+            auto_switch_from_map(&preferences.auto_switch_scenes, scene_id)
+        })
         .unwrap_or(true)
 }
 

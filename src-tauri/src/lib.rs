@@ -557,6 +557,16 @@ fn persist_window_state(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn begin_text_input() {
+    no_activate::begin_text_input();
+}
+
+#[tauri::command]
+fn end_text_input() {
+    no_activate::end_text_input();
+}
+
+#[tauri::command]
 fn show_main_window_no_activate(app: tauri::AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
@@ -634,6 +644,8 @@ pub fn run() {
             persist_window_state,
             restore_window_show_state,
             show_main_window_no_activate,
+            begin_text_input,
+            end_text_input,
             quit_app,
             updater::get_app_version,
             updater::check_for_app_update,
@@ -644,6 +656,10 @@ pub fn run() {
             prefs::set_start_minimized,
             prefs::get_hide_taskbar_icon,
             prefs::set_hide_taskbar_icon,
+            prefs::get_custom_views,
+            prefs::set_custom_views,
+            prefs::get_disabled_apps,
+            prefs::set_app_enabled,
             prefs::get_start_fullscreen,
             prefs::set_start_fullscreen,
             prefs::get_scene_background,

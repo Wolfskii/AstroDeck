@@ -1,5 +1,7 @@
 # AstroDeck Roadmap
 
+The app today is the dashboard described in the [README](../README.md): Home, Spotify, YouTube Music, system media, Teams, Weather, websites, and a left sidebar. The phases below are older plans and are not a list of what is missing.
+
 ## Phase 1: Local Deck Foundation (Current)
 
 - **Detectors**: Process-based detection via `sysinfo`; trait-based detector system

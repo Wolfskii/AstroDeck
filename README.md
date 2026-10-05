@@ -10,14 +10,43 @@
   </a>
 </p>
 
-A context-aware control deck for touchscreen monitors. Dynamically changes its UI depending on which applications are running.
+Your other screen, ready for anything. AstroDeck is a free, modern dashboard for time, music, and everyday apps, with built-in Spotify and YouTube Music support. Use a mouse or control it with your touchscreen. No extra hardware required.
+
+## Apps
+
+Open an app from the bar on the left. **Settings → Apps** turns any of them on or off. Settings itself stays in the bar.
+
+| App | What you get |
+| --- | --- |
+| Home | Clock, today's date, local weather, and the track that is playing, with previous, play/pause, and next |
+| Spotify | Now playing, playlists, likes, shuffle, volume, and seek |
+| YouTube | YouTube Music search and playback, saved songs, and local playlists |
+| System media | Whatever the computer is already playing |
+| Teams | Meeting controls: reactions, mute, camera, share, raise hand, chat, and leave |
+| VS Code | A workspace page aimed at VS Code and Cursor |
+| Weather | A forecast for the same place shown on Home |
+| Websites | Any site you add in Settings. It fills the window, with the sidebar still on top |
+
+Some websites refuse to be shown inside another app and stay blank.
+
+## Connections
+
+| Connection | How it works |
+| --- | --- |
+| Spotify | Sign in from **Settings → Spotify**. The built-in sign-in plays through AstroDeck and needs Spotify Premium. A developer Client ID uses Spotify's Web API for likes, shuffle, and device volume. |
+| YouTube Music | No Google sign-in. Playback uses a guest profile stored on this computer. Lyrics can fall back through LRCLIB, Musixmatch, Kugou, and NetEase, in the order you set. |
+| System media | Reads the computer's now-playing session and controls play, skip, seek, and output volume. |
+| Microsoft Teams | **Settings → Microsoft Teams** turns on the local Teams device API for reactions, chat, and meeting state. Mute, camera, share, raise hand, and leave use Teams keyboard shortcuts. Restart Teams after setup. |
+| Weather | Home and the Weather app use [Open-Meteo](https://open-meteo.com/) for the computer's location, or a place you set under **Settings → Home**. |
+
+The window can sit in the system tray. Closing it hides AstroDeck instead of quitting. From **Settings → General** you can start with the computer, start in the tray, or hide the Windows taskbar button while the window is open.
 
 ## Features
 
-- **Context-aware switching** — Automatically detects running applications and switches to the appropriate control layout
-- **Plugin system** — Extensible via JSON-based plugins for custom apps and workflows
-- **Touchscreen-optimized UI** — Large, touch-friendly buttons and layouts designed for monitors
-- **Cross-platform** — Runs on Windows, macOS, and Linux
+- **Sidebar** — Home, music, Teams, weather, websites you add, and Settings
+- **Touch or mouse** — Large controls. Touch is optional
+- **Plugin system** — Extra apps can still be added as JSON plugins
+- **Windows, macOS, and Linux**
 
 ## Tech Stack
 
@@ -127,8 +156,8 @@ npm run package:linux
 
 ```
 AstroDeck/
-├── src/              # Svelte frontend (modes, layouts, components)
-├── src-tauri/        # Rust backend (detectors, actions, layout engine)
+├── src/              # Svelte frontend (sidebar, Home, music, settings)
+├── src-tauri/        # Rust backend (Spotify, YouTube Music, media, Teams, weather)
 ├── plugins/          # Built-in plugin folders and manifests
 ├── scripts/          # Packaging and helper scripts
 ├── docs/             # Documentation
@@ -137,15 +166,25 @@ AstroDeck/
 
 ## Adding Plugins
 
-Drop a JSON file in the `plugins/` directory. Each plugin must follow the schema:
+Built-in apps live in `plugins/` as folders with a `plugin.json`:
 
-- `id` — Unique plugin identifier
-- `name` — Display name
-- `priority` — Detection priority (higher = preferred when multiple match)
-- `triggers` — Process/window matching rules
-- `layout` — Button grid and actions
+- `clock` — Home
+- `spotify`
+- `youtubeMusic`
+- `media` — system media
+- `teams`
+- `vscode`
 
-See existing plugins (`default.json`, `vscode.json`, `spotify.json`, `teams.json`) for examples.
+A plugin folder needs:
+
+- `id` — unique id, also the sidebar scene id
+- `name` — display name
+- `priority` — used when more than one app is detected
+- `triggers` — optional process or window rules
+- `view` — optional screen, such as `mediaPlayer`
+- `layout` — button grid used when the app has no dedicated screen
+
+User plugins in `~/AstroDeck/plugins/` override a built-in with the same `id`. See [Plugins](docs/plugins.md).
 
 ## Documentation
 
