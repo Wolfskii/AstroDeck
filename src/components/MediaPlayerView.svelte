@@ -1,6 +1,6 @@
 <script lang="ts">
   import "@fontsource/dseg7-classic/400.css";
-  import appIconUrl from "../assets/app-icon.png";
+  import ChooseViewButton from "./ChooseViewButton.svelte";
   import microphoneLyricsUrl from "../assets/microphone-reference.png";
   import type { DeckButtonConfig } from "../types";
   import {
@@ -614,15 +614,7 @@
       <div class="car-shader-scrim" aria-hidden="true"></div>
     {/if}
     {#if showSettingsButton && onOpenSettings}
-      <button
-        type="button"
-        class="car-settings-btn"
-        title="Choose view"
-        aria-label="Choose view"
-        onclick={() => onOpenSettings()}
-      >
-        <img class="car-app-icon" src={appIconUrl} alt="" aria-hidden="true" />
-      </button>
+      <ChooseViewButton onclick={() => onOpenSettings()} />
     {/if}
     {#if playlistsEnabled}
       <button
@@ -856,6 +848,7 @@
             {/if}
           </button>
         {/if}
+        {#if shuffle}
           <button
             type="button"
             class="car-transport-btn"
@@ -1107,23 +1100,6 @@
     );
   }
 
-  .car-settings-btn {
-    position: absolute;
-    top: 8px;
-    left: 12px;
-    z-index: 2;
-    padding: 4px;
-    border: none;
-    border-radius: 12px;
-    background: transparent;
-    line-height: 0;
-    cursor: pointer;
-  }
-
-  .car-settings-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
-  }
-
   .car-playlists-btn {
     position: absolute;
     top: 18px;
@@ -1210,12 +1186,6 @@
     background: rgba(255, 255, 255, 0.12);
   }
 
-  .car-app-icon {
-    display: block;
-    width: 96px;
-    height: 96px;
-    object-fit: contain;
-  }
 
   .car-now-playing {
     position: relative;
@@ -1371,7 +1341,7 @@
   }
 
   .car-thing-body--has-icon .car-now-playing {
-    padding-top: 100px;
+    padding-top: 112px;
   }
 
   .car-now-playing-inner {
