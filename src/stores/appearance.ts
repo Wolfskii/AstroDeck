@@ -31,6 +31,8 @@ import {
   getSettingsTheme,
   parseSettingsTheme,
   setSettingsTheme,
+  getPerformanceFrosted,
+  setPerformanceFrosted,
   type SettingsThemeId,
 } from "../services/prefs";
 import { subscribeOsAudioError } from "../lib/osAudioViz";
@@ -142,6 +144,7 @@ export const audioVisualizerEnabled = writable(readStoredAudioVisualizer());
 export const audioVisualizerSupported = writable(false);
 export const audioVisualizerError = writable<string | null>(null);
 export const settingsTheme = writable<SettingsThemeId>(readStoredTheme());
+export const performanceFrosted = writable(true);
 export const osPrefersDark = writable(readOsPrefersDark());
 export const settingsDark = derived(
   [settingsTheme, osPrefersDark],
@@ -314,6 +317,11 @@ export async function hydrateSceneBackground(): Promise<void> {
   } catch {
     // keep local value
   }
+  try {
+    performanceFrosted.set(await getPerformanceFrosted());
+  } catch {
+    // keep local value
+  }
 }
 
 export function persistSceneBackground(id: SceneBackgroundId): void {
@@ -363,6 +371,11 @@ export function persistSettingsTheme(theme: SettingsThemeId): void {
   void setSettingsTheme(next).then((saved) => {
     settingsTheme.set(parseSettingsTheme(saved));
   });
+}
+
+export function persistPerformanceFrosted(enabled: boolean): void {
+  performanceFrosted.set(enabled);
+  void setPerformanceFrosted(enabled);
 }
 
 export function previewControlsOverlayColor(color: string): void {

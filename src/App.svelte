@@ -8,6 +8,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import ClockWeatherView from "./components/ClockWeatherView.svelte";
+  import PerformanceView from "./components/PerformanceView.svelte";
   import WeatherView from "./components/WeatherView.svelte";
   import DeckGrid from "./components/DeckGrid.svelte";
   import MediaPlayerView from "./components/MediaPlayerView.svelte";
@@ -87,7 +88,7 @@
   import { hydrateSceneBackground, sceneBackgroundId } from "./stores/appearance";
   import { sceneShaderColors, sceneShaderImage } from "./stores/sceneVisual";
   import { clockBgColor, clockBgColorCustom, clockDigitColor, loadClockSettings } from "./stores/clock";
-  import { weatherDetailOpen } from "./stores/navigation";
+  import { performanceOpen, weatherDetailOpen } from "./stores/navigation";
   import { startWeatherUpdates } from "./stores/weather";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
@@ -120,12 +121,12 @@
   let disabledApps = $state<string[]>([]);
   let appToggleBusyId = $state<string | null>(null);
   let activeCustomViewId = $state<string | null>(null);
+  let keptWebViewIds = $state<string[]>([]);
   const isSettingsWindow = $derived(!isTauri || viewMode === "settings");
   const showGlobalSceneBackground = $derived(
     !isSettingsWindow &&
-      !$weatherDetailOpen &&
-      !activeCustomViewId &&
-      usesFullViewBackground($sceneBackgroundId)
+      usesFullViewBackground($sceneBackgroundId) &&
+      !(viewMode === "deck" && !$performanceOpen && !$weatherDetailOpen && activeCustomViewId)
   );
   const showLogsPanel = $derived(isSettingsWindow && showSettingsTerminal);
   let logStatus = $state<"connecting" | "connected" | "disconnected">("connecting");
@@ -349,6 +350,7 @@
       isTauri &&
       !isSettingsWindow &&
       ($weatherDetailOpen ||
+        $performanceOpen ||
         activeCustomViewId !== null ||
         currentMediaView !== null ||
         sceneId === "teams" ||
@@ -1484,6 +1486,8 @@
       ? "settings"
       : activeCustomViewId
         ? activeCustomViewId
+        : $performanceOpen
+        ? "performance"
         : $weatherDetailOpen
           ? "weather"
           : sceneId
@@ -1491,9 +1495,16 @@
   const activeCustomView = $derived(
     customViews.find((view) => view.id === activeCustomViewId) ?? null
   );
+  const keptWebViews = $derived(
+    customViews.filter((view) => keptWebViewIds.includes(view.id))
+  );
+  const activeWebViewId = $derived(
+    viewMode === "deck" && !$performanceOpen && !$weatherDetailOpen ? activeCustomViewId : null
+  );
 
   function closeWeatherToHome() {
     viewMode = "deck";
+    performanceOpen.set(false);
     if (sceneId === "clock") {
       weatherDetailOpen.set(false);
       return;
@@ -1510,11 +1521,13 @@
     if (viewMode === "settings") return;
     if (activeCustomViewId && !appEnabled(activeCustomViewId)) activeCustomViewId = null;
     if ($weatherDetailOpen && !appEnabled("weather")) weatherDetailOpen.set(false);
+    if ($performanceOpen && !appEnabled("performance")) performanceOpen.set(false);
     const shown = activeCustomViewId ?? ($weatherDetailOpen ? "weather" : sceneId);
     if (appEnabled(shown)) return;
     if (shown !== "clock" && appEnabled("clock")) {
       activeCustomViewId = null;
       weatherDetailOpen.set(false);
+      performanceOpen.set(false);
       sceneId = "clock";
       selectScene("clock");
       return;
@@ -1525,7 +1538,9 @@
   function openCustomView(id: string) {
     if (!customViews.some((view) => view.id === id) || !appEnabled(id)) return;
     weatherDetailOpen.set(false);
+    performanceOpen.set(false);
     viewMode = "deck";
+    if (!keptWebViewIds.includes(id)) keptWebViewIds = [...keptWebViewIds, id];
     activeCustomViewId = id;
   }
 
@@ -1533,6 +1548,7 @@
     customViewsBusy = true;
     try {
       customViews = await setCustomViews(next);
+      keptWebViewIds = keptWebViewIds.filter((id) => next.some((view) => view.id === id));
       if (activeCustomViewId && !customViews.some((view) => view.id === activeCustomViewId)) {
         activeCustomViewId = null;
       }
@@ -1554,6 +1570,7 @@
   function onSideNavSelect(id: string) {
     if (id === "settings") {
       weatherDetailOpen.set(false);
+      performanceOpen.set(false);
       viewMode = "settings";
       return;
     }
@@ -1562,7 +1579,14 @@
       return;
     }
     activeCustomViewId = null;
+    if (id === "performance") {
+      weatherDetailOpen.set(false);
+      performanceOpen.set(true);
+      viewMode = "deck";
+      return;
+    }
     if (id === "weather") {
+      performanceOpen.set(false);
       weatherDetailOpen.set(true);
       viewMode = "deck";
       return;
@@ -1572,6 +1596,7 @@
       return;
     }
     weatherDetailOpen.set(false);
+    performanceOpen.set(false);
     selectScene(id);
   }
 
@@ -1869,6 +1894,7 @@
         logInfo(`Settings requested from button: ${label}`, "Settings window");
         if (isTauri) {
           weatherDetailOpen.set(false);
+          performanceOpen.set(false);
           viewMode = "settings";
           const win = getCurrentWindow();
           if (!(await win.isVisible())) {
@@ -2492,6 +2518,11 @@
   {/if}
 
   <main class="app-main">
+    {#each keptWebViews as view (view.id)}
+      <div class="kept-web" class:kept-web-on={activeWebViewId === view.id} inert={activeWebViewId !== view.id}>
+        <EmbedView url={view.url} title={view.name} />
+      </div>
+    {/each}
     {#if isSettingsWindow}
       <SettingsPanel
         isTauri={isTauri}
@@ -2565,7 +2596,9 @@
       />
     {:else}
       {#if activeCustomView}
-        <EmbedView url={activeCustomView.url} title={activeCustomView.name} />
+        <!-- The website stays mounted in .kept-web so leaving and returning does not reload it. -->
+      {:else if $performanceOpen}
+        <PerformanceView />
       {:else if $weatherDetailOpen}
         <WeatherView />
       {:else if loading}
@@ -2838,8 +2871,22 @@
 
   .app.has-side-nav .app-header,
   .app.has-side-nav .logs-panel,
-  .app.has-side-nav .app-main > :global(*:not(.car-thing):not(.embed-view)) {
+  .app.has-side-nav .app-main > :global(*:not(.car-thing):not(.embed-view):not(.perf-view):not(.kept-web)) {
     padding-left: var(--side-inset);
+  }
+
+  .kept-web {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  .kept-web-on {
+    z-index: 2;
+    visibility: visible;
+    pointer-events: auto;
   }
 
   .app-scene-bg {

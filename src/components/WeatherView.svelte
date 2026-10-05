@@ -1,7 +1,6 @@
 <script lang="ts">
-  import WeatherAtmosphere from "./WeatherAtmosphere.svelte";
   import WeatherIcon from "./WeatherIcon.svelte";
-  import { weatherIconName, weatherScene } from "../services/weather";
+  import { weatherIconName } from "../services/weather";
   import { weatherSnapshot, weatherStatus } from "../stores/weather";
 
   function degrees(value: number): string {
@@ -21,7 +20,6 @@
 <section class="weather-view">
   {#if $weatherSnapshot}
     {@const weather = $weatherSnapshot}
-    <WeatherAtmosphere scene={weatherScene(weather.code)} isDay={weather.isDay} />
     <div class="forecast">
       <section class="now">
         <div class="now-copy">
@@ -69,7 +67,7 @@
     width: 100%;
     height: 100%;
     min-height: 0;
-    background: #10141c;
+    background: transparent;
     color: #f5f5f7;
   }
 

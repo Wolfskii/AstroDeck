@@ -9,6 +9,7 @@ mod plugin_engine;
 mod prefs;
 mod spotify;
 mod spotify_desktop;
+mod system_stats;
 mod teams_api;
 mod updater;
 mod websocket;
@@ -608,6 +609,7 @@ pub fn run() {
             set_active_scene,
             log_to_bus,
             get_os_now_playing,
+            system_stats::get_system_stats,
             get_output_volume,
             get_teams_setup_status,
             get_teams_status,
@@ -676,6 +678,8 @@ pub fn run() {
             prefs::set_controls_overlay_custom,
             prefs::get_audio_visualizer_enabled,
             prefs::set_audio_visualizer_enabled,
+            prefs::get_performance_frosted,
+            prefs::set_performance_frosted,
             prefs::get_audio_visualizer_status,
             prefs::set_audio_visualizer_emit,
             prefs::get_settings_theme,

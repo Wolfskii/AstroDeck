@@ -18,12 +18,14 @@
     persistSceneBackground,
     persistAudioVisualizerEnabled,
     persistSettingsTheme,
+    persistPerformanceFrosted,
     previewControlsOverlayColor,
     sceneBackgroundId,
     audioVisualizerEnabled,
     audioVisualizerSupported,
     audioVisualizerError,
     settingsTheme,
+    performanceFrosted,
     settingsDark,
   } from "../stores/appearance";
   import ClockColorPicker from "./ClockColorPicker.svelte";
@@ -567,6 +569,22 @@
             {/each}
           </div>
         </div>
+        <label class="setting-row" for="performance-frost">
+          <div class="setting-copy">
+            <span class="setting-title">Frosted performance panel</span>
+            <span class="setting-desc">
+              See-through, like now, so the background shows through. Turn this off for a solid panel.
+            </span>
+          </div>
+          <input
+            id="performance-frost"
+            type="checkbox"
+            checked={$performanceFrosted}
+            onchange={(event) =>
+              persistPerformanceFrosted((event.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="md-check" aria-hidden="true"></span>
+        </label>
       </div>
       <p class="settings-lead">
         Backgrounds pick colors from the current cover art. They apply to the Spotify player
