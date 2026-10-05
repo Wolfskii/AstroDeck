@@ -42,6 +42,10 @@ pub struct AppPreferences {
     pub clock_digit_border_color: String,
     #[serde(default = "default_clock_digit_border_width")]
     pub clock_digit_border_width: u8,
+    #[serde(default)]
+    pub clock_bg_color_custom: bool,
+    #[serde(default = "default_clock_bg_color")]
+    pub clock_bg_color: String,
 }
 
 impl Default for AppPreferences {
@@ -65,6 +69,8 @@ impl Default for AppPreferences {
             clock_digit_border: false,
             clock_digit_border_color: default_clock_digit_border_color(),
             clock_digit_border_width: default_clock_digit_border_width(),
+            clock_bg_color_custom: false,
+            clock_bg_color: default_clock_bg_color(),
         }
     }
 }
@@ -120,11 +126,15 @@ fn default_clock_digit_border_width() -> u8 {
     4
 }
 
+fn default_clock_bg_color() -> String {
+    "#3b82f6".to_string()
+}
+
 fn parse_clock_digit_border_width(value: u8) -> u8 {
     value.clamp(1, 16)
 }
 
-fn parse_clock_digit_color(value: &str) -> String {
+fn parse_hex_color(value: &str, fallback: &str) -> String {
     let trimmed = value.trim();
     if trimmed.len() == 7
         && trimmed.starts_with('#')
@@ -132,8 +142,12 @@ fn parse_clock_digit_color(value: &str) -> String {
     {
         trimmed.to_ascii_lowercase()
     } else {
-        default_clock_digit_color()
+        fallback.to_string()
     }
+}
+
+fn parse_clock_digit_color(value: &str) -> String {
+    parse_hex_color(value, &default_clock_digit_color())
 }
 
 fn parse_settings_theme(value: &str) -> String {
@@ -457,6 +471,8 @@ pub struct ClockSettings {
     pub digit_border: bool,
     pub digit_border_color: String,
     pub digit_border_width: u8,
+    pub bg_color_custom: bool,
+    pub bg_color: String,
 }
 
 fn clock_settings_from(preferences: &AppPreferences) -> ClockSettings {
@@ -467,6 +483,8 @@ fn clock_settings_from(preferences: &AppPreferences) -> ClockSettings {
         digit_border: preferences.clock_digit_border,
         digit_border_color: parse_clock_digit_color(&preferences.clock_digit_border_color),
         digit_border_width: parse_clock_digit_border_width(preferences.clock_digit_border_width),
+        bg_color_custom: preferences.clock_bg_color_custom,
+        bg_color: parse_hex_color(&preferences.clock_bg_color, &default_clock_bg_color()),
     }
 }
 
@@ -486,6 +504,8 @@ pub fn set_clock_settings(
     digit_border: bool,
     digit_border_color: String,
     digit_border_width: u8,
+    bg_color_custom: bool,
+    bg_color: String,
 ) -> Result<ClockSettings, String> {
     let path = preferences_path(&app)?;
     let mut preferences = load_preferences(&path)?;
@@ -495,6 +515,8 @@ pub fn set_clock_settings(
     preferences.clock_digit_border = digit_border;
     preferences.clock_digit_border_color = parse_clock_digit_color(&digit_border_color);
     preferences.clock_digit_border_width = parse_clock_digit_border_width(digit_border_width);
+    preferences.clock_bg_color_custom = bg_color_custom;
+    preferences.clock_bg_color = parse_hex_color(&bg_color, &default_clock_bg_color());
     save_preferences(&path, &preferences)?;
     Ok(clock_settings_from(&preferences))
 }

@@ -51,7 +51,7 @@
     isIdleScene,
   } from "./layouts/layouts";
   import { usesCoverImage, usesFullViewBackground } from "./lib/sceneBackgrounds";
-  import { shaderColorsFromAccent } from "./lib/color";
+  import { hexToHsv, isNeutralAccent, shaderColorsFromAccent, shaderColorsFromHue } from "./lib/color";
   import { logs, logInfo, logError, pushExternal, type LogEntry } from "./services/logger";
   import {
     checkForAppUpdate,
@@ -77,7 +77,7 @@
   import { hideMainWindow, persistMainWindowState, revealMainWindow } from "./services/windowState";
   import { hydrateSceneBackground, sceneBackgroundId } from "./stores/appearance";
   import { sceneShaderColors, sceneShaderImage } from "./stores/sceneVisual";
-  import { clockDigitColor, loadClockSettings } from "./stores/clock";
+  import { clockBgColor, clockBgColorCustom, clockDigitColor, loadClockSettings } from "./stores/clock";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
 
@@ -1376,9 +1376,25 @@
   let availableScenes = $state<string[]>([]);
   let loading = $state(true);
   const isHomeScene = $derived(sceneId === "clock");
+  let homeHue = $state(Math.floor(Math.random() * 360));
   const globalSceneColors = $derived(
-    isHomeScene ? shaderColorsFromAccent($clockDigitColor) : $sceneShaderColors
+    !isHomeScene
+      ? $sceneShaderColors
+      : $clockBgColorCustom
+        ? shaderColorsFromHue(hexToHsv($clockBgColor).h)
+        : isNeutralAccent($clockDigitColor)
+          ? shaderColorsFromHue(homeHue, true)
+          : shaderColorsFromAccent($clockDigitColor)
   );
+
+  $effect(() => {
+    if (!isHomeScene || $clockBgColorCustom || !isNeutralAccent($clockDigitColor)) return;
+    const timer = window.setInterval(() => {
+      const jump = 50 + Math.floor(Math.random() * 160);
+      homeHue = (homeHue + jump) % 360;
+    }, 18000);
+    return () => window.clearInterval(timer);
+  });
   const isSpotifyScene = $derived(sceneId === "spotify");
   const isYouTubeMusicScene = $derived(sceneId === "youtubeMusic");
   const isOsMediaScene = $derived(sceneId === "media");
@@ -2092,6 +2108,7 @@
         colors={globalSceneColors}
         imageUrl={isHomeScene || !usesCoverImage($sceneBackgroundId) ? null : $sceneShaderImage}
         playing={true}
+        fadeMs={isHomeScene && !$clockBgColorCustom && isNeutralAccent($clockDigitColor) ? 7000 : 700}
       />
     </div>
   {/if}

@@ -26,13 +26,17 @@
   } from "../stores/appearance";
   import ClockColorPicker from "./ClockColorPicker.svelte";
   import {
+    clockBgColor,
+    clockBgColorCustom,
     clockDigitBorder,
     clockDigitBorderColor,
     clockDigitBorderWidth,
     clockDigitColor,
     clockLocation,
+    previewClockBgColor,
     previewClockDigitBorderColor,
     previewClockDigitColor,
+    saveClockBgColor,
     saveClockDigitBorder,
     saveClockDigitColor,
     saveClockSettings,
@@ -718,6 +722,31 @@
               </div>
             </div>
           </div>
+        {/if}
+      </div>
+      <div class="settings-card settings-card-pad">
+        <label class="setting-row" for="clock-bg-color">
+          <div class="setting-copy">
+            <span class="setting-title">Background color</span>
+            <span class="setting-desc">
+              Optional. Off follows the clock digits. On uses the color you pick for the Home background.
+            </span>
+          </div>
+          <input
+            id="clock-bg-color"
+            type="checkbox"
+            checked={$clockBgColorCustom}
+            onchange={(event) =>
+              void saveClockBgColor((event.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="md-check" aria-hidden="true"></span>
+        </label>
+        {#if $clockBgColorCustom}
+          <ClockColorPicker
+            value={$clockBgColor}
+            onChange={previewClockBgColor}
+            onCommit={(hex) => void saveClockBgColor(true, hex)}
+          />
         {/if}
       </div>
       <div class="settings-card settings-card-pad">

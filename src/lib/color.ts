@@ -96,16 +96,27 @@ export function hexToRgbCss(hex: string): string {
   return `${r}, ${g}, ${b}`;
 }
 
-export function shaderColorsFromAccent(hex: string): string[] {
+export function isNeutralAccent(hex: string): boolean {
   const hsv = hexToHsv(hex);
-  const complement = (hsv.h + 180) % 360;
+  return hsv.s < 0.14 && hsv.v > 0.82;
+}
+
+export function shaderColorsFromHue(hue: number, stronger = false): string[] {
   const tone = (value: number, hueShift = 0, saturation = 0.72) =>
     hsvToHex({
-      h: (complement + hueShift + 360) % 360,
+      h: (hue + hueShift + 360) % 360,
       s: saturation,
       v: value,
     });
+  if (stronger) {
+    return [tone(0.46, -18, 0.86), tone(0.34, 16, 0.9), tone(0.22, 34, 0.78), tone(0.52, -8, 0.74)];
+  }
   return [tone(0.72, -18), tone(0.58, 16, 0.8), tone(0.42, 34, 0.66), tone(0.84, -8, 0.55)];
+}
+
+export function shaderColorsFromAccent(hex: string): string[] {
+  const hsv = hexToHsv(hex);
+  return shaderColorsFromHue((hsv.h + 180) % 360);
 }
 
 export function mixHex(from: string, to: string, amount: number): string {
