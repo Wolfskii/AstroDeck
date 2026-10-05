@@ -8,9 +8,12 @@ export async function revealMainWindow(): Promise<void> {
   } catch {
     // Geometry is still restored at process start; show anyway.
   }
-  await win.show();
-  await win.unminimize();
-  await win.setFocus();
+  try {
+    await invoke("show_main_window_no_activate");
+  } catch {
+    await win.show();
+    await win.unminimize();
+  }
 }
 
 export async function hideMainWindow(): Promise<void> {

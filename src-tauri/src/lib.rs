@@ -12,6 +12,7 @@ mod spotify_desktop;
 mod teams_api;
 mod updater;
 mod websocket;
+mod no_activate;
 mod window_prefs;
 mod youtube_music;
 
@@ -555,6 +556,14 @@ fn persist_window_state(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn show_main_window_no_activate(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window is not available".to_string())?;
+    no_activate::show_without_activating(&window)
+}
+
+#[tauri::command]
 fn restore_window_show_state(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         window_prefs::restore_show_state(&window, prefs::start_fullscreen(&app));
@@ -621,6 +630,7 @@ pub fn run() {
             open_settings_window,
             persist_window_state,
             restore_window_show_state,
+            show_main_window_no_activate,
             quit_app,
             updater::get_app_version,
             updater::check_for_app_update,
@@ -666,6 +676,7 @@ pub fn run() {
 
             if let Some(window) = app.get_webview_window("main") {
                 apply_window_icon(&window);
+                no_activate::install(&window);
                 window_prefs::apply_launch_state(
                     &window,
                     prefs::start_minimized(&app_handle),

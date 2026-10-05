@@ -133,7 +133,7 @@
     position: relative;
     display: grid;
     grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
-    column-gap: 4vw;
+    column-gap: 8vw;
     width: 100%;
     height: 100%;
     min-height: 0;
@@ -201,7 +201,7 @@
 
   .weather-pane {
     justify-content: flex-start;
-    padding: 48px clamp(28px, 5vw, 88px) 48px 8px;
+    padding: 48px clamp(28px, 5vw, 88px) 48px 4vw;
   }
 
   .weather {
