@@ -9,6 +9,7 @@ mod plugin_engine;
 mod prefs;
 mod spotify;
 mod spotify_desktop;
+mod speed_test;
 mod system_stats;
 mod teams_api;
 mod updater;
@@ -680,6 +681,10 @@ pub fn run() {
             prefs::set_audio_visualizer_enabled,
             prefs::get_performance_frosted,
             prefs::set_performance_frosted,
+            prefs::get_speed_test_provider,
+            prefs::set_speed_test_provider,
+            speed_test::start_speed_test,
+            speed_test::cancel_speed_test,
             prefs::get_audio_visualizer_status,
             prefs::set_audio_visualizer_emit,
             prefs::get_settings_theme,

@@ -32,6 +32,9 @@ pub struct AppPreferences {
     /// Frosted performance panel. Off is a solid panel.
     #[serde(default = "default_performance_frosted")]
     pub performance_frosted: bool,
+    /// cloudflare, fast, or bredbandskollen.
+    #[serde(default = "default_speed_test_provider")]
+    pub speed_test_provider: String,
     #[serde(default = "default_settings_theme")]
     pub settings_theme: String,
     #[serde(default)]
@@ -77,6 +80,7 @@ impl Default for AppPreferences {
             controls_overlay_custom: None,
             audio_visualizer: false,
             performance_frosted: default_performance_frosted(),
+            speed_test_provider: default_speed_test_provider(),
             settings_theme: default_settings_theme(),
             auto_switch_scenes: HashMap::new(),
             temperature_unit: default_temperature_unit(),
@@ -616,6 +620,17 @@ fn default_performance_frosted() -> bool {
     true
 }
 
+fn default_speed_test_provider() -> String {
+    "cloudflare".to_string()
+}
+
+fn parse_speed_test_provider(value: &str) -> String {
+    match value {
+        "fast" | "bredbandskollen" => value.to_string(),
+        _ => default_speed_test_provider(),
+    }
+}
+
 pub fn audio_visualizer_enabled(app: &tauri::AppHandle) -> bool {
     preferences_path(app)
         .and_then(|path| load_preferences(&path))
@@ -653,6 +668,23 @@ pub fn set_performance_frosted(app: tauri::AppHandle, enabled: bool) -> Result<(
     let mut preferences = load_preferences(&path)?;
     preferences.performance_frosted = enabled;
     save_preferences(&path, &preferences)
+}
+
+#[tauri::command]
+pub fn get_speed_test_provider(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(preferences_path(&app)
+        .and_then(|path| load_preferences(&path))
+        .map(|preferences| parse_speed_test_provider(&preferences.speed_test_provider))
+        .unwrap_or_else(|_| default_speed_test_provider()))
+}
+
+#[tauri::command]
+pub fn set_speed_test_provider(app: tauri::AppHandle, provider: String) -> Result<String, String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.speed_test_provider = parse_speed_test_provider(&provider);
+    save_preferences(&path, &preferences)?;
+    Ok(preferences.speed_test_provider)
 }
 
 #[tauri::command]

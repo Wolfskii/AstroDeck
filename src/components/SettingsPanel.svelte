@@ -19,6 +19,7 @@
     persistAudioVisualizerEnabled,
     persistSettingsTheme,
     persistPerformanceFrosted,
+    persistSpeedTestProvider,
     previewControlsOverlayColor,
     sceneBackgroundId,
     audioVisualizerEnabled,
@@ -26,8 +27,10 @@
     audioVisualizerError,
     settingsTheme,
     performanceFrosted,
+    speedTestProvider,
     settingsDark,
   } from "../stores/appearance";
+  import { SPEED_PROVIDERS } from "../lib/speedTest";
   import ClockColorPicker from "./ClockColorPicker.svelte";
   import {
     clockBgColor,
@@ -65,6 +68,7 @@
   type SettingsSection =
     | "general"
     | "appearance"
+    | "performance"
     | "clock"
     | "updates"
     | "customViews"
@@ -209,6 +213,7 @@
   const titles: Record<SettingsSection, string> = {
     general: "General",
     appearance: "Appearance",
+    performance: "Performance",
     clock: "Home",
     updates: "Updates",
     customViews: "Apps",
@@ -345,6 +350,20 @@
           />
         </svg>
         Appearance
+      </button>
+      <button
+        type="button"
+        class="settings-nav-item"
+        class:active={activeSection === "performance"}
+        onclick={() => (section = "performance")}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M12 3.2a8.8 8.8 0 0 0-8.6 7.1 1.15 1.15 0 0 0 2.26.4 6.5 6.5 0 0 1 12.68 0 1.15 1.15 0 1 0 2.26-.4A8.8 8.8 0 0 0 12 3.2Zm1.05 4.55a1.15 1.15 0 0 0-1.55 1.7l2.55 3.55a1.7 1.7 0 1 0 2.55-2.25l-3.55-3Z"
+          />
+        </svg>
+        Performance
       </button>
       <button
         type="button"
@@ -569,22 +588,6 @@
             {/each}
           </div>
         </div>
-        <label class="setting-row" for="performance-frost">
-          <div class="setting-copy">
-            <span class="setting-title">Frosted performance panel</span>
-            <span class="setting-desc">
-              See-through, like now, so the background shows through. Turn this off for a solid panel.
-            </span>
-          </div>
-          <input
-            id="performance-frost"
-            type="checkbox"
-            checked={$performanceFrosted}
-            onchange={(event) =>
-              persistPerformanceFrosted((event.currentTarget as HTMLInputElement).checked)}
-          />
-          <span class="md-check" aria-hidden="true"></span>
-        </label>
       </div>
       <p class="settings-lead">
         Backgrounds pick colors from the current cover art. They apply to the Spotify player
@@ -711,6 +714,49 @@
               onCommit={persistControlsOverlayColor}
             />
           {/if}
+        </div>
+      </div>
+    {:else if activeSection === "performance"}
+      <p class="settings-lead">
+        Options for the Performance app: the frosted panel and which internet speed test to use.
+      </p>
+      <div class="settings-card">
+        <label class="setting-row" for="performance-frost">
+          <div class="setting-copy">
+            <span class="setting-title">Frosted performance panel</span>
+            <span class="setting-desc">
+              See-through, like now, so the background shows through. Turn this off for a solid panel.
+            </span>
+          </div>
+          <input
+            id="performance-frost"
+            type="checkbox"
+            checked={$performanceFrosted}
+            onchange={(event) =>
+              persistPerformanceFrosted((event.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="md-check" aria-hidden="true"></span>
+        </label>
+        <div class="setting-row setting-row-theme">
+          <div class="setting-copy">
+            <span class="setting-title">Test speed</span>
+            <span class="setting-desc">
+              Cloudflare, Fast.com, or Bredbandskollen. The performance card measures against the one you pick.
+            </span>
+          </div>
+          <div class="theme-seg" role="radiogroup" aria-label="Test speed">
+            {#each SPEED_PROVIDERS as option (option.id)}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={$speedTestProvider === option.id}
+                class:active={$speedTestProvider === option.id}
+                onclick={() => persistSpeedTestProvider(option.id)}
+              >
+                {option.label}
+              </button>
+            {/each}
+          </div>
         </div>
       </div>
     {:else if activeSection === "clock"}

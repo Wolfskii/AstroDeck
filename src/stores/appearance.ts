@@ -33,9 +33,12 @@ import {
   setSettingsTheme,
   getPerformanceFrosted,
   setPerformanceFrosted,
+  getSpeedTestProvider,
+  setSpeedTestProvider,
   type SettingsThemeId,
 } from "../services/prefs";
 import { subscribeOsAudioError } from "../lib/osAudioViz";
+import { parseSpeedProvider, type SpeedProvider } from "../lib/speedTest";
 
 const STORAGE_KEY = "astrodeck:sceneBackground";
 const BACKDROP_KEY = "astrodeck:controlsBackdrop";
@@ -145,6 +148,7 @@ export const audioVisualizerSupported = writable(false);
 export const audioVisualizerError = writable<string | null>(null);
 export const settingsTheme = writable<SettingsThemeId>(readStoredTheme());
 export const performanceFrosted = writable(true);
+export const speedTestProvider = writable<SpeedProvider>("cloudflare");
 export const osPrefersDark = writable(readOsPrefersDark());
 export const settingsDark = derived(
   [settingsTheme, osPrefersDark],
@@ -322,6 +326,11 @@ export async function hydrateSceneBackground(): Promise<void> {
   } catch {
     // keep local value
   }
+  try {
+    speedTestProvider.set(parseSpeedProvider(await getSpeedTestProvider()));
+  } catch {
+    // keep local value
+  }
 }
 
 export function persistSceneBackground(id: SceneBackgroundId): void {
@@ -376,6 +385,14 @@ export function persistSettingsTheme(theme: SettingsThemeId): void {
 export function persistPerformanceFrosted(enabled: boolean): void {
   performanceFrosted.set(enabled);
   void setPerformanceFrosted(enabled);
+}
+
+export function persistSpeedTestProvider(provider: SpeedProvider): void {
+  const next = parseSpeedProvider(provider);
+  speedTestProvider.set(next);
+  void setSpeedTestProvider(next).then((saved) => {
+    speedTestProvider.set(parseSpeedProvider(saved));
+  });
 }
 
 export function previewControlsOverlayColor(color: string): void {
