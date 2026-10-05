@@ -41,7 +41,15 @@
         onclick={() => onSelectScene(id)}
       >
         <span class="launcher-card-icon" aria-hidden="true">
-          {id === "spotify" ? "♫" : id === "youtubeMusic" ? "▶" : id === "media" ? "◉" : "✦"}
+          {id === "spotify"
+            ? "♫"
+            : id === "youtubeMusic"
+              ? "▶"
+              : id === "media"
+                ? "◉"
+                : id === "clock"
+                  ? "◷"
+                  : "✦"}
         </span>
         <span class="launcher-card-title">{title}</span>
         <span class="launcher-card-description">{description}</span>

@@ -1,0 +1,11 @@
+{
+  "id": "clock",
+  "name": "Clock",
+  "description": "Local time and weather for this computer.",
+  "priority": 0,
+  "triggers": {},
+  "layout": {
+    "grid": [1, 1],
+    "buttons": []
+  }
+}

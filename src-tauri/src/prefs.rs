@@ -30,6 +30,12 @@ pub struct AppPreferences {
     pub settings_theme: String,
     #[serde(default)]
     pub auto_switch_scenes: HashMap<String, bool>,
+    #[serde(default = "default_temperature_unit")]
+    pub temperature_unit: String,
+    #[serde(default)]
+    pub clock_location: String,
+    #[serde(default = "default_clock_digit_color")]
+    pub clock_digit_color: String,
 }
 
 impl Default for AppPreferences {
@@ -47,6 +53,9 @@ impl Default for AppPreferences {
             audio_visualizer: false,
             settings_theme: default_settings_theme(),
             auto_switch_scenes: HashMap::new(),
+            temperature_unit: default_temperature_unit(),
+            clock_location: String::new(),
+            clock_digit_color: default_clock_digit_color(),
         }
     }
 }
@@ -77,6 +86,33 @@ fn default_controls_overlay_color() -> String {
 
 fn default_settings_theme() -> String {
     "system".to_string()
+}
+
+fn default_temperature_unit() -> String {
+    "celsius".to_string()
+}
+
+fn parse_temperature_unit(value: &str) -> String {
+    match value {
+        "fahrenheit" => "fahrenheit".to_string(),
+        _ => default_temperature_unit(),
+    }
+}
+
+fn default_clock_digit_color() -> String {
+    "#f3d37a".to_string()
+}
+
+fn parse_clock_digit_color(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() == 7
+        && trimmed.starts_with('#')
+        && trimmed[1..].chars().all(|c| c.is_ascii_hexdigit())
+    {
+        trimmed.to_ascii_lowercase()
+    } else {
+        default_clock_digit_color()
+    }
 }
 
 fn parse_settings_theme(value: &str) -> String {
@@ -389,6 +425,45 @@ pub fn set_settings_theme(app: tauri::AppHandle, theme: String) -> Result<String
     save_preferences(&path, &preferences)?;
     let _ = app.emit("settings-theme-changed", &preferences.settings_theme);
     Ok(preferences.settings_theme)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClockSettings {
+    pub temperature_unit: String,
+    pub location: String,
+    pub digit_color: String,
+}
+
+fn clock_settings_from(preferences: &AppPreferences) -> ClockSettings {
+    ClockSettings {
+        temperature_unit: parse_temperature_unit(&preferences.temperature_unit),
+        location: preferences.clock_location.trim().to_string(),
+        digit_color: parse_clock_digit_color(&preferences.clock_digit_color),
+    }
+}
+
+#[tauri::command]
+pub fn get_clock_settings(app: tauri::AppHandle) -> Result<ClockSettings, String> {
+    Ok(clock_settings_from(&load_preferences(
+        &preferences_path(&app)?,
+    )?))
+}
+
+#[tauri::command]
+pub fn set_clock_settings(
+    app: tauri::AppHandle,
+    temperature_unit: String,
+    location: String,
+    digit_color: String,
+) -> Result<ClockSettings, String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.temperature_unit = parse_temperature_unit(&temperature_unit);
+    preferences.clock_location = location.trim().to_string();
+    preferences.clock_digit_color = parse_clock_digit_color(&digit_color);
+    save_preferences(&path, &preferences)?;
+    Ok(clock_settings_from(&preferences))
 }
 
 #[tauri::command]

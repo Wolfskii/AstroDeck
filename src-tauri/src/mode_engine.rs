@@ -27,6 +27,20 @@ pub fn resolve(app_handle: &tauri::AppHandle, matched_ids: &[String]) {
     let has_presence = matched_ids.iter().any(|id| is_presence_scene(id));
 
     if !has_presence {
+        let sticky = state
+            .manual_scene_override
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .filter(|id| id == "clock");
+        if let Some(scene) = sticky {
+            let mut current = state.active_scene_id.lock().expect("failed to lock scene id");
+            if *current != scene {
+                *current = scene.clone();
+                emit_scene(app_handle, scene, &plugins);
+            }
+            return;
+        }
         if let Ok(mut override_state) = state.manual_scene_override.lock() {
             *override_state = None;
         }

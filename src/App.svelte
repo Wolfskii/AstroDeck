@@ -7,6 +7,7 @@
   import { Menu } from "@tauri-apps/api/menu";
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
+  import ClockWeatherView from "./components/ClockWeatherView.svelte";
   import DeckGrid from "./components/DeckGrid.svelte";
   import MediaPlayerView from "./components/MediaPlayerView.svelte";
   import SceneLauncher from "./components/SceneLauncher.svelte";
@@ -14,7 +15,7 @@
   import SettingsPanel from "./components/SettingsPanel.svelte";
   import TeamsScene from "./components/TeamsScene.svelte";
   import VsCodeScene from "./components/VsCodeScene.svelte";
-  import appIconUrl from "./assets/app-icon.png";
+  import ChooseViewButton from "./components/ChooseViewButton.svelte";
   import {
     executeActionValue,
     getActiveScene,
@@ -72,6 +73,7 @@
   } from "./services/prefs";
   import { hideMainWindow, persistMainWindowState, revealMainWindow } from "./services/windowState";
   import { hydrateSceneBackground } from "./stores/appearance";
+  import { loadClockSettings } from "./stores/clock";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
 
@@ -261,7 +263,10 @@
       isTauri &&
       !isSettingsWindow &&
       !isLauncherView &&
-      (currentMediaView !== null || sceneId === "teams" || sceneId === "vscode")
+      (currentMediaView !== null ||
+        sceneId === "teams" ||
+        sceneId === "vscode" ||
+        sceneId === "clock")
   );
   const displayedLayout = $derived.by(() => {
     if (!layout) return null;
@@ -1600,6 +1605,7 @@
     }
     loadSeenScenes();
     void hydrateSceneBackground();
+    void loadClockSettings();
     const handleCoreAction = async (ev: Event) => {
       const detail = (ev as CustomEvent<{ action: string; label: string }>).detail;
       if (!detail) return;
@@ -2102,15 +2108,7 @@
               {/if}
             </button>
           {/if}
-          <button
-            type="button"
-            class="header-settings-btn"
-            title="Choose view"
-            aria-label="Choose view"
-            onclick={() => (viewMode = "launcher")}
-          >
-            <img class="header-app-icon" src={appIconUrl} alt="" aria-hidden="true" />
-          </button>
+          <ChooseViewButton placement="inline" onclick={() => (viewMode = "launcher")} />
         </div>
       {/if}
     </header>
@@ -2332,6 +2330,8 @@
           lyricsProviderOrder={lyricsProviderOrder}
           useLyricsFallback={isYouTubeMusicScene}
         />
+      {:else if sceneId === "clock"}
+        <ClockWeatherView onOpenSettings={isTauri ? () => (viewMode = "launcher") : undefined} />
       {:else if sceneId === "teams" && displayedLayout}
         <TeamsScene
           buttons={displayedLayout.buttons}
@@ -2494,6 +2494,7 @@
     padding: 10px 16px 10px 20px;
     border-bottom: 1px solid var(--border-subtle);
     background: var(--bg-surface);
+    color: var(--text-primary);
     flex-shrink: 0;
   }
 
@@ -2573,27 +2574,6 @@
     font-weight: 700;
     line-height: 1;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  }
-
-  .header-settings-btn {
-    flex-shrink: 0;
-    padding: 4px;
-    border-radius: 10px;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    line-height: 0;
-  }
-
-  .header-settings-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
-  }
-
-  .header-app-icon {
-    display: block;
-    width: 72px;
-    height: 72px;
-    object-fit: contain;
   }
 
   .app-title {

@@ -24,6 +24,17 @@
     settingsTheme,
     settingsDark,
   } from "../stores/appearance";
+  import ClockColorPicker from "./ClockColorPicker.svelte";
+  import {
+    clockDigitColor,
+    clockLocation,
+    previewClockDigitColor,
+    saveClockDigitColor,
+    saveClockSettings,
+    temperatureUnit,
+  } from "../stores/clock";
+  import { formatPlace, searchPlaces, type GeoPlace } from "../services/weather";
+  import type { TemperatureUnit } from "../services/prefs";
   import type { SettingsThemeId } from "../services/prefs";
   import type { PluginConfig } from "../types";
   import type { AppUpdateInfo } from "../services/updater";
@@ -39,6 +50,7 @@
   type SettingsSection =
     | "general"
     | "appearance"
+    | "clock"
     | "updates"
     | "spotify"
     | "youtubeMusic"
@@ -161,6 +173,7 @@
   const titles: Record<SettingsSection, string> = {
     general: "General",
     appearance: "Appearance",
+    clock: "Clock",
     updates: "Updates",
     spotify: "Spotify",
     youtubeMusic: "YouTube Music",
@@ -182,6 +195,72 @@
     if (target < 0 || target >= next.length) return;
     [next[index], next[target]] = [next[target], next[index]];
     onLyricsProviderOrderChange?.(next);
+  }
+
+  const UNIT_OPTIONS: { id: TemperatureUnit; label: string }[] = [
+    { id: "celsius", label: "Celsius" },
+    { id: "fahrenheit", label: "Fahrenheit" },
+  ];
+  let locationDraft = $state("");
+  let locationBusy = $state(false);
+  let locationError = $state<string | null>(null);
+  let locationMatches = $state<GeoPlace[]>([]);
+
+  $effect(() => {
+    locationDraft = $clockLocation;
+  });
+
+  async function setTemperatureUnit(unit: TemperatureUnit) {
+    locationError = null;
+    try {
+      await saveClockSettings(unit, $clockLocation);
+    } catch (error) {
+      locationError = String(error);
+    }
+  }
+
+  async function saveLocation(next = locationDraft, picked = false) {
+    const query = next.trim();
+    locationError = null;
+    locationMatches = [];
+    locationBusy = true;
+    try {
+      if (!query) {
+        await saveClockSettings($temperatureUnit, "");
+        locationDraft = "";
+        return;
+      }
+      const matches = await searchPlaces(query);
+      if (matches.length === 0) {
+        locationError = "No matching place. Try a city name.";
+        return;
+      }
+      if (!picked && matches.length > 1) {
+        locationMatches = matches;
+        return;
+      }
+      const saved = formatPlace(matches[0]);
+      await saveClockSettings($temperatureUnit, saved);
+      locationDraft = saved;
+    } catch (error) {
+      locationError = error instanceof Error ? error.message : "Could not look up that place.";
+    } finally {
+      locationBusy = false;
+    }
+  }
+
+  async function useAutomaticLocation() {
+    locationError = null;
+    locationMatches = [];
+    locationBusy = true;
+    try {
+      await saveClockSettings($temperatureUnit, "");
+      locationDraft = "";
+    } catch (error) {
+      locationError = String(error);
+    } finally {
+      locationBusy = false;
+    }
   }
 
   const THEME_OPTIONS: { id: SettingsThemeId; label: string }[] = [
@@ -229,6 +308,20 @@
           />
         </svg>
         Appearance
+      </button>
+      <button
+        type="button"
+        class="settings-nav-item"
+        class:active={activeSection === "clock"}
+        onclick={() => (section = "clock")}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M12 2a10 10 0 1 0 .01 20.01A10 10 0 0 0 12 2zm.75 5v4.69l3.2 1.92-1.1 1.83L11 13.2V7h1.75z"
+          />
+        </svg>
+        Clock
       </button>
       <button
         type="button"
@@ -535,6 +628,91 @@
             />
           {/if}
         </div>
+      </div>
+    {:else if activeSection === "clock"}
+      <div class="settings-card">
+        <div class="setting-row setting-row-theme">
+          <div class="setting-copy">
+            <span class="setting-title">Temperature</span>
+            <span class="setting-desc">Weather on the clock view uses Celsius unless you switch it.</span>
+          </div>
+          <div class="theme-seg" role="radiogroup" aria-label="Temperature unit">
+            {#each UNIT_OPTIONS as option (option.id)}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={$temperatureUnit === option.id}
+                class:active={$temperatureUnit === option.id}
+                onclick={() => setTemperatureUnit(option.id)}
+              >
+                {option.label}
+              </button>
+            {/each}
+          </div>
+        </div>
+      </div>
+      <div class="settings-card settings-card-pad">
+        <p class="setting-title">Digit color</p>
+        <p class="setting-desc">Color of the clock numbers. Drag the field, or type a hex value.</p>
+        <ClockColorPicker
+          value={$clockDigitColor}
+          onChange={previewClockDigitColor}
+          onCommit={(hex) => void saveClockDigitColor(hex)}
+        />
+      </div>
+      <div class="settings-card settings-card-pad">
+        <p class="setting-title">Location</p>
+        <p class="setting-desc">
+          Leave this empty to use this computer's location. Enter a city to override it.
+        </p>
+        <div class="settings-field-row">
+          <input
+            id="clock-location"
+            class="md-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="City, for example Stockholm"
+            bind:value={locationDraft}
+            disabled={locationBusy}
+            onkeydown={(event) => {
+              if (event.key === "Enter") void saveLocation();
+            }}
+          />
+          <button
+            type="button"
+            class="md-btn md-btn-primary"
+            disabled={locationBusy}
+            onclick={() => saveLocation()}
+          >
+            {locationBusy ? "Saving…" : "Save location"}
+          </button>
+          <button
+            type="button"
+            class="md-btn"
+            disabled={locationBusy || !$clockLocation}
+            onclick={() => useAutomaticLocation()}
+          >
+            Use automatic
+          </button>
+        </div>
+        {#if $clockLocation}
+          <p class="setting-desc">Using {$clockLocation}.</p>
+        {:else}
+          <p class="setting-desc">Using this computer's location.</p>
+        {/if}
+        {#if locationError}
+          <p class="settings-error">{locationError}</p>
+        {/if}
+        {#if locationMatches.length > 1}
+          <div class="location-matches">
+            {#each locationMatches as place (`${place.latitude},${place.longitude}`)}
+              <button type="button" class="md-btn" onclick={() => saveLocation(formatPlace(place), true)}>
+                {formatPlace(place)}
+              </button>
+            {/each}
+          </div>
+        {/if}
       </div>
     {:else if activeSection === "updates"}
       <div class="settings-card settings-card-pad">
@@ -901,10 +1079,16 @@
               <div class="scene-id">{id}</div>
               <p class="scene-description">{description}</p>
               <div class="scene-card-footer">
-                <span>{grid[0]}×{grid[1]}</span>
-                <span>{buttonCount} buttons</span>
+                {#if id === "clock"}
+                  <span>Local time</span>
+                  <span>Weather</span>
+                {:else}
+                  <span>{grid[0]}×{grid[1]}</span>
+                  <span>{buttonCount} buttons</span>
+                {/if}
               </div>
               </button>
+              {#if id !== "clock"}
               <label class="setting-row scene-auto" for={`auto-switch-${id}`}>
                 <div class="setting-copy">
                   <span class="setting-title">Auto switch</span>
@@ -933,6 +1117,7 @@
                 />
                 <span class="md-check" aria-hidden="true"></span>
               </label>
+              {/if}
             </article>
           {/each}
         </div>
@@ -1614,7 +1799,8 @@
   }
 
   .settings-field-row,
-  .settings-btn-row {
+  .settings-btn-row,
+  .location-matches {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;

@@ -16,6 +16,7 @@
     "icons:sync": "node scripts/prepare-bundle-icon.mjs"
   },
   "dependencies": {
+    "@meteocons/svg-static": "^0.1.0",
     "@paper-design/shaders": "0.0.80",
     "@tauri-apps/api": "2.11.0",
     "@tauri-apps/plugin-autostart": "^2.5.1",

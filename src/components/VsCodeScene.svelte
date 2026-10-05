@@ -1,5 +1,5 @@
 <script lang="ts">
-  import appIconUrl from "../assets/app-icon.png";
+  import ChooseViewButton from "./ChooseViewButton.svelte";
   import Icon from "./Icon.svelte";
   import SceneActionButton from "./SceneActionButton.svelte";
   import type { DeckButtonConfig } from "../types";
@@ -17,15 +17,7 @@
 
 <section class="vscode" class:has-settings={showSettingsButton && onOpenSettings}>
   {#if showSettingsButton && onOpenSettings}
-    <button
-      type="button"
-      class="settings-btn"
-      title="Settings"
-      aria-label="Open settings"
-      onclick={() => onOpenSettings()}
-    >
-      <img class="settings-icon" src={appIconUrl} alt="" aria-hidden="true" />
-    </button>
+    <ChooseViewButton onclick={() => onOpenSettings()} />
   {/if}
 
   <header class="brand">
@@ -66,31 +58,7 @@
   }
 
   .vscode.has-settings {
-    padding-top: 92px;
-  }
-
-  .settings-btn {
-    position: absolute;
-    top: 8px;
-    left: 12px;
-    z-index: 2;
-    padding: 4px;
-    border: none;
-    border-radius: 12px;
-    background: transparent;
-    line-height: 0;
-    cursor: pointer;
-  }
-
-  .settings-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
-  }
-
-  .settings-icon {
-    display: block;
-    width: 72px;
-    height: 72px;
-    object-fit: contain;
+    padding-top: 120px;
   }
 
   .brand {

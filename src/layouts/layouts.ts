@@ -63,6 +63,16 @@ const builtinScenes: Record<string, BuiltinSceneMeta> = {
       ],
     },
   },
+  clock: {
+    id: "clock",
+    name: "Clock",
+    description: "Local time and weather for this computer.",
+    accent: "#f5f5f5",
+    layout: {
+      grid: [1, 1],
+      buttons: [],
+    },
+  },
   media: {
     id: "media",
     name: "System Media",

@@ -316,3 +316,79 @@ export async function setAutoSwitchScene(
   if (!isTauri) return { [sceneId]: enabled };
   return invoke<Record<string, boolean>>("set_auto_switch_scene", { sceneId, enabled });
 }
+
+export type TemperatureUnit = "celsius" | "fahrenheit";
+
+export type ClockSettings = {
+  temperatureUnit: TemperatureUnit;
+  location: string;
+  digitColor: string;
+};
+
+export const DEFAULT_TEMPERATURE_UNIT: TemperatureUnit = "celsius";
+export const DEFAULT_CLOCK_DIGIT_COLOR = "#f3d37a";
+const TEMPERATURE_UNIT_KEY = "astrodeck:temperatureUnit";
+const CLOCK_LOCATION_KEY = "astrodeck:clockLocation";
+const CLOCK_DIGIT_COLOR_KEY = "astrodeck:clockDigitColor";
+
+export function parseClockDigitColor(value: unknown): string {
+  return parseHexColor(value, DEFAULT_CLOCK_DIGIT_COLOR);
+}
+
+export function parseTemperatureUnit(value: unknown): TemperatureUnit {
+  return value === "fahrenheit" ? "fahrenheit" : DEFAULT_TEMPERATURE_UNIT;
+}
+
+export async function getClockSettings(): Promise<ClockSettings> {
+  if (!isTauri) {
+    try {
+      return {
+        temperatureUnit: parseTemperatureUnit(window.localStorage.getItem(TEMPERATURE_UNIT_KEY)),
+        location: window.localStorage.getItem(CLOCK_LOCATION_KEY) ?? "",
+        digitColor: parseClockDigitColor(window.localStorage.getItem(CLOCK_DIGIT_COLOR_KEY)),
+      };
+    } catch {
+      return {
+        temperatureUnit: DEFAULT_TEMPERATURE_UNIT,
+        location: "",
+        digitColor: DEFAULT_CLOCK_DIGIT_COLOR,
+      };
+    }
+  }
+  const settings = await invoke<ClockSettings>("get_clock_settings");
+  return {
+    temperatureUnit: parseTemperatureUnit(settings.temperatureUnit),
+    location: settings.location ?? "",
+    digitColor: parseClockDigitColor(settings.digitColor),
+  };
+}
+
+export async function setClockSettings(
+  temperatureUnit: TemperatureUnit,
+  location: string,
+  digitColor: string
+): Promise<ClockSettings> {
+  const nextUnit = parseTemperatureUnit(temperatureUnit);
+  const nextLocation = location.trim();
+  const nextColor = parseClockDigitColor(digitColor);
+  if (!isTauri) {
+    try {
+      window.localStorage.setItem(TEMPERATURE_UNIT_KEY, nextUnit);
+      window.localStorage.setItem(CLOCK_LOCATION_KEY, nextLocation);
+      window.localStorage.setItem(CLOCK_DIGIT_COLOR_KEY, nextColor);
+    } catch {
+      // ignore
+    }
+    return { temperatureUnit: nextUnit, location: nextLocation, digitColor: nextColor };
+  }
+  const settings = await invoke<ClockSettings>("set_clock_settings", {
+    temperatureUnit: nextUnit,
+    location: nextLocation,
+    digitColor: nextColor,
+  });
+  return {
+    temperatureUnit: parseTemperatureUnit(settings.temperatureUnit),
+    location: settings.location ?? "",
+    digitColor: parseClockDigitColor(settings.digitColor),
+  };
+}
