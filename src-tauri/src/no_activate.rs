@@ -15,8 +15,9 @@ mod platform {
     use windows::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, EnumChildWindows, GetAncestor, GetForegroundWindow, GetWindowLongPtrW,
         GetWindowPlacement, IsIconic, SetForegroundWindow, SetWindowLongPtrW, SetWindowPlacement,
-        ShowWindow, GA_ROOT, GWL_EXSTYLE, GWLP_WNDPROC, SW_SHOWNOACTIVATE, WINDOWPLACEMENT,
-        WINEVENT_OUTOFCONTEXT, WNDPROC,
+        SetWindowPos, ShowWindow, GA_ROOT, GWL_EXSTYLE, GWLP_WNDPROC, SW_SHOWNOACTIVATE,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        WINDOWPLACEMENT, WINEVENT_OUTOFCONTEXT, WNDPROC,
     };
 
     const WM_MOUSEACTIVATE: u32 = 0x0021;
@@ -25,6 +26,8 @@ mod platform {
     const WM_CREATE: u32 = 0x0001;
     const MA_NOACTIVATE: isize = 3;
     const WS_EX_NOACTIVATE: isize = 0x0800_0000;
+    const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
+    const WS_EX_APPWINDOW: isize = 0x0004_0000;
     const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
 
     static MAIN_ROOT: Mutex<isize> = Mutex::new(0);
@@ -65,6 +68,25 @@ mod platform {
             }
         });
         log::info!("Main window will not take focus from other apps");
+    }
+
+    pub fn set_taskbar_button_hidden(window: &tauri::WebviewWindow, hidden: bool) {
+        let Ok(hwnd) = native_hwnd(window) else {
+            return;
+        };
+        unsafe {
+            let mut style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if hidden {
+                style |= WS_EX_TOOLWINDOW;
+                style &= !WS_EX_APPWINDOW;
+            } else {
+                style &= !WS_EX_TOOLWINDOW;
+                style |= WS_EX_APPWINDOW;
+            }
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style);
+            let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED;
+            let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, flags);
+        }
     }
 
     pub fn show_without_activating(window: &tauri::WebviewWindow) -> Result<(), String> {
@@ -223,6 +245,8 @@ mod platform {
 mod platform {
     pub fn install(_window: &tauri::WebviewWindow) {}
 
+    pub fn set_taskbar_button_hidden(_window: &tauri::WebviewWindow, _hidden: bool) {}
+
     pub fn show_without_activating(window: &tauri::WebviewWindow) -> Result<(), String> {
         window.show().map_err(|err| err.to_string())?;
         window.unminimize().map_err(|err| err.to_string())?;
@@ -232,6 +256,10 @@ mod platform {
 
 pub fn install(window: &tauri::WebviewWindow) {
     platform::install(window);
+}
+
+pub fn set_taskbar_button_hidden(window: &tauri::WebviewWindow, hidden: bool) {
+    platform::set_taskbar_button_hidden(window, hidden);
 }
 
 pub fn show_without_activating(window: &tauri::WebviewWindow) -> Result<(), String> {

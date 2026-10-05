@@ -1,5 +1,4 @@
 <script lang="ts">
-  import ChooseViewButton from "./ChooseViewButton.svelte";
   import Icon from "./Icon.svelte";
   import SceneActionButton from "./SceneActionButton.svelte";
   import { sceneBackgroundId } from "../stores/appearance";
@@ -9,13 +8,9 @@
 
   let {
     buttons,
-    showSettingsButton = false,
-    onOpenSettings,
     teamsStatus = null,
   }: {
     buttons: DeckButtonConfig[];
-    showSettingsButton?: boolean;
-    onOpenSettings?: () => void;
     teamsStatus?: TeamsStatus | null;
   } = $props();
 
@@ -35,10 +30,7 @@
   const showShader = $derived(usesFullViewBackground($sceneBackgroundId));
 </script>
 
-<section class="teams" class:has-settings={showSettingsButton && onOpenSettings} class:shader={showShader}>
-  {#if showSettingsButton && onOpenSettings}
-    <ChooseViewButton onclick={() => onOpenSettings()} />
-  {/if}
+<section class="teams" class:shader={showShader}>
 
   <header class="brand">
     <span class="logo" aria-hidden="true">
@@ -128,10 +120,6 @@
 
   .teams.shader {
     background: transparent;
-  }
-
-  .teams.has-settings {
-    padding-top: 120px;
   }
 
   .brand {

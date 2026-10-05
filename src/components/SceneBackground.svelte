@@ -79,6 +79,7 @@
 
   $effect(() => {
     pendingPalette = [...colors];
+    live?.setFadeMs(fadeMs);
     live?.applyPalette(pendingPalette);
   });
 

@@ -1,4 +1,7 @@
+use tauri::Manager;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
+
+use crate::no_activate;
 
 /// Geometry and chrome we persist. Visibility is not saved; launch show/hide
 /// is controlled by the start-minimized preference.
@@ -45,6 +48,33 @@ fn apply_fullscreen(window: &tauri::WebviewWindow, start_fullscreen: bool) {
         let _ = window.set_fullscreen(false);
         let _ = window.set_decorations(true);
     }
+}
+
+/// Hide or restore the OS taskbar button for every AstroDeck window.
+/// The tray icon is unchanged.
+pub fn apply_taskbar_button(window: &tauri::WebviewWindow, hide: bool) {
+    let _ = window.set_skip_taskbar(hide);
+    no_activate::set_taskbar_button_hidden(window, hide);
+}
+
+pub fn apply_taskbar_button_all(app: &tauri::AppHandle, hide: bool) {
+    for (_, window) in app.webview_windows() {
+        apply_taskbar_button(&window, hide);
+    }
+}
+
+/// Apply now, then once more after the window is shown. Windows puts the
+/// taskbar button back on ShowWindow unless the style is set again.
+pub fn refresh_taskbar_button(app: &tauri::AppHandle) {
+    let hide = crate::prefs::hide_taskbar_icon(app);
+    apply_taskbar_button_all(app, hide);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let _ = app.clone().run_on_main_thread(move || {
+            apply_taskbar_button_all(&app, crate::prefs::hide_taskbar_icon(&app));
+        });
+    });
 }
 
 pub fn persist(app: &tauri::AppHandle) {

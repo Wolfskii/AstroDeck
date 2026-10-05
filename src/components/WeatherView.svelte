@@ -1,15 +1,8 @@
 <script lang="ts">
   import WeatherAtmosphere from "./WeatherAtmosphere.svelte";
   import WeatherIcon from "./WeatherIcon.svelte";
-  import { weatherIconName, weatherScene, type WeatherSnapshot } from "../services/weather";
-
-  let {
-    weather,
-    onBack,
-  }: {
-    weather: WeatherSnapshot;
-    onBack: () => void;
-  } = $props();
+  import { weatherIconName, weatherScene } from "../services/weather";
+  import { weatherSnapshot, weatherStatus } from "../stores/weather";
 
   function degrees(value: number): string {
     return `${Math.round(value)}°`;
@@ -25,71 +18,69 @@
   }
 </script>
 
-<div class="detail">
-  <WeatherAtmosphere scene={weatherScene(weather.code)} isDay={weather.isDay} />
-  <button type="button" class="back" onclick={onBack}>Home</button>
-  <div class="forecast">
-    <section class="now">
-      <div class="now-copy">
-        <p class="place">{weather.place}</p>
-        <p class="temp">{degrees(weather.temperature)}</p>
-        <p class="label">{weather.label}</p>
-        {#if weather.rainChance != null}
-          <p class="meta">Chance of rain {Math.round(weather.rainChance)}%</p>
-        {/if}
-        {#if weather.humidity != null}
-          <p class="meta">Humidity {Math.round(weather.humidity)}%</p>
-        {/if}
-      </div>
-      <div class="now-icon">
-        <WeatherIcon name={weatherIconName(weather.code, weather.isDay)} />
-      </div>
-    </section>
-    {#each weather.days as day (day.date)}
-      {@const parts = dayParts(day.date)}
-      <section class="day">
-        <p class="when">
-          <span>{parts.day}</span>
-          <span>{parts.weekday}</span>
-        </p>
-        <div class="day-icon">
-          <WeatherIcon name={weatherIconName(day.code, true)} />
+<section class="weather-view">
+  {#if $weatherSnapshot}
+    {@const weather = $weatherSnapshot}
+    <WeatherAtmosphere scene={weatherScene(weather.code)} isDay={weather.isDay} />
+    <div class="forecast">
+      <section class="now">
+        <div class="now-copy">
+          <p class="place">{weather.place}</p>
+          <p class="temp">{degrees(weather.temperature)}</p>
+          <p class="label">{weather.label}</p>
+          {#if weather.rainChance != null}
+            <p class="meta">Chance of rain {Math.round(weather.rainChance)}%</p>
+          {/if}
+          {#if weather.humidity != null}
+            <p class="meta">Humidity {Math.round(weather.humidity)}%</p>
+          {/if}
         </div>
-        <p class="range">{degrees(day.low)}/{degrees(day.high)}</p>
-        <p class="day-label">{day.label}</p>
-        {#if day.rainChance != null}
-          <p class="day-rain">Rain {Math.round(day.rainChance)}%</p>
-        {/if}
+        <div class="now-icon">
+          <WeatherIcon name={weatherIconName(weather.code, weather.isDay)} />
+        </div>
       </section>
-    {/each}
-  </div>
-</div>
+      {#each weather.days as day (day.date)}
+        {@const parts = dayParts(day.date)}
+        <section class="day">
+          <p class="when">
+            <span>{parts.day}</span>
+            <span>{parts.weekday}</span>
+          </p>
+          <div class="day-icon">
+            <WeatherIcon name={weatherIconName(day.code, true)} />
+          </div>
+          <p class="range">{degrees(day.low)}/{degrees(day.high)}</p>
+          <p class="day-label">{day.label}</p>
+          {#if day.rainChance != null}
+            <p class="day-rain">Rain {Math.round(day.rainChance)}%</p>
+          {/if}
+        </section>
+      {/each}
+    </div>
+  {:else}
+    <p class="weather-status">{$weatherStatus}</p>
+  {/if}
+</section>
 
 <style>
-  .detail {
-    position: absolute;
-    inset: 0;
-    z-index: 1;
+  .weather-view {
+    position: relative;
+    flex: 1 1 auto;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    background: #10141c;
     color: #f5f5f7;
   }
 
-  .back {
-    position: absolute;
-    top: 44px;
-    left: 128px;
-    z-index: 4;
-    padding: 10px 16px;
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 999px;
-    background: rgba(0, 0, 0, 0.28);
-    color: inherit;
-    font-size: 0.95rem;
-    font-weight: 700;
-    cursor: pointer;
-  }
-
-  .back:hover {
-    background: rgba(255, 255, 255, 0.12);
+  .weather-status {
+    margin: 0;
+    display: grid;
+    height: 100%;
+    place-items: center;
+    padding: 32px;
+    text-align: center;
+    font-size: 1.2rem;
   }
 
   .forecast {
@@ -99,7 +90,7 @@
     grid-template-columns: minmax(16rem, 1.45fr) repeat(5, minmax(0, 1fr));
     align-items: center;
     height: 100%;
-    padding: 120px 4vw 48px 5vw;
+    padding: 48px 4vw;
     gap: clamp(12px, 2vw, 28px);
   }
 

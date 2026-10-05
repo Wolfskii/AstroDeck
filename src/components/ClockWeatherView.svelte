@@ -1,34 +1,61 @@
 <script lang="ts">
-  import ChooseViewButton from "./ChooseViewButton.svelte";
-  import WeatherDetail from "./WeatherDetail.svelte";
   import WeatherIcon from "./WeatherIcon.svelte";
   import {
     clockDigitBorder,
     clockDigitBorderColor,
     clockDigitBorderWidth,
     clockDigitColor,
-    clockLocation,
-    temperatureUnit,
+    clockWeatherCard,
   } from "../stores/clock";
+  import { weatherDetailOpen } from "../stores/navigation";
+  import { weatherSnapshot, weatherStatus } from "../stores/weather";
   import { sceneBackgroundId } from "../stores/appearance";
   import { usesFullViewBackground } from "../lib/sceneBackgrounds";
-  import {
-    detectLocalPlace,
-    fetchWeather,
-    searchPlaces,
-    weatherIconName,
-    type WeatherSnapshot,
-  } from "../services/weather";
+  import { weatherIconName } from "../services/weather";
+  import { executeAction } from "../services/api";
 
-  let { onOpenSettings }: { onOpenSettings?: () => void } = $props();
+  let {
+    nowPlaying = null,
+    onOpenPlaying,
+  }: {
+    nowPlaying?: {
+      sceneId: "spotify" | "youtubeMusic" | "media";
+      title: string;
+      artist: string;
+      playing: boolean;
+    } | null;
+    onOpenPlaying?: (sceneId: "spotify" | "youtubeMusic" | "media") => void;
+  } = $props();
+
+  const nowPlayingLabel = $derived(
+    nowPlaying
+      ? [nowPlaying.title, nowPlaying.artist].filter(Boolean).join(" - ")
+      : ""
+  );
 
   let now = $state(new Date());
-  let weather = $state<WeatherSnapshot | null>(null);
-  let status = $state("Finding location…");
-  let detailOpen = $state(false);
+  let wavePhase = $state(0);
   const showShader = $derived(usesFullViewBackground($sceneBackgroundId));
 
   const parts = $derived(clockParts(now));
+  const homeDate = $derived(formatHomeDate(now));
+  let timeEl = $state<HTMLParagraphElement | null>(null);
+  let dateEdge = $state(0);
+  const wavePoints = $derived.by(() => {
+    const count = 56;
+    const points: string[] = [];
+    for (let index = 0; index <= count; index += 1) {
+      const x = (index / count) * 100;
+      const t = wavePhase + index * 0.62;
+      const y =
+        12 +
+        Math.sin(t) * 6.4 +
+        Math.sin(t * 2.15 + 0.8) * 3.1 +
+        Math.sin(t * 0.45) * 1.4;
+      points.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+    }
+    return points.join(" ");
+  });
 
   $effect(() => {
     const timer = window.setInterval(() => {
@@ -38,41 +65,39 @@
   });
 
   $effect(() => {
-    const unit = $temperatureUnit;
-    const query = $clockLocation.trim();
-    let cancelled = false;
-
-    async function load() {
-      try {
-        status = query ? "Looking up location…" : "Finding this computer…";
-        const place = query ? (await searchPlaces(query))[0] : await detectLocalPlace();
-        if (cancelled) return;
-        if (!place) {
-          weather = null;
-          status = query
-            ? "No matching place. Set another location in Settings."
-            : "Location unavailable. Set one in Settings.";
-          return;
-        }
-        status = "Loading weather…";
-        const next = await fetchWeather(place, unit);
-        if (cancelled) return;
-        weather = next;
-        status = "";
-      } catch {
-        if (!cancelled) {
-          weather = null;
-          status = "Weather unavailable.";
-        }
-      }
-    }
-
-    void load();
-    const refresh = window.setInterval(() => void load(), 15 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(refresh);
+    const el = timeEl;
+    parts.hours;
+    parts.minutes;
+    parts.meridian;
+    if (!el) return;
+    const measure = () => {
+      const box = el.getBoundingClientRect();
+      let right = box.right;
+      el.querySelectorAll(".digit, .meridian").forEach((node) => {
+        right = Math.max(right, node.getBoundingClientRect().right);
+      });
+      const next = Math.round(box.right - right);
+      if (next !== dateEdge) dateEdge = next;
     };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  });
+
+  $effect(() => {
+    if (!nowPlaying?.playing) return;
+    let frame = 0;
+    const tick = () => {
+      wavePhase += 0.11;
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
   });
 
   function clockParts(date: Date): { hours: string; minutes: string; meridian: string } {
@@ -94,48 +119,189 @@
     };
   }
 
+  function formatHomeDate(date: Date): string {
+    const weekday = new Intl.DateTimeFormat("en-GB", { weekday: "long" }).format(date);
+    const month = new Intl.DateTimeFormat("en-GB", { month: "long" }).format(date);
+    return `${weekday}, ${ordinalDay(date.getDate())} of ${month}`;
+  }
+
+  function ordinalDay(day: number): string {
+    const mod100 = day % 100;
+    if (mod100 >= 11 && mod100 <= 13) return `${day}th`;
+    switch (day % 10) {
+      case 1:
+        return `${day}st`;
+      case 2:
+        return `${day}nd`;
+      case 3:
+        return `${day}rd`;
+      default:
+        return `${day}th`;
+    }
+  }
+
   function degrees(value: number): string {
     return `${Math.round(value)}°`;
+  }
+
+  async function runTransport(kind: "prev" | "toggle" | "next") {
+    const scene = nowPlaying?.sceneId;
+    if (!scene) return;
+    const prefix = scene === "media" ? "media" : scene;
+    const action =
+      kind === "prev"
+        ? `${prefix}.prevTrack`
+        : kind === "next"
+          ? `${prefix}.nextTrack`
+          : `${prefix}.togglePlay`;
+    const label = kind === "prev" ? "Previous" : kind === "next" ? "Next" : "Play/Pause";
+    try {
+      window.dispatchEvent(
+        new CustomEvent("astrodeck-action-started", { detail: { action, label } })
+      );
+      await executeAction(action);
+      window.dispatchEvent(
+        new CustomEvent("astrodeck-action-executed", { detail: { action, label } })
+      );
+    } catch (e) {
+      window.dispatchEvent(
+        new CustomEvent("astrodeck-action-failed", {
+          detail: { action, label, error: String(e) },
+        })
+      );
+    }
   }
 </script>
 
 <section class="clock-view" class:clock-view--shader={showShader}>
-  {#if onOpenSettings}
-    <ChooseViewButton onclick={() => onOpenSettings()} />
-  {/if}
-
   <div class="clock-pane">
-    <p
-      class="time"
-      style={`color: ${$clockDigitColor}; --digit-border: ${$clockDigitBorder ? $clockDigitBorderWidth : 0}px; --digit-border-color: ${$clockDigitBorderColor};`}
-      aria-label={`${parts.hours}:${parts.minutes}${parts.meridian ? ` ${parts.meridian}` : ""}`}
-    >
-      <span class="digit">{parts.hours}</span>
-      <span class="colon" aria-hidden="true"><i></i><i></i></span>
-      <span class="digit">{parts.minutes}</span>
-      {#if parts.meridian}
-        <span class="meridian">{parts.meridian}</span>
+    <div class="clock-block">
+      <p
+        class="time"
+        bind:this={timeEl}
+        style={`color: ${$clockDigitColor}; --digit-border: ${$clockDigitBorder ? $clockDigitBorderWidth : 0}px; --digit-border-color: ${$clockDigitBorderColor};`}
+        aria-label={`${homeDate}. ${parts.hours}:${parts.minutes}${parts.meridian ? ` ${parts.meridian}` : ""}`}
+      >
+        <span class="home-date" style={`right: ${dateEdge}px`}>{homeDate}</span>
+        <span class="digit">{parts.hours}</span>
+        <span class="colon" aria-hidden="true"><i></i><i></i></span>
+        <span class="digit">{parts.minutes}</span>
+        {#if parts.meridian}
+          <span class="meridian">{parts.meridian}</span>
+        {/if}
+        </p>
+      {#if nowPlaying}
+        <div class="playback-under">
+          <svg
+            class="sound-wave"
+            viewBox="0 0 100 24"
+            preserveAspectRatio="none"
+            style={`color: ${$clockDigitColor}`}
+            aria-hidden="true"
+          >
+            <polyline
+              points={wavePoints}
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.4"
+              stroke-linejoin="miter"
+              stroke-linecap="butt"
+              vector-effect="non-scaling-stroke"
+            />
+          </svg>
+          {#if nowPlaying && nowPlayingLabel}
+            <div class="now-playing-row">
+              <button
+                type="button"
+                class="now-playing"
+                style={`color: ${$clockDigitColor}`}
+                aria-label={`Open ${nowPlayingLabel}`}
+                onclick={() => onOpenPlaying?.(nowPlaying.sceneId)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  {#if nowPlaying.sceneId === "spotify"}
+                    <path
+                      fill="#1db954"
+                      d="M12 2a10 10 0 1 0 .01 20.01A10 10 0 0 0 12 2Zm4.55 14.46a.63.63 0 0 1-.86.21c-2.36-1.44-5.34-1.77-8.84-.97a.63.63 0 0 1-.28-1.23c3.82-.87 7.1-.5 9.77 1.13a.63.63 0 0 1 .21.86Zm1.2-2.68a.78.78 0 0 1-1.07.26c-2.7-1.66-6.82-2.14-10.02-1.17a.78.78 0 1 1-.45-1.5c3.67-1.11 8.23-.57 11.28 1.34a.78.78 0 0 1 .26 1.07Zm.1-2.79a.93.93 0 0 1-1.28.31c-3.09-1.9-8.2-2.07-11.15-1.14a.93.93 0 1 1-.54-1.78c3.4-1.04 9.06-.84 12.66 1.32a.93.93 0 0 1 .31 1.29Z"
+                    />
+                  {:else if nowPlaying.sceneId === "youtubeMusic"}
+                    <path
+                      fill="#ff0033"
+                      d="M23 12.2s0-3.15-.4-4.55c-.22-.9-.9-1.58-1.8-1.8C19.18 5.46 12 5.46 12 5.46s-7.18 0-8.8.39c-.9.22-1.58.9-1.8 1.8C1 9.05 1 12.2 1 12.2s0 3.15.4 4.55c.22.9.9 1.58 1.8 1.8 1.62.39 8.8.39 8.8.39s7.18 0 8.8-.39c.9-.22 1.58-.9 1.8-1.8.4-1.4.4-4.55.4-4.55ZM9.75 15.57V8.83l6.27 3.37-6.27 3.37Z"
+                    />
+                  {:else}
+                    <path
+                      fill="currentColor"
+                      d="M12 2.2a9.8 9.8 0 1 0 .01 19.61A9.8 9.8 0 0 0 12 2.2Zm-1.7 13.7V8.1L17.2 12l-6.9 3.9Z"
+                    />
+                  {/if}
+                </svg>
+                <span>{nowPlayingLabel}</span>
+              </button>
+              <div class="now-playing-transport" style={`color: ${$clockDigitColor}`}>
+                <button type="button" aria-label="Previous" onclick={() => runTransport("prev")}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="currentColor" d="M6 6h2v12H6V6zm3.5 6 8.5 6V6l-8.5 6z" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  aria-label={nowPlaying.playing ? "Pause" : "Play"}
+                  onclick={() => runTransport("toggle")}
+                >
+                  {#if nowPlaying.playing}
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path fill="currentColor" d="M6 5h4v14H6V5zm8 0h4v14h-4V5z" />
+                    </svg>
+                  {:else}
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path fill="currentColor" d="M8 5v14l11-7L8 5z" />
+                    </svg>
+                  {/if}
+                </button>
+                <button type="button" aria-label="Next" onclick={() => runTransport("next")}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path fill="currentColor" d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          {/if}
+        </div>
       {/if}
-    </p>
+    </div>
   </div>
 
   <div class="weather-pane">
-    {#if weather}
-      <button type="button" class="weather" onclick={() => (detailOpen = true)}>
-        <p class="temp">{degrees(weather.temperature)}</p>
-        <p class="place">{weather.place}</p>
+    {#if $weatherSnapshot}
+      {@const snapshot = $weatherSnapshot}
+      <div
+        class="weather"
+        class:weather-card={$clockWeatherCard}
+        style={$clockWeatherCard
+          ? "background-color: rgba(10, 14, 22, 0.38); border: none; border-radius: 32px; padding: 5.4rem 6.8rem 5.6rem; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);"
+          : undefined}
+        role="button"
+        tabindex="0"
+        onclick={() => weatherDetailOpen.set(true)}
+        onkeydown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            weatherDetailOpen.set(true);
+          }
+        }}
+      >
         <p class="condition">
-          <WeatherIcon name={weatherIconName(weather.code, weather.isDay)} />
-          <span>{weather.label}</span>
+          <WeatherIcon name={weatherIconName(snapshot.code, snapshot.isDay)} />
+          <span>{snapshot.label}</span>
         </p>
-      </button>
+        <p class="temp">{degrees(snapshot.temperature)}</p>
+        <p class="place">{snapshot.city}</p>
+      </div>
     {:else}
-      <p class="status">{status}</p>
+      <p class="status">{$weatherStatus}</p>
     {/if}
   </div>
-  {#if detailOpen && weather}
-    <WeatherDetail {weather} onBack={() => (detailOpen = false)} />
-  {/if}
 </section>
 
 <style>
@@ -165,10 +331,111 @@
 
   .clock-pane {
     justify-content: center;
-    padding: 0 5vw 0 8vw;
+    padding: 0 4vw 0 3vw;
+  }
+
+  .clock-block {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: max-content;
+    max-width: 100%;
+  }
+
+  .playback-under {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 109%;
+    margin-top: 4.2rem;
+    gap: 0.85rem;
+  }
+
+  .sound-wave {
+    display: block;
+    width: 100%;
+    height: 2.1rem;
+    overflow: visible;
+  }
+
+  .now-playing-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .now-playing {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    font-size: clamp(1.05rem, 1.7vw, 1.35rem);
+    font-weight: 650;
+    line-height: 1.2;
+  }
+
+  .now-playing svg {
+    width: 2.15rem;
+    height: 2.15rem;
+    flex-shrink: 0;
+  }
+
+  .now-playing span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .now-playing:hover span {
+    text-decoration: underline;
+  }
+
+  .now-playing-transport {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 0.35rem;
+  }
+
+  .now-playing-transport button {
+    display: grid;
+    place-items: center;
+    width: 3.4rem;
+    height: 3.4rem;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .now-playing-transport button:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .now-playing-transport svg {
+    width: 2.15rem;
+    height: 2.15rem;
   }
 
   .time {
+    position: relative;
     display: flex;
     align-items: center;
     margin: 0;
@@ -181,6 +448,22 @@
     letter-spacing: -0.01em;
     line-height: 0.8;
     font-variant-numeric: tabular-nums;
+  }
+
+  .home-date {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + min(60vh, 17vw) * 0.2);
+    margin: 0;
+    font-family: "Segoe UI", sans-serif;
+    font-size: clamp(1.2rem, 2.15vw, 1.8rem);
+    font-weight: 450;
+    letter-spacing: 0.01em;
+    line-height: 1.2;
+    white-space: nowrap;
+    -webkit-text-stroke: 0;
+    paint-order: fill;
+    pointer-events: none;
   }
 
   .digit {
@@ -224,16 +507,25 @@
   }
 
   .weather {
+    position: relative;
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: flex-start;
     min-width: 0;
     padding: 0;
     border: none;
     background: transparent;
     color: inherit;
-    text-align: center;
+    text-align: left;
     cursor: pointer;
+  }
+
+  .weather.weather-card {
+    border: none;
+    border-radius: 32px;
+    padding: 5.4rem 6.8rem 5.6rem;
+    background-color: rgba(10, 14, 22, 0.38);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
   }
 
   .temp,
@@ -245,7 +537,7 @@
 
   .temp {
     font-size: clamp(7.6rem, 18vw, 13.5rem);
-    font-weight: 800;
+    font-weight: 700;
     letter-spacing: -0.045em;
     line-height: 0.9;
   }
@@ -253,20 +545,32 @@
   .condition {
     display: flex;
     align-items: center;
-    gap: 0.4em;
-    margin-top: 10px;
-    font-size: clamp(2rem, 3.8vw, 3.1rem);
+    gap: 0.45em;
+    margin-bottom: 0;
+    font-size: clamp(1.65rem, 3.1vw, 2.55rem);
     font-weight: 650;
     letter-spacing: -0.02em;
+    line-height: 1;
+  }
+
+  .condition span {
+    line-height: 1;
+    align-self: center;
+  }
+
+  .condition :global(.weather-icon) {
+    width: clamp(3.7rem, 7vw, 5.7rem);
+    height: clamp(3.7rem, 7vw, 5.7rem);
   }
 
   .place {
     width: 100%;
     margin-top: 10px;
     color: rgba(245, 245, 247, 0.55);
-    font-size: clamp(1.2rem, 2vw, 1.55rem);
+    font-size: clamp(1.45rem, 2.5vw, 1.9rem);
     font-weight: 600;
-    text-align: center;
+    text-align: left;
+    align-self: flex-start;
   }
 
   .status {

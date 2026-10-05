@@ -496,6 +496,9 @@ pub struct SpotifyTokens {
     pub refresh_token: String,
     pub expires_at: u64,
     pub scope: String,
+    /// Client id that issued this refresh token. Empty on logins saved before this field existed.
+    #[serde(default)]
+    pub client_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3629,11 +3632,23 @@ fn maybe_refresh_token(spotify: &SpotifyState) -> Result<(), String> {
         .clone()
         .ok_or_else(|| "Spotify is not authenticated yet.".to_string())?;
 
+    let client_id = if current_tokens.client_id.trim().is_empty() {
+        config.client_id.clone()
+    } else {
+        current_tokens.client_id.clone()
+    };
+    if client_id.trim().is_empty() {
+        return Err(
+            "Spotify has no Client ID for this login. Add one in Settings, then connect again."
+                .to_string(),
+        );
+    }
+
     let client = Client::new();
     let response = client
         .post(SPOTIFY_TOKEN_URL)
         .form(&[
-            ("client_id", config.client_id.as_str()),
+            ("client_id", client_id.as_str()),
             ("grant_type", "refresh_token"),
             ("refresh_token", current_tokens.refresh_token.as_str()),
         ])
@@ -3643,16 +3658,43 @@ fn maybe_refresh_token(spotify: &SpotifyState) -> Result<(), String> {
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().unwrap_or_default();
-        return Err(format!("Spotify token refresh failed: {} {}", status, body));
+        let expired = current_tokens.expires_at <= now_unix_seconds();
+        if !expired {
+            log::warn!(
+                "Spotify token refresh failed ({status} {body}); using the current access token until it expires"
+            );
+            return Ok(());
+        }
+        return Err(spotify_refresh_error(config.auth_mode, &body, status));
     }
 
     let refreshed: TokenResponse = response.json().map_err(|e| e.to_string())?;
-    let tokens = tokens_from_response(refreshed, Some(&current_tokens))?;
+    let mut tokens = tokens_from_response(refreshed, Some(&current_tokens))?;
+    tokens.client_id = client_id;
     persist_tokens(spotify, tokens)
 }
 
-fn persist_tokens(spotify: &SpotifyState, tokens: SpotifyTokens) -> Result<(), String> {
+fn spotify_refresh_error(mode: SpotifyAuthMode, body: &str, status: reqwest::StatusCode) -> String {
+    if body.contains("invalid_client") {
+        return match mode {
+            SpotifyAuthMode::Official => {
+                "Spotify rejected the built-in login. Open Settings, disconnect Spotify, and connect again. If that still fails, switch to a developer Client ID and connect with that."
+                    .to_string()
+            }
+            SpotifyAuthMode::Custom => {
+                "Spotify rejected the Client ID for this login. In Settings, check the Client ID, then disconnect and connect Spotify again."
+                    .to_string()
+            }
+        };
+    }
+    format!("Spotify token refresh failed: {status} {body}")
+}
+
+fn persist_tokens(spotify: &SpotifyState, mut tokens: SpotifyTokens) -> Result<(), String> {
     let config = spotify.config.lock().map_err(|e| e.to_string())?.clone();
+    if tokens.client_id.trim().is_empty() {
+        tokens.client_id = config.client_id.clone();
+    }
     if let Some(path) = config.token_path {
         let serialized = serde_json::to_string_pretty(&tokens).map_err(|e| e.to_string())?;
         fs::write(path, serialized).map_err(|e| e.to_string())?;
@@ -3691,6 +3733,9 @@ fn tokens_from_response(
             .ok_or_else(|| "Spotify did not return a refresh token".to_string())?,
         expires_at: now_unix_seconds() + response.expires_in,
         scope,
+        client_id: existing
+            .map(|tokens| tokens.client_id.clone())
+            .unwrap_or_default(),
     })
 }
 
@@ -3795,6 +3840,7 @@ mod tests {
                 refresh_token: "refresh".to_string(),
                 expires_at: u64::MAX,
                 scope: "streaming".to_string(),
+                client_id: String::new(),
             });
         }
         set_saved_track_cache(&spotify, "4uLU6hMCjMI75M1A2tKUQC", true);
@@ -4001,6 +4047,7 @@ mod tests {
                 refresh_token: "refresh".to_string(),
                 expires_at: u64::MAX,
                 scope: "streaming user-read-recently-played".to_string(),
+                client_id: String::new(),
             });
         }
         persist_idle_playback(
@@ -4037,6 +4084,7 @@ mod tests {
             refresh_token: "refresh".to_string(),
             expires_at: 1,
             scope: "streaming".to_string(),
+            client_id: String::new(),
         };
         let refreshed = tokens_from_response(
             TokenResponse {

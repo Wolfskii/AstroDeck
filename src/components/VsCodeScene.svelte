@@ -1,28 +1,16 @@
 <script lang="ts">
-  import ChooseViewButton from "./ChooseViewButton.svelte";
   import Icon from "./Icon.svelte";
   import SceneActionButton from "./SceneActionButton.svelte";
   import { sceneBackgroundId } from "../stores/appearance";
   import { usesFullViewBackground } from "../lib/sceneBackgrounds";
   import type { DeckButtonConfig } from "../types";
 
-  let {
-    buttons,
-    showSettingsButton = false,
-    onOpenSettings,
-  }: {
-    buttons: DeckButtonConfig[];
-    showSettingsButton?: boolean;
-    onOpenSettings?: () => void;
-  } = $props();
+  let { buttons }: { buttons: DeckButtonConfig[] } = $props();
 
   const showShader = $derived(usesFullViewBackground($sceneBackgroundId));
 </script>
 
-<section class="vscode" class:has-settings={showSettingsButton && onOpenSettings} class:shader={showShader}>
-  {#if showSettingsButton && onOpenSettings}
-    <ChooseViewButton onclick={() => onOpenSettings()} />
-  {/if}
+<section class="vscode" class:shader={showShader}>
 
   <header class="brand">
     <span class="logo" aria-hidden="true">
@@ -63,10 +51,6 @@
 
   .vscode.shader {
     background: transparent;
-  }
-
-  .vscode.has-settings {
-    padding-top: 120px;
   }
 
   .brand {

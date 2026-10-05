@@ -544,6 +544,7 @@ fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
 
     if let Some(window) = app.get_webview_window(label) {
         apply_window_icon(&window);
+        window_prefs::apply_taskbar_button(&window, prefs::hide_taskbar_icon(&app));
     }
 
     Ok(())
@@ -560,7 +561,9 @@ fn show_main_window_no_activate(app: tauri::AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "Main window is not available".to_string())?;
-    no_activate::show_without_activating(&window)
+    no_activate::show_without_activating(&window)?;
+    window_prefs::refresh_taskbar_button(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -639,6 +642,8 @@ pub fn run() {
             prefs::set_update_popups_enabled,
             prefs::get_start_minimized,
             prefs::set_start_minimized,
+            prefs::get_hide_taskbar_icon,
+            prefs::set_hide_taskbar_icon,
             prefs::get_start_fullscreen,
             prefs::set_start_fullscreen,
             prefs::get_scene_background,
@@ -682,6 +687,7 @@ pub fn run() {
                     prefs::start_minimized(&app_handle),
                     prefs::start_fullscreen(&app_handle),
                 );
+                window_prefs::apply_taskbar_button(&window, prefs::hide_taskbar_icon(&app_handle));
             }
 
             plugin_engine::load_plugins(&app_handle);

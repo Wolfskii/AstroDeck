@@ -8,6 +8,9 @@ use tauri::{Emitter, Manager};
 pub struct AppPreferences {
     #[serde(default = "default_start_minimized")]
     pub start_minimized: bool,
+    /// Keep the open window off the OS taskbar. The tray icon still opens, hides, and quits.
+    #[serde(default)]
+    pub hide_taskbar_icon: bool,
     #[serde(default)]
     pub start_fullscreen: bool,
     #[serde(default = "default_show_update_popups")]
@@ -46,12 +49,17 @@ pub struct AppPreferences {
     pub clock_bg_color_custom: bool,
     #[serde(default = "default_clock_bg_color")]
     pub clock_bg_color: String,
+    #[serde(default)]
+    pub clock_weather_card: bool,
+    #[serde(default = "default_clock_weather_card_color")]
+    pub clock_weather_card_color: String,
 }
 
 impl Default for AppPreferences {
     fn default() -> Self {
         Self {
             start_minimized: default_start_minimized(),
+            hide_taskbar_icon: false,
             start_fullscreen: false,
             show_update_popups: default_show_update_popups(),
             scene_background: default_scene_background(),
@@ -71,6 +79,8 @@ impl Default for AppPreferences {
             clock_digit_border_width: default_clock_digit_border_width(),
             clock_bg_color_custom: false,
             clock_bg_color: default_clock_bg_color(),
+            clock_weather_card: false,
+            clock_weather_card_color: default_clock_weather_card_color(),
         }
     }
 }
@@ -128,6 +138,10 @@ fn default_clock_digit_border_width() -> u8 {
 
 fn default_clock_bg_color() -> String {
     "#3b82f6".to_string()
+}
+
+fn default_clock_weather_card_color() -> String {
+    "#c5dbe8".to_string()
 }
 
 fn parse_clock_digit_border_width(value: u8) -> u8 {
@@ -263,6 +277,13 @@ pub fn start_minimized(app: &tauri::AppHandle) -> bool {
         .unwrap_or_else(|_| default_start_minimized())
 }
 
+pub fn hide_taskbar_icon(app: &tauri::AppHandle) -> bool {
+    preferences_path(app)
+        .and_then(|path| load_preferences(&path))
+        .map(|preferences| preferences.hide_taskbar_icon)
+        .unwrap_or(false)
+}
+
 pub fn start_fullscreen(app: &tauri::AppHandle) -> bool {
     preferences_path(app)
         .and_then(|path| load_preferences(&path))
@@ -281,6 +302,21 @@ pub fn set_start_minimized(app: tauri::AppHandle, enabled: bool) -> Result<(), S
     let mut preferences = load_preferences(&path)?;
     preferences.start_minimized = enabled;
     save_preferences(&path, &preferences)
+}
+
+#[tauri::command]
+pub fn get_hide_taskbar_icon(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(hide_taskbar_icon(&app))
+}
+
+#[tauri::command]
+pub fn set_hide_taskbar_icon(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.hide_taskbar_icon = enabled;
+    save_preferences(&path, &preferences)?;
+    crate::window_prefs::refresh_taskbar_button(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -473,6 +509,8 @@ pub struct ClockSettings {
     pub digit_border_width: u8,
     pub bg_color_custom: bool,
     pub bg_color: String,
+    pub weather_card: bool,
+    pub weather_card_color: String,
 }
 
 fn clock_settings_from(preferences: &AppPreferences) -> ClockSettings {
@@ -485,6 +523,11 @@ fn clock_settings_from(preferences: &AppPreferences) -> ClockSettings {
         digit_border_width: parse_clock_digit_border_width(preferences.clock_digit_border_width),
         bg_color_custom: preferences.clock_bg_color_custom,
         bg_color: parse_hex_color(&preferences.clock_bg_color, &default_clock_bg_color()),
+        weather_card: preferences.clock_weather_card,
+        weather_card_color: parse_hex_color(
+            &preferences.clock_weather_card_color,
+            &default_clock_weather_card_color(),
+        ),
     }
 }
 
@@ -506,6 +549,8 @@ pub fn set_clock_settings(
     digit_border_width: u8,
     bg_color_custom: bool,
     bg_color: String,
+    weather_card: bool,
+    weather_card_color: String,
 ) -> Result<ClockSettings, String> {
     let path = preferences_path(&app)?;
     let mut preferences = load_preferences(&path)?;
@@ -517,6 +562,9 @@ pub fn set_clock_settings(
     preferences.clock_digit_border_width = parse_clock_digit_border_width(digit_border_width);
     preferences.clock_bg_color_custom = bg_color_custom;
     preferences.clock_bg_color = parse_hex_color(&bg_color, &default_clock_bg_color());
+    preferences.clock_weather_card = weather_card;
+    preferences.clock_weather_card_color =
+        parse_hex_color(&weather_card_color, &default_clock_weather_card_color());
     save_preferences(&path, &preferences)?;
     Ok(clock_settings_from(&preferences))
 }
