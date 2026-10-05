@@ -132,6 +132,7 @@ jobs:
         run: npm run build
 
       - name: Build Tauri bundles
+        shell: bash
         run: |
           set -euo pipefail
           if [ "${{ matrix.platform }}" = "linux" ]; then
