@@ -16,6 +16,7 @@
   import TeamsScene from "./components/TeamsScene.svelte";
   import VsCodeScene from "./components/VsCodeScene.svelte";
   import ChooseViewButton from "./components/ChooseViewButton.svelte";
+  import SceneBackground from "./components/SceneBackground.svelte";
   import {
     executeActionValue,
     getActiveScene,
@@ -49,6 +50,8 @@
     getBuiltinSceneIds,
     isIdleScene,
   } from "./layouts/layouts";
+  import { usesCoverImage, usesFullViewBackground } from "./lib/sceneBackgrounds";
+  import { shaderColorsFromAccent } from "./lib/color";
   import { logs, logInfo, logError, pushExternal, type LogEntry } from "./services/logger";
   import {
     checkForAppUpdate,
@@ -72,8 +75,9 @@
     setLyricsProviderOrder,
   } from "./services/prefs";
   import { hideMainWindow, persistMainWindowState, revealMainWindow } from "./services/windowState";
-  import { hydrateSceneBackground } from "./stores/appearance";
-  import { loadClockSettings } from "./stores/clock";
+  import { hydrateSceneBackground, sceneBackgroundId } from "./stores/appearance";
+  import { sceneShaderColors, sceneShaderImage } from "./stores/sceneVisual";
+  import { clockDigitColor, loadClockSettings } from "./stores/clock";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
 
@@ -102,6 +106,9 @@
   let autoSwitchBusyId = $state<string | null>(null);
   const isSettingsWindow = $derived(!isTauri || viewMode === "settings");
   const isLauncherView = $derived(isTauri && viewMode === "launcher");
+  const showGlobalSceneBackground = $derived(
+    !isSettingsWindow && !isLauncherView && usesFullViewBackground($sceneBackgroundId)
+  );
   const showLogsPanel = $derived(isSettingsWindow && showSettingsTerminal);
   let logStatus = $state<"connecting" | "connected" | "disconnected">("connecting");
   let autoScroll = $state(true);
@@ -1364,10 +1371,14 @@
     }
   }
 
-  let sceneId = $state("idle");
+  let sceneId = $state("clock");
   let layout = $state<LayoutConfig | null>(null);
   let availableScenes = $state<string[]>([]);
   let loading = $state(true);
+  const isHomeScene = $derived(sceneId === "clock");
+  const globalSceneColors = $derived(
+    isHomeScene ? shaderColorsFromAccent($clockDigitColor) : $sceneShaderColors
+  );
   const isSpotifyScene = $derived(sceneId === "spotify");
   const isYouTubeMusicScene = $derived(sceneId === "youtubeMusic");
   const isOsMediaScene = $derived(sceneId === "media");
@@ -2074,6 +2085,16 @@
 </script>
 
 <div class="app" class:app-settings={isSettingsWindow}>
+  {#if showGlobalSceneBackground}
+    <div class="app-scene-bg">
+      <SceneBackground
+        style={$sceneBackgroundId}
+        colors={globalSceneColors}
+        imageUrl={isHomeScene || !usesCoverImage($sceneBackgroundId) ? null : $sceneShaderImage}
+        playing={true}
+      />
+    </div>
+  {/if}
   {#if !isImmersiveDeckView && !isSettingsWindow && !isLauncherView}
     <header class="app-header">
       <div class="app-header-left">
@@ -2477,6 +2498,13 @@
     background: var(--bg-primary);
   }
 
+  .app-scene-bg {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+
   .app.app-settings {
     background: var(--settings-page-bg);
     color-scheme: light;
@@ -2487,6 +2515,8 @@
   }
 
   .app-header {
+    position: relative;
+    z-index: 2;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -2594,10 +2624,13 @@
   }
 
   .app-main {
+    position: relative;
+    z-index: 1;
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
     overflow: hidden;
+    background: transparent;
   }
 
   .loading {

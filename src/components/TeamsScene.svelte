@@ -2,6 +2,8 @@
   import ChooseViewButton from "./ChooseViewButton.svelte";
   import Icon from "./Icon.svelte";
   import SceneActionButton from "./SceneActionButton.svelte";
+  import { sceneBackgroundId } from "../stores/appearance";
+  import { usesFullViewBackground } from "../lib/sceneBackgrounds";
   import type { DeckButtonConfig } from "../types";
   import type { TeamsStatus } from "../services/api";
 
@@ -30,9 +32,10 @@
     teamsStatus?.isConnected ? !teamsStatus.isVideoOn : cameraOff
   );
   const effectiveSharing = $derived(teamsStatus?.isConnected ? teamsStatus.isSharing : false);
+  const showShader = $derived(usesFullViewBackground($sceneBackgroundId));
 </script>
 
-<section class="teams" class:has-settings={showSettingsButton && onOpenSettings}>
+<section class="teams" class:has-settings={showSettingsButton && onOpenSettings} class:shader={showShader}>
   {#if showSettingsButton && onOpenSettings}
     <ChooseViewButton onclick={() => onOpenSettings()} />
   {/if}
@@ -121,6 +124,10 @@
       radial-gradient(1200px 480px at 12% -10%, rgba(91, 95, 199, 0.28), transparent 55%),
       #1b1a1f;
     color: #f3f2f1;
+  }
+
+  .teams.shader {
+    background: transparent;
   }
 
   .teams.has-settings {

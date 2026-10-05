@@ -48,7 +48,7 @@
               : id === "media"
                 ? "◉"
                 : id === "clock"
-                  ? "◷"
+                  ? "⌂"
                   : "✦"}
         </span>
         <span class="launcher-card-title">{title}</span>

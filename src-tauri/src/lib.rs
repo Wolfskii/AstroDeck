@@ -44,7 +44,7 @@ impl AppState {
         Self {
             plugins: Mutex::new(Vec::new()),
             plugin_actions: Mutex::new(HashMap::new()),
-            active_scene_id: Mutex::new("idle".to_string()),
+            active_scene_id: Mutex::new("clock".to_string()),
             manual_scene_override: Mutex::new(None),
             last_matched_ids: Mutex::new(Vec::new()),
             os_local_media: Mutex::new(None),

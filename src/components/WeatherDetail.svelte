@@ -27,7 +27,7 @@
 
 <div class="detail">
   <WeatherAtmosphere scene={weatherScene(weather.code)} isDay={weather.isDay} />
-  <button type="button" class="back" onclick={onBack}>Clock</button>
+  <button type="button" class="back" onclick={onBack}>Home</button>
   <div class="forecast">
     <section class="now">
       <div class="now-copy">

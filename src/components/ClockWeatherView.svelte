@@ -2,7 +2,16 @@
   import ChooseViewButton from "./ChooseViewButton.svelte";
   import WeatherDetail from "./WeatherDetail.svelte";
   import WeatherIcon from "./WeatherIcon.svelte";
-  import { clockDigitColor, clockLocation, temperatureUnit } from "../stores/clock";
+  import {
+    clockDigitBorder,
+    clockDigitBorderColor,
+    clockDigitBorderWidth,
+    clockDigitColor,
+    clockLocation,
+    temperatureUnit,
+  } from "../stores/clock";
+  import { sceneBackgroundId } from "../stores/appearance";
+  import { usesFullViewBackground } from "../lib/sceneBackgrounds";
   import {
     detectLocalPlace,
     fetchWeather,
@@ -17,6 +26,7 @@
   let weather = $state<WeatherSnapshot | null>(null);
   let status = $state("Finding location…");
   let detailOpen = $state(false);
+  const showShader = $derived(usesFullViewBackground($sceneBackgroundId));
 
   const parts = $derived(clockParts(now));
 
@@ -89,7 +99,7 @@
   }
 </script>
 
-<section class="clock-view">
+<section class="clock-view" class:clock-view--shader={showShader}>
   {#if onOpenSettings}
     <ChooseViewButton onclick={() => onOpenSettings()} />
   {/if}
@@ -97,7 +107,7 @@
   <div class="clock-pane">
     <p
       class="time"
-      style={`color: ${$clockDigitColor}`}
+      style={`color: ${$clockDigitColor}; --digit-border: ${$clockDigitBorder ? $clockDigitBorderWidth : 0}px; --digit-border-color: ${$clockDigitBorderColor};`}
       aria-label={`${parts.hours}:${parts.minutes}${parts.meridian ? ` ${parts.meridian}` : ""}`}
     >
       <span class="digit">{parts.hours}</span>
@@ -113,11 +123,11 @@
     {#if weather}
       <button type="button" class="weather" onclick={() => (detailOpen = true)}>
         <p class="temp">{degrees(weather.temperature)}</p>
+        <p class="place">{weather.place}</p>
         <p class="condition">
           <WeatherIcon name={weatherIconName(weather.code, weather.isDay)} />
           <span>{weather.label}</span>
         </p>
-        <p class="place">{weather.place}</p>
       </button>
     {:else}
       <p class="status">{status}</p>
@@ -141,6 +151,10 @@
     color: #f5f5f7;
   }
 
+  .clock-view--shader {
+    background: transparent;
+  }
+
   .clock-pane,
   .weather-pane {
     display: flex;
@@ -151,7 +165,7 @@
 
   .clock-pane {
     justify-content: center;
-    padding: 0 2vw 0 6vw;
+    padding: 0 5vw 0 8vw;
   }
 
   .time {
@@ -160,8 +174,10 @@
     margin: 0;
     color: #f3d37a;
     font-family: "Arial Narrow", "Segoe UI", sans-serif;
-    font-size: min(84vh, 24vw);
-    font-weight: 700;
+    font-size: min(60vh, 17vw);
+    font-weight: 800;
+    -webkit-text-stroke: var(--digit-border, 0) var(--digit-border-color, transparent);
+    paint-order: stroke fill;
     letter-spacing: -0.01em;
     line-height: 0.8;
     font-variant-numeric: tabular-nums;
@@ -169,18 +185,20 @@
 
   .digit {
     display: block;
-    transform: scaleX(1.16) scaleY(1.32);
+    margin: 0 0.12em;
+    transform: scaleX(1.38) scaleY(1.32);
     transform-origin: center center;
   }
 
   .colon {
     display: flex;
     flex-direction: column;
+    align-items: center;
     justify-content: center;
     gap: 0.18em;
     width: 0.22em;
     height: 0.62em;
-    margin: 0 0.04em 0.04em;
+    margin: 0 0.12em 0.04em;
   }
 
   .colon i {
@@ -189,6 +207,7 @@
     height: 0.16em;
     border-radius: 50%;
     background: currentColor;
+    box-shadow: 0 0 0 var(--digit-border, 0) var(--digit-border-color, transparent);
   }
 
   .meridian {
@@ -207,13 +226,13 @@
   .weather {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
     min-width: 0;
     padding: 0;
     border: none;
     background: transparent;
     color: inherit;
-    text-align: left;
+    text-align: center;
     cursor: pointer;
   }
 
@@ -226,7 +245,7 @@
 
   .temp {
     font-size: clamp(7.6rem, 18vw, 13.5rem);
-    font-weight: 520;
+    font-weight: 800;
     letter-spacing: -0.045em;
     line-height: 0.9;
   }
@@ -242,10 +261,12 @@
   }
 
   .place {
-    margin-top: 18px;
+    width: 100%;
+    margin-top: 10px;
     color: rgba(245, 245, 247, 0.55);
     font-size: clamp(1.2rem, 2vw, 1.55rem);
     font-weight: 600;
+    text-align: center;
   }
 
   .status {
