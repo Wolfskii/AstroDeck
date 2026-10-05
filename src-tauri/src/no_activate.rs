@@ -7,6 +7,7 @@
 #[cfg(windows)]
 mod platform {
     use std::collections::HashSet;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
     use tauri::Manager;
@@ -34,6 +35,28 @@ mod platform {
     static LAST_OTHER: Mutex<isize> = Mutex::new(0);
     static SUBCLASSED: Mutex<Option<HashSet<isize>>> = Mutex::new(None);
     static PREV_PROCS: Mutex<Vec<(isize, isize)>> = Mutex::new(Vec::new());
+    static TEXT_INPUT: AtomicBool = AtomicBool::new(false);
+
+    fn typing() -> bool {
+        TEXT_INPUT.load(Ordering::SeqCst)
+    }
+
+    pub fn begin_text_input() {
+        remember_other_foreground();
+        TEXT_INPUT.store(true, Ordering::SeqCst);
+        let main = *MAIN_ROOT.lock().expect("main hwnd");
+        if main == 0 {
+            return;
+        }
+        unsafe {
+            let _ = SetForegroundWindow(HWND(main as *mut std::ffi::c_void));
+        }
+    }
+
+    pub fn end_text_input() {
+        TEXT_INPUT.store(false, Ordering::SeqCst);
+        restore_previous();
+    }
 
     pub fn install(window: &tauri::WebviewWindow) {
         let Ok(hwnd) = native_hwnd(window) else {
@@ -150,13 +173,15 @@ mod platform {
     ) -> LRESULT {
         if msg == WM_MOUSEACTIVATE {
             remember_other_foreground();
-            return LRESULT(MA_NOACTIVATE);
+            if !typing() {
+                return LRESULT(MA_NOACTIVATE);
+            }
         }
         if msg == WM_PARENTNOTIFY && (wparam.0 & 0xFFFF) == WM_CREATE as usize {
             let child = HWND(lparam.0 as *mut std::ffi::c_void);
             subclass_one(child);
         }
-        if msg == WM_ACTIVATE && (wparam.0 & 0xFFFF) != 0 {
+        if msg == WM_ACTIVATE && (wparam.0 & 0xFFFF) != 0 && !typing() {
             restore_previous();
         }
         let previous = previous_proc(hwnd);
@@ -234,7 +259,9 @@ mod platform {
             return;
         }
         if belongs_to_main(hwnd) {
-            restore_previous();
+            if !typing() {
+                restore_previous();
+            }
             return;
         }
         *LAST_OTHER.lock().expect("foreground") = hwnd_key(hwnd);
@@ -252,6 +279,10 @@ mod platform {
         window.unminimize().map_err(|err| err.to_string())?;
         Ok(())
     }
+
+    pub fn begin_text_input() {}
+
+    pub fn end_text_input() {}
 }
 
 pub fn install(window: &tauri::WebviewWindow) {
@@ -264,4 +295,12 @@ pub fn set_taskbar_button_hidden(window: &tauri::WebviewWindow, hidden: bool) {
 
 pub fn show_without_activating(window: &tauri::WebviewWindow) -> Result<(), String> {
     platform::show_without_activating(window)
+}
+
+pub fn begin_text_input() {
+    platform::begin_text_input();
+}
+
+pub fn end_text_input() {
+    platform::end_text_input();
 }

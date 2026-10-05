@@ -1,8 +1,10 @@
 <script lang="ts">
   import ReleaseNotes from "./ReleaseNotes.svelte";
+  import CustomViewsSettings from "./CustomViewsSettings.svelte";
   import appIconUrl from "../assets/app-icon.png";
   import { getBuiltinSceneMeta } from "../layouts/layouts";
   import { SCENE_BACKGROUND_OPTIONS } from "../lib/sceneBackgrounds";
+  import type { CustomView } from "../lib/customViews";
   import SpectrumColorPicker from "./SpectrumColorPicker.svelte";
   import {
     controlsBackdropEnabled,
@@ -63,6 +65,7 @@
     | "appearance"
     | "clock"
     | "updates"
+    | "customViews"
     | "spotify"
     | "youtubeMusic"
     | "teams"
@@ -125,6 +128,13 @@
     autoSwitchBusyId = null,
     onSelectScene,
     onAutoSwitchChange,
+    customViews = [],
+    customViewsBusy = false,
+    onSaveCustomViews,
+    onOpenCustomView,
+    disabledApps = [],
+    appToggleBusyId = null,
+    onSetAppEnabled,
   }: {
     isTauri: boolean;
     onBackToDeck?: () => void;
@@ -182,6 +192,13 @@
     autoSwitchBusyId?: string | null;
     onSelectScene: (id: string) => void;
     onAutoSwitchChange?: (id: string, enabled: boolean) => void;
+    customViews?: CustomView[];
+    customViewsBusy?: boolean;
+    onSaveCustomViews?: (views: CustomView[]) => Promise<void>;
+    onOpenCustomView?: (id: string) => void;
+    disabledApps?: string[];
+    appToggleBusyId?: string | null;
+    onSetAppEnabled?: (id: string, enabled: boolean) => Promise<void>;
   } = $props();
 
   let section = $state<SettingsSection>("general");
@@ -192,6 +209,7 @@
     appearance: "Appearance",
     clock: "Home",
     updates: "Updates",
+    customViews: "Apps",
     spotify: "Spotify",
     youtubeMusic: "YouTube Music",
     teams: "Microsoft Teams",
@@ -339,6 +357,20 @@
           />
         </svg>
         Home
+      </button>
+      <button
+        type="button"
+        class="settings-nav-item"
+        class:active={activeSection === "customViews"}
+        onclick={() => (section = "customViews")}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 18.5v-13ZM8 8.2h8V6.8H8v1.4Zm0 4.5h8v-1.4H8v1.4Zm0 4.5h5.2v-1.4H8v1.4Z"
+          />
+        </svg>
+        Apps
       </button>
       <button
         type="button"
@@ -846,6 +878,16 @@
           </div>
         {/if}
       </div>
+    {:else if activeSection === "customViews"}
+      <CustomViewsSettings
+        views={customViews}
+        disabledApps={disabledApps}
+        busy={customViewsBusy}
+        toggleBusyId={appToggleBusyId}
+        onSave={(next) => onSaveCustomViews?.(next) ?? Promise.resolve()}
+        onOpen={onOpenCustomView}
+        onSetEnabled={(id, enabled) => onSetAppEnabled?.(id, enabled) ?? Promise.resolve()}
+      />
     {:else if activeSection === "updates"}
       <div class="settings-card settings-card-pad">
         <div class="settings-card-toolbar">

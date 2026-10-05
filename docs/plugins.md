@@ -2,7 +2,20 @@
 
 Plugins define scenes, triggers, buttons, optional scene templates, and executable actions.
 
-## Plugin Locations
+## Built-in apps
+
+| Folder | Sidebar name | Connection |
+|--------|--------------|------------|
+| `clock` | Home | Local clock. Weather comes from Open-Meteo. |
+| `spotify` | Spotify | Spotify account. Official sign-in plays in AstroDeck. A custom Client ID uses the Web API. |
+| `youtubeMusic` | YouTube | Guest YouTube Music playback, saved on this computer. |
+| `media` | System media | The operating system's now-playing session. |
+| `teams` | Teams | Teams device API, plus keyboard shortcuts for mute, camera, share, and raise hand. |
+| `vscode` | VS Code | Workspace shortcut page for VS Code and Cursor. |
+
+Websites added in Settings are not plugins. They are stored with the app preferences and shown in an iframe.
+
+## Plugin locations
 
 AstroDeck loads plugins from two places at startup:
 
@@ -110,7 +123,7 @@ Relative `openPath` and `launch.program` values are resolved relative to the plu
 Current template types:
 
 - `grid`: default grid renderer using `layout.grid` and `layout.buttons`
-- `mediaPlayer`: a dedicated media layout with `previous`, `playPause`, `next`, optional `like`, and optional `volumeAction`
+- `mediaPlayer`: a dedicated media layout with `previous`, `playPause`, `next`, optional `like`, `shuffle`, `volumeAction`, and `seekAction`
 
 See [layouts.md](layouts.md) for details.
 

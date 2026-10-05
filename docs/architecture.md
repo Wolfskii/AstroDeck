@@ -2,7 +2,9 @@
 
 ## Overview
 
-AstroDeck is a context-aware control deck: a cross-platform desktop app that dynamically changes its UI based on which applications are running. Built with **Tauri 2** (Rust backend) and **Svelte 5** (TypeScript frontend).
+AstroDeck is a free, modern dashboard for your other screen: time, music, and everyday apps, with built-in Spotify and YouTube Music support. Use a mouse or a touchscreen. Built with **Tauri 2** (Rust backend) and **Svelte 5** (TypeScript frontend).
+
+The window is one full-screen dashboard. A left sidebar switches apps: Home, Spotify, YouTube Music, system media, Teams, VS Code, Weather, websites added in Settings, and Settings. Backgrounds draw behind that bar. Each app can be hidden from **Settings → Apps**.
 
 ## High-Level System Architecture
 
@@ -37,8 +39,9 @@ flowchart LR
 2. Plugin-local assets are normalized and declarative `actionSpec` buttons are registered.
 3. The detector loop builds a detection context from process names, executable names, and visible window titles.
 4. The mode engine resolves the active scene by trigger match and priority.
-5. The frontend renders either a generic grid scene or a template-driven scene such as `mediaPlayer`.
+5. The frontend shows the selected app: Home, a media player, Teams, VS Code, Weather, a website embed, or a generic button grid.
 6. Button clicks route to either legacy string handlers or declarative plugin runtime actions.
+7. A background detector can still change the scene when Teams, Spotify, VS Code, or a local media session is detected. Apps turned off in Settings are skipped.
 
 ## Directory Structure
 
@@ -54,14 +57,14 @@ flowchart LR
 - **Svelte 5** with runes (`$props`, `$state`, `$derived`)
 - **Vite** for build and dev server
 - **TypeScript** for type safety
-- Components: `DeckGrid`, `DeckButton`, `MediaPlayerView`
+- Components: `SideNav`, `ClockWeatherView`, `MediaPlayerView`, `TeamsScene`, `VsCodeScene`, `WeatherView`, `EmbedView`, `SettingsPanel`
 
 ## Backend Stack
 
 - **Rust** with Tauri 2
 - **sysinfo** for cross-platform process detection
 - **serde** for JSON (de)serialization
-- Modules: `detectors`, `mode_engine`, `layout_engine`, `plugin_engine`, `actions`
+- Modules: `spotify`, `youtube_music`, `os_media`, `teams_api`, `weather` (via the frontend Open-Meteo client), `detectors`, `mode_engine`, `layout_engine`, `plugin_engine`, `actions`
 
 ## State Management
 

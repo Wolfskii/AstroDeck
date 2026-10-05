@@ -1,6 +1,18 @@
 # Layouts
 
-AstroDeck now supports both generic grid layouts and template-driven scene layouts.
+The sidebar apps are the screens people use. Plugin layouts still describe buttons for apps that do not have their own screen.
+
+## App screens
+
+| Screen | How it is built |
+|--------|-----------------|
+| Home | `ClockWeatherView`. Not a button grid. Clock, date, weather, and the current track. |
+| Spotify, YouTube Music, system media | `MediaPlayerView` when the plugin `view.type` is `mediaPlayer`. |
+| Teams | `TeamsScene` from the Teams button layout. |
+| VS Code | `VsCodeScene` from the VS Code button layout. |
+| Weather | `WeatherView`. Forecast for the Home place. |
+| Websites | `EmbedView`. An iframe for an address saved in Settings. |
+| Other plugins | `DeckGrid` from `layout.grid` and `layout.buttons`. |
 
 ## Grid Layout
 
@@ -33,7 +45,8 @@ Plugins can opt into a dedicated media-player scene:
       "playPause": { "label": "Play/Pause", "emoji": "⏯️", "action": "spotify.togglePlay" },
       "next": { "label": "Next", "emoji": "⏭️", "action": "spotify.nextTrack" },
       "like": { "label": "Like", "emoji": "❤️", "action": "spotify.like" },
-      "volumeAction": "spotify.setVolume"
+      "volumeAction": "spotify.setVolume",
+      "seekAction": "spotify.seek"
     }
   }
 }
@@ -44,8 +57,9 @@ The template renders:
 - Previous on the left
 - Play/Pause centered and larger
 - Next on the right
-- Optional Like/Favorite below
-- Optional touch-friendly volume slider when `volumeAction` is provided
+- Optional Like and Shuffle
+- Optional volume slider when `volumeAction` is provided
+- Optional seek bar when `seekAction` is provided
 
 ## Button Definitions
 

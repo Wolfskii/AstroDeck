@@ -13,6 +13,7 @@
   import MediaPlayerView from "./components/MediaPlayerView.svelte";
   import ReleaseNotes from "./components/ReleaseNotes.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
+  import EmbedView from "./components/EmbedView.svelte";
   import SideNav from "./components/SideNav.svelte";
   import TeamsScene from "./components/TeamsScene.svelte";
   import VsCodeScene from "./components/VsCodeScene.svelte";
@@ -52,6 +53,7 @@
   } from "./layouts/layouts";
   import { usesCoverImage, usesFullViewBackground } from "./lib/sceneBackgrounds";
   import { hexToHsv, isNeutralAccent, shaderColorsFromAccent, shaderColorsFromHue } from "./lib/color";
+  import type { CustomView } from "./lib/customViews";
   import { extractAlbumPalette, paletteToShaderColors } from "./lib/albumArtColor";
   import { logs, logInfo, logError, pushExternal, type LogEntry } from "./services/logger";
   import {
@@ -68,6 +70,10 @@
     setStartMinimized,
     getHideTaskbarIcon,
     setHideTaskbarIcon,
+    getCustomViews,
+    setCustomViews,
+    getDisabledApps,
+    setAppEnabled,
     getStartFullscreen,
     setStartFullscreen,
     getShowSettingsTerminal,
@@ -109,9 +115,17 @@
   let showSettingsTerminalBusy = $state(false);
   let autoSwitchScenes = $state<Record<string, boolean>>({});
   let autoSwitchBusyId = $state<string | null>(null);
+  let customViews = $state<CustomView[]>([]);
+  let customViewsBusy = $state(false);
+  let disabledApps = $state<string[]>([]);
+  let appToggleBusyId = $state<string | null>(null);
+  let activeCustomViewId = $state<string | null>(null);
   const isSettingsWindow = $derived(!isTauri || viewMode === "settings");
   const showGlobalSceneBackground = $derived(
-    !isSettingsWindow && !$weatherDetailOpen && usesFullViewBackground($sceneBackgroundId)
+    !isSettingsWindow &&
+      !$weatherDetailOpen &&
+      !activeCustomViewId &&
+      usesFullViewBackground($sceneBackgroundId)
   );
   const showLogsPanel = $derived(isSettingsWindow && showSettingsTerminal);
   let logStatus = $state<"connecting" | "connected" | "disconnected">("connecting");
@@ -335,6 +349,7 @@
       isTauri &&
       !isSettingsWindow &&
       ($weatherDetailOpen ||
+        activeCustomViewId !== null ||
         currentMediaView !== null ||
         sceneId === "teams" ||
         sceneId === "vscode" ||
@@ -349,7 +364,7 @@
     if (!isTauri || loading || windowLabel !== "main") return;
     const mode = viewMode;
     const id = sceneId;
-    if (mode === "deck" && isIdleScene(id)) {
+    if (mode === "deck" && isIdleScene(id) && !activeCustomViewId) {
       void syncWindowToPresence(id);
     }
   });
@@ -1465,7 +1480,16 @@
   let sceneId = $state("clock");
   let returnHomeFromWeather = $state(false);
   const sideNavActive = $derived(
-    viewMode === "settings" ? "settings" : $weatherDetailOpen ? "weather" : sceneId
+    viewMode === "settings"
+      ? "settings"
+      : activeCustomViewId
+        ? activeCustomViewId
+        : $weatherDetailOpen
+          ? "weather"
+          : sceneId
+  );
+  const activeCustomView = $derived(
+    customViews.find((view) => view.id === activeCustomViewId) ?? null
   );
 
   function closeWeatherToHome() {
@@ -1478,12 +1502,66 @@
     selectScene("clock");
   }
 
+  function appEnabled(id: string) {
+    return !disabledApps.includes(id);
+  }
+
+  function ensureShownAppEnabled() {
+    if (viewMode === "settings") return;
+    if (activeCustomViewId && !appEnabled(activeCustomViewId)) activeCustomViewId = null;
+    if ($weatherDetailOpen && !appEnabled("weather")) weatherDetailOpen.set(false);
+    const shown = activeCustomViewId ?? ($weatherDetailOpen ? "weather" : sceneId);
+    if (appEnabled(shown)) return;
+    if (shown !== "clock" && appEnabled("clock")) {
+      activeCustomViewId = null;
+      weatherDetailOpen.set(false);
+      sceneId = "clock";
+      selectScene("clock");
+      return;
+    }
+    viewMode = "settings";
+  }
+
+  function openCustomView(id: string) {
+    if (!customViews.some((view) => view.id === id) || !appEnabled(id)) return;
+    weatherDetailOpen.set(false);
+    viewMode = "deck";
+    activeCustomViewId = id;
+  }
+
+  async function saveCustomViews(next: CustomView[]) {
+    customViewsBusy = true;
+    try {
+      customViews = await setCustomViews(next);
+      if (activeCustomViewId && !customViews.some((view) => view.id === activeCustomViewId)) {
+        activeCustomViewId = null;
+      }
+    } finally {
+      customViewsBusy = false;
+    }
+  }
+
+  async function onSetAppEnabled(id: string, enabled: boolean) {
+    appToggleBusyId = id;
+    try {
+      disabledApps = await setAppEnabled(id, enabled);
+      if (!enabled) ensureShownAppEnabled();
+    } finally {
+      appToggleBusyId = null;
+    }
+  }
+
   function onSideNavSelect(id: string) {
     if (id === "settings") {
       weatherDetailOpen.set(false);
       viewMode = "settings";
       return;
     }
+    if (id.startsWith("view-")) {
+      openCustomView(id);
+      return;
+    }
+    activeCustomViewId = null;
     if (id === "weather") {
       weatherDetailOpen.set(true);
       viewMode = "deck";
@@ -1702,7 +1780,8 @@
   }
 
   function selectScene(id: string) {
-    if (!id) return;
+    if (!id || id.startsWith("view-") || !appEnabled(id)) return;
+    activeCustomViewId = null;
     markSceneSeen(id);
     if (isTauri) {
       viewMode = "deck";
@@ -2136,6 +2215,16 @@
           hideTaskbarIcon = false;
         }
         try {
+          customViews = await getCustomViews();
+        } catch {
+          customViews = [];
+        }
+        try {
+          disabledApps = await getDisabledApps();
+        } catch {
+          disabledApps = [];
+        }
+        try {
           autoSwitchScenes = await getAutoSwitchScenes();
         } catch {
           autoSwitchScenes = {};
@@ -2222,7 +2311,17 @@
         if (event.payload.activeSceneId === "media") {
           void hydrateOsLocalMedia();
         }
-        void syncWindowToPresence(event.payload.activeSceneId);
+        if (!activeCustomViewId) {
+          void syncWindowToPresence(event.payload.activeSceneId);
+        }
+        if (
+          viewMode !== "settings" &&
+          !activeCustomViewId &&
+          !$weatherDetailOpen &&
+          !appEnabled(event.payload.activeSceneId)
+        ) {
+          ensureShownAppEnabled();
+        }
       });
       const unlistenTerminal = listen<boolean>("settings-terminal-changed", (event) => {
         showSettingsTerminal = event.payload;
@@ -2234,9 +2333,61 @@
         }
       );
 
+      const skipTextTypes = new Set([
+        "button",
+        "checkbox",
+        "radio",
+        "range",
+        "file",
+        "submit",
+        "reset",
+        "image",
+        "color",
+        "hidden",
+      ]);
+      let textInputHeld = false;
+      const textFieldFrom = (target: EventTarget | null): HTMLElement | null => {
+        const start = target instanceof Element ? target : null;
+        const field = start?.closest("input, textarea, select, [contenteditable='true']");
+        if (!(field instanceof HTMLElement)) return null;
+        if (field instanceof HTMLInputElement && skipTextTypes.has(field.type)) return null;
+        if (field instanceof HTMLInputElement && field.disabled) return null;
+        if (field instanceof HTMLTextAreaElement && field.disabled) return null;
+        return field;
+      };
+      const onTextPointerDown = (event: PointerEvent) => {
+        const field = textFieldFrom(event.target);
+        if (!field) return;
+        void (async () => {
+          if (!textInputHeld) {
+            textInputHeld = true;
+            try {
+              await invoke("begin_text_input");
+            } catch {
+              textInputHeld = false;
+              return;
+            }
+          }
+          field.focus();
+        })();
+      };
+      const onTextFocusOut = () => {
+        window.setTimeout(() => {
+          if (textFieldFrom(document.activeElement)) return;
+          if (!textInputHeld) return;
+          textInputHeld = false;
+          void invoke("end_text_input");
+        }, 0);
+      };
+      window.addEventListener("pointerdown", onTextPointerDown, true);
+      window.addEventListener("focusout", onTextFocusOut);
+
       return () => {
         stopWeatherUpdates();
         clearSpotifyTransportRefreshTimers();
+        window.removeEventListener("pointerdown", onTextPointerDown, true);
+        window.removeEventListener("focusout", onTextFocusOut);
+        if (textInputHeld) void invoke("end_text_input");
         window.removeEventListener("resize", syncDeckFullscreenState);
         window.removeEventListener("keydown", onDeckPresentationKeydown, true);
         window.removeEventListener("focus", onWindowFocus);
@@ -2258,7 +2409,12 @@
 
 <div class="app" class:app-settings={isSettingsWindow} class:has-side-nav={isTauri}>
   {#if isTauri}
-    <SideNav active={sideNavActive} onSelect={onSideNavSelect} />
+    <SideNav
+      active={sideNavActive}
+      customViews={customViews}
+      disabledApps={disabledApps}
+      onSelect={onSideNavSelect}
+    />
   {/if}
   {#if showGlobalSceneBackground}
     <div class="app-scene-bg">
@@ -2399,9 +2555,18 @@
         autoSwitchBusyId={autoSwitchBusyId}
         onSelectScene={selectScene}
         onAutoSwitchChange={onAutoSwitchChange}
+        customViews={customViews}
+        customViewsBusy={customViewsBusy}
+        onSaveCustomViews={saveCustomViews}
+        onOpenCustomView={openCustomView}
+        disabledApps={disabledApps}
+        appToggleBusyId={appToggleBusyId}
+        onSetAppEnabled={onSetAppEnabled}
       />
     {:else}
-      {#if $weatherDetailOpen}
+      {#if activeCustomView}
+        <EmbedView url={activeCustomView.url} title={activeCustomView.name} />
+      {:else if $weatherDetailOpen}
         <WeatherView />
       {:else if loading}
         <div class="loading">Detecting environment...</div>
@@ -2525,6 +2690,7 @@
       {:else if sceneId === "clock"}
         <ClockWeatherView
           nowPlaying={homeNowPlaying}
+          weatherEnabled={appEnabled("weather")}
           onOpenPlaying={(sceneIdToOpen) => selectScene(sceneIdToOpen)}
         />
       {:else if sceneId === "teams" && displayedLayout}
@@ -2672,7 +2838,7 @@
 
   .app.has-side-nav .app-header,
   .app.has-side-nav .logs-panel,
-  .app.has-side-nav .app-main > :global(*:not(.car-thing)) {
+  .app.has-side-nav .app-main > :global(*:not(.car-thing):not(.embed-view)) {
     padding-left: var(--side-inset);
   }
 
