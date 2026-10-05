@@ -20,18 +20,36 @@ export function speedProviderLabel(provider: SpeedProvider) {
 
 const DOWNLOAD_URL = "https://speed.cloudflare.com/__down?bytes=";
 const UPLOAD_URL = "https://speed.cloudflare.com/__up";
+const PING_SAMPLES = 20;
+const PING_TIMEOUT_MS = 1500;
 
 export type SpeedPhase = "idle" | "ping" | "download" | "upload" | "done" | "error";
 
 export type SpeedSnapshot = {
   phase: SpeedPhase;
   pingMs: number | null;
+  jitterMs: number | null;
+  lossPercent: number | null;
   downMbps: number | null;
   upMbps: number | null;
   server: string | null;
   location: string | null;
   error: string | null;
 };
+
+export function emptySpeedSnapshot(phase: SpeedPhase = "idle"): SpeedSnapshot {
+  return {
+    phase,
+    pingMs: null,
+    jitterMs: null,
+    lossPercent: null,
+    downMbps: null,
+    upMbps: null,
+    server: null,
+    location: null,
+    error: null,
+  };
+}
 
 const DOWNLOAD_MS = 7000;
 const UPLOAD_MS = 7000;
@@ -57,20 +75,14 @@ async function runNative(
   signal: AbortSignal
 ): Promise<void> {
   const id = crypto.randomUUID();
-  let latest: SpeedSnapshot = {
-    phase: "ping",
-    pingMs: null,
-    downMbps: null,
-    upMbps: null,
-    server: null,
-    location: null,
-    error: null,
-  };
+  let latest = emptySpeedSnapshot("ping");
   const unlisten = await listen<SpeedEvent>("speed-test-progress", (event) => {
     if (signal.aborted || event.payload.id !== id) return;
     latest = {
       phase: event.payload.phase,
       pingMs: event.payload.pingMs ?? latest.pingMs,
+      jitterMs: event.payload.jitterMs ?? latest.jitterMs,
+      lossPercent: event.payload.lossPercent ?? latest.lossPercent,
       downMbps: event.payload.downMbps ?? latest.downMbps,
       upMbps: event.payload.upMbps ?? latest.upMbps,
       server: event.payload.server ?? latest.server,
@@ -102,23 +114,17 @@ async function runCloudflare(
   onUpdate: (snapshot: SpeedSnapshot) => void,
   signal: AbortSignal
 ): Promise<void> {
-  const snapshot: SpeedSnapshot = {
-    phase: "ping",
-    pingMs: null,
-    downMbps: null,
-    upMbps: null,
-    server: null,
-    location: null,
-    error: null,
-  };
+  const snapshot = emptySpeedSnapshot("ping");
   onUpdate({ ...snapshot });
   try {
-    const ping = await measurePing(signal, (place) => {
+    const quality = await measurePing(signal, (place) => {
       snapshot.server = place.server;
       snapshot.location = place.location;
       onUpdate({ ...snapshot });
     });
-    snapshot.pingMs = ping;
+    snapshot.pingMs = quality.pingMs;
+    snapshot.jitterMs = quality.jitterMs;
+    snapshot.lossPercent = quality.lossPercent;
     snapshot.phase = "download";
     onUpdate({ ...snapshot });
     snapshot.downMbps = await measureDownload(signal, (mbps) => {
@@ -144,17 +150,31 @@ async function runCloudflare(
 async function measurePing(
   signal: AbortSignal,
   onPlace: (place: { server: string | null; location: string | null }) => void
-): Promise<number> {
+): Promise<{ pingMs: number; jitterMs: number; lossPercent: number }> {
   const samples: number[] = [];
-  for (let i = 0; i < 6; i += 1) {
-    const start = performance.now();
-    const response = await fetch(`${DOWNLOAD_URL}0`, { cache: "no-store", signal });
-    if (i === 0) onPlace(cloudflarePlace(response));
-    await response.arrayBuffer();
-    samples.push(performance.now() - start);
+  let lost = 0;
+  for (let i = 0; i < PING_SAMPLES; i += 1) {
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    try {
+      const timeout = AbortSignal.timeout(PING_TIMEOUT_MS);
+      const linked = AbortSignal.any([signal, timeout]);
+      const start = performance.now();
+      const response = await fetch(`${DOWNLOAD_URL}0`, { cache: "no-store", signal: linked });
+      if (!response.ok) throw new Error("bad status");
+      if (i === 0) onPlace(cloudflarePlace(response));
+      await response.arrayBuffer();
+      samples.push(performance.now() - start);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      lost += 1;
+    }
   }
-  samples.sort((a, b) => a - b);
-  return samples[Math.floor(samples.length / 2)] ?? 0;
+  if (samples.length === 0) throw new Error("Ping test failed");
+  return {
+    pingMs: median(samples),
+    jitterMs: jitter(samples),
+    lossPercent: (lost / PING_SAMPLES) * 100,
+  };
 }
 
 async function measureDownload(
@@ -212,6 +232,20 @@ async function measureTransfer(
   if (failure) throw failure;
   const seconds = (performance.now() - started) / 1000;
   return seconds > 0 ? (bytes * 8) / seconds / 1_000_000 : 0;
+}
+
+function median(samples: number[]) {
+  const sorted = [...samples].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] ?? 0;
+}
+
+function jitter(samples: number[]) {
+  if (samples.length < 2) return 0;
+  let total = 0;
+  for (let i = 1; i < samples.length; i += 1) {
+    total += Math.abs(samples[i] - samples[i - 1]);
+  }
+  return total / (samples.length - 1);
 }
 
 const CLOUDFLARE_COLOS: Record<string, string> = {

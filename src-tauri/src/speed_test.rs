@@ -9,6 +9,15 @@ use tauri::Emitter;
 
 const FAST_TOKEN_FALLBACK: &str = "YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm";
 const MEASURE_FOR: Duration = Duration::from_secs(7);
+const PING_SAMPLES: usize = 20;
+const PING_TIMEOUT: Duration = Duration::from_millis(1500);
+
+#[derive(Clone, Copy)]
+struct PingStats {
+    ping_ms: f64,
+    jitter_ms: f64,
+    loss_percent: f64,
+}
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +25,8 @@ struct SpeedProgress {
     id: String,
     phase: String,
     ping_ms: Option<f64>,
+    jitter_ms: Option<f64>,
+    loss_percent: Option<f64>,
     down_mbps: Option<f64>,
     up_mbps: Option<f64>,
     server: Option<String>,
@@ -41,6 +52,15 @@ fn client() -> Result<Client, String> {
         .user_agent("AstroDeck")
         .connect_timeout(Duration::from_secs(8))
         .timeout(Duration::from_secs(12))
+        .build()
+        .map_err(|_| "Couldn't start the speed test".to_string())
+}
+
+fn ping_client() -> Result<Client, String> {
+    Client::builder()
+        .user_agent("AstroDeck")
+        .connect_timeout(PING_TIMEOUT)
+        .timeout(PING_TIMEOUT)
         .build()
         .map_err(|_| "Couldn't start the speed test".to_string())
 }
@@ -86,6 +106,8 @@ pub fn start_speed_test(app: tauri::AppHandle, id: String, provider: String) -> 
                 id,
                 phase: "error".to_string(),
                 ping_ms: None,
+                jitter_ms: None,
+                loss_percent: None,
                 down_mbps: None,
                 up_mbps: None,
                 server: None,
@@ -106,18 +128,27 @@ pub fn cancel_speed_test(id: String) {
 
 fn run_fast(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> Result<(), String> {
     let http = client()?;
-    emit_phase(app, id, "ping", None, None, None);
+    let ping_http = ping_client()?;
+    emit_phase(app, id, "ping", None, None, None, None);
     let target = fast_target(&http)?;
-    emit_place(app, id, "ping", None, None, None, &target.server, &target.location);
+    emit_place(app, id, "ping", None, None, None, None, &target.server, &target.location);
     if !https_host(&target.url, ".nflxvideo.net") {
         return Err("Fast.com didn't respond".to_string());
     }
-    let ping = measure_ping(flag, || ping_once(&http, &with_range(&target.url, 0)?))?;
+    let quality = measure_ping(flag, || ping_once(&ping_http, &with_range(&target.url, 0)?))?;
     if cancelled(flag) {
         return Ok(());
     }
-    emit_phase(app, id, "download", Some(ping), None, None);
-    let down = transfer(app, id, flag, "download", Some(ping), None, 3, |until| {
+    emit_phase(
+        app,
+        id,
+        "download",
+        Some(quality),
+        Some(quality.ping_ms),
+        None,
+        None,
+    );
+    let down = transfer(app, id, flag, "download", Some(quality), None, 3, |until| {
         let response = http
             .get(with_range(&target.url, 25_000_000)?)
             .send()
@@ -127,9 +158,17 @@ fn run_fast(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> Result<(), S
     if cancelled(flag) {
         return Ok(());
     }
-    emit_phase(app, id, "upload", Some(ping), Some(down), None);
+    emit_phase(
+        app,
+        id,
+        "upload",
+        Some(quality),
+        Some(quality.ping_ms),
+        Some(down),
+        None,
+    );
     let payload = vec![0u8; 1_000_000];
-    let up = transfer(app, id, flag, "upload", Some(ping), Some(down), 2, |_until| {
+    let up = transfer(app, id, flag, "upload", Some(quality), Some(down), 2, |_until| {
         let response = http
             .post(with_range(&target.url, 0)?)
             .body(payload.clone())
@@ -140,13 +179,22 @@ fn run_fast(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> Result<(), S
         }
         Ok(payload.len() as u64)
     })?;
-    emit_phase(app, id, "done", Some(ping), Some(down), Some(up));
+    emit_phase(
+        app,
+        id,
+        "done",
+        Some(quality),
+        Some(quality.ping_ms),
+        Some(down),
+        Some(up),
+    );
     Ok(())
 }
 
 fn run_bredbandskollen(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> Result<(), String> {
     let http = client()?;
-    emit_phase(app, id, "ping", None, None, None);
+    let ping_http = ping_client()?;
+    emit_phase(app, id, "ping", None, None, None, None);
     let settings: BbkServers = http
         .get("https://frontend.bredbandskollen.se/api/servers")
         .send()
@@ -172,16 +220,24 @@ fn run_bredbandskollen(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> R
     let name = server.name.clone();
     let ticket = bbk_ticket(&http, &host, &settings.hashkey)?;
     let (server_name, location) = bbk_place(&ticket, &name);
-    emit_place(app, id, "ping", None, None, None, &server_name, &location);
-    let ping = measure_ping(flag, || {
+    emit_place(app, id, "ping", None, None, None, None, &server_name, &location);
+    let quality = measure_ping(flag, || {
         let url = format!("https://{host}/pingpong/1?t={ticket}");
-        ping_once(&http, &url)
+        ping_once(&ping_http, &url)
     })?;
     if cancelled(flag) {
         return Ok(());
     }
-    emit_phase(app, id, "download", Some(ping), None, None);
-    let down = transfer(app, id, flag, "download", Some(ping), None, 3, |until| {
+    emit_phase(
+        app,
+        id,
+        "download",
+        Some(quality),
+        Some(quality.ping_ms),
+        None,
+        None,
+    );
+    let down = transfer(app, id, flag, "download", Some(quality), None, 3, |until| {
         let url = format!(
             "https://{host}/bigfile.bin?t={ticket}&len=8000000&id=1&b={}",
             rand_token()
@@ -195,9 +251,17 @@ fn run_bredbandskollen(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> R
     if cancelled(flag) {
         return Ok(());
     }
-    emit_phase(app, id, "upload", Some(ping), Some(down), None);
+    emit_phase(
+        app,
+        id,
+        "upload",
+        Some(quality),
+        Some(quality.ping_ms),
+        Some(down),
+        None,
+    );
     let payload = vec![0u8; 1_000_000];
-    let up = transfer(app, id, flag, "upload", Some(ping), Some(down), 2, |_until| {
+    let up = transfer(app, id, flag, "upload", Some(quality), Some(down), 2, |_until| {
         let url = format!(
             "https://{host}/cgi/upload.cgi?t={ticket}&id=1&b={}",
             rand_token()
@@ -212,7 +276,15 @@ fn run_bredbandskollen(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> R
         }
         Ok(payload.len() as u64)
     })?;
-    emit_phase(app, id, "done", Some(ping), Some(down), Some(up));
+    emit_phase(
+        app,
+        id,
+        "done",
+        Some(quality),
+        Some(quality.ping_ms),
+        Some(down),
+        Some(up),
+    );
     Ok(())
 }
 
@@ -220,6 +292,7 @@ fn emit_phase(
     app: &tauri::AppHandle,
     id: &str,
     phase: &str,
+    quality: Option<PingStats>,
     ping_ms: Option<f64>,
     down_mbps: Option<f64>,
     up_mbps: Option<f64>,
@@ -230,6 +303,8 @@ fn emit_phase(
             id: id.to_string(),
             phase: phase.to_string(),
             ping_ms,
+            jitter_ms: quality.map(|value| value.jitter_ms),
+            loss_percent: quality.map(|value| value.loss_percent),
             down_mbps,
             up_mbps,
             server: None,
@@ -243,6 +318,7 @@ fn emit_place(
     app: &tauri::AppHandle,
     id: &str,
     phase: &str,
+    quality: Option<PingStats>,
     ping_ms: Option<f64>,
     down_mbps: Option<f64>,
     up_mbps: Option<f64>,
@@ -255,6 +331,8 @@ fn emit_place(
             id: id.to_string(),
             phase: phase.to_string(),
             ping_ms,
+            jitter_ms: quality.map(|value| value.jitter_ms),
+            loss_percent: quality.map(|value| value.loss_percent),
             down_mbps,
             up_mbps,
             server: Some(server.to_string()).filter(|value| !value.is_empty()),
@@ -264,15 +342,44 @@ fn emit_place(
     );
 }
 
-fn measure_ping(flag: &AtomicBool, mut once: impl FnMut() -> Result<f64, String>) -> Result<f64, String> {
+fn measure_ping(
+    flag: &AtomicBool,
+    mut once: impl FnMut() -> Result<f64, String>,
+) -> Result<PingStats, String> {
     let mut samples = Vec::new();
-    for _ in 0..6 {
+    let mut lost = 0usize;
+    for _ in 0..PING_SAMPLES {
         if cancelled(flag) {
-            return Ok(0.0);
+            return Ok(PingStats {
+                ping_ms: 0.0,
+                jitter_ms: 0.0,
+                loss_percent: 0.0,
+            });
         }
-        samples.push(once()?);
+        match once() {
+            Ok(sample) => samples.push(sample),
+            Err(_) => lost += 1,
+        }
     }
-    Ok(median(samples))
+    if samples.is_empty() {
+        return Err("Ping test failed".to_string());
+    }
+    Ok(PingStats {
+        ping_ms: median(samples.clone()),
+        jitter_ms: jitter(&samples),
+        loss_percent: (lost as f64 / PING_SAMPLES as f64) * 100.0,
+    })
+}
+
+fn jitter(samples: &[f64]) -> f64 {
+    if samples.len() < 2 {
+        return 0.0;
+    }
+    let mut total = 0.0;
+    for index in 1..samples.len() {
+        total += (samples[index] - samples[index - 1]).abs();
+    }
+    total / (samples.len() - 1) as f64
 }
 
 fn ping_once(http: &Client, url: &str) -> Result<f64, String> {
@@ -290,7 +397,7 @@ fn transfer(
     id: &str,
     flag: &AtomicBool,
     phase: &str,
-    ping: Option<f64>,
+    quality: Option<PingStats>,
     other: Option<f64>,
     workers: usize,
     transfer_once: impl Fn(Instant) -> Result<u64, String> + Sync,
@@ -310,7 +417,7 @@ fn transfer(
                     return;
                 }
                 match transfer_once(until) {
-                    Ok(bytes) => publish(app, id, phase, ping, other, &live, bytes),
+                    Ok(bytes) => publish(app, id, phase, quality, other, &live, bytes),
                     Err(message) => {
                         let mut slot = error.lock().unwrap();
                         if slot.is_none() {
@@ -336,7 +443,7 @@ fn publish(
     app: &tauri::AppHandle,
     id: &str,
     phase: &str,
-    ping: Option<f64>,
+    quality: Option<PingStats>,
     other: Option<f64>,
     live: &Live,
     bytes: u64,
@@ -354,7 +461,15 @@ fn publish(
     } else {
         (Some(rate), None)
     };
-    emit_phase(app, id, phase, ping, down, up);
+    emit_phase(
+        app,
+        id,
+        phase,
+        quality,
+        quality.map(|value| value.ping_ms),
+        down,
+        up,
+    );
 }
 
 fn read_body(mut response: reqwest::blocking::Response, until: Instant) -> Result<u64, String> {
