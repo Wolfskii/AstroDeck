@@ -2,7 +2,12 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
   import { performanceFrosted, speedTestProvider } from "../stores/appearance";
-  import { runSpeedTest, speedProviderLabel, type SpeedSnapshot } from "../lib/speedTest";
+  import {
+    emptySpeedSnapshot,
+    runSpeedTest,
+    speedProviderLabel,
+    type SpeedSnapshot,
+  } from "../lib/speedTest";
 
   type DiskStat = { name: string; used: number; total: number };
   type SystemSnapshot = {
@@ -23,15 +28,7 @@
   let stats = $state<SystemSnapshot | null>(null);
   let publicIp = $state<string | null>(null);
   let ipCopied = $state(false);
-  let speed = $state<SpeedSnapshot>({
-    phase: "idle",
-    pingMs: null,
-    downMbps: null,
-    upMbps: null,
-    server: null,
-    location: null,
-    error: null,
-  });
+  let speed = $state<SpeedSnapshot>(emptySpeedSnapshot());
   let speedAbort: AbortController | null = null;
   let ipCopyTimer: number | null = null;
 
@@ -87,15 +84,7 @@
   function closeSpeedTest() {
     speedAbort?.abort();
     speedAbort = null;
-    speed = {
-      phase: "idle",
-      pingMs: null,
-      downMbps: null,
-      upMbps: null,
-      server: null,
-      location: null,
-      error: null,
-    };
+    speed = emptySpeedSnapshot();
   }
 
   async function fetchPublicIp() {
@@ -130,6 +119,26 @@
   function mbpsFill(value: number | null) {
     if (value == null) return 0;
     return Math.min(100, (value / 500) * 100);
+  }
+
+  function lossFill(value: number | null) {
+    if (value == null) return 0;
+    return Math.min(100, value);
+  }
+
+  function jitterFill(value: number | null) {
+    if (value == null) return 0;
+    return Math.min(100, (value / 50) * 100);
+  }
+
+  function formatLoss(value: number | null) {
+    if (value == null) return "—";
+    return value < 10 ? `${value.toFixed(1)}%` : `${Math.round(value)}%`;
+  }
+
+  function formatJitter(value: number | null) {
+    if (value == null) return "—";
+    return `${Math.round(value)} ms`;
   }
 
   function arc(start: number, sweep: number, r = 38, cx = 50, cy = 46) {
@@ -239,21 +248,41 @@
         </div>
         </div>
         <div class="ring-row">
-          <svg class="ring" viewBox="0 0 36 36" aria-hidden="true">
-            <circle cx="18" cy="18" r="14" class="ring-track" />
-            <circle
-              cx="18"
-              cy="18"
-              r="14"
-              class="ring-level ring-level-down"
-              pathLength="100"
-              style:stroke-dasharray={`${ratePercent(stats?.netDownBps ?? 0)} 100`}
-            />
-            <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M18 10.2v11.2M13.6 16.8 18 21.4l4.4-4.6" />
-          </svg>
-          <div>
-            <strong>{stats ? formatRate(stats.netDownBps) : "—"}</strong>
-            <span>Download</span>
+          <div class="ring-item">
+            <svg class="ring" viewBox="0 0 36 36" aria-hidden="true">
+              <circle cx="18" cy="18" r="14" class="ring-track" />
+              <circle
+                cx="18"
+                cy="18"
+                r="14"
+                class="ring-level ring-level-down"
+                pathLength="100"
+                style:stroke-dasharray={`${ratePercent(stats?.netDownBps ?? 0)} 100`}
+              />
+              <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M18 10.2v11.2M13.6 16.8 18 21.4l4.4-4.6" />
+            </svg>
+            <div>
+              <strong>{stats ? formatRate(stats.netDownBps) : "—"}</strong>
+              <span>Down</span>
+            </div>
+          </div>
+          <div class="ring-item">
+            <svg class="ring" viewBox="0 0 36 36" aria-hidden="true">
+              <circle cx="18" cy="18" r="14" class="ring-track" />
+              <circle
+                cx="18"
+                cy="18"
+                r="14"
+                class="ring-level"
+                pathLength="100"
+                style:stroke-dasharray={`${ratePercent(stats?.netUpBps ?? 0)} 100`}
+              />
+              <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M18 25.2V14M13.6 18.6 18 14l4.4 4.6" />
+            </svg>
+            <div>
+              <strong>{stats ? formatRate(stats.netUpBps) : "—"}</strong>
+              <span>Up</span>
+            </div>
           </div>
         </div>
       </article>
@@ -311,24 +340,6 @@
           <em>{stats?.gpuName ? shortGpuName(stats.gpuName) : "Graphics"}</em>
         </div>
         </div>
-        <div class="ring-row">
-          <svg class="ring" viewBox="0 0 36 36" aria-hidden="true">
-            <circle cx="18" cy="18" r="14" class="ring-track" />
-            <circle
-              cx="18"
-              cy="18"
-              r="14"
-              class="ring-level"
-              pathLength="100"
-              style:stroke-dasharray={`${ratePercent(stats?.netUpBps ?? 0)} 100`}
-            />
-            <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M18 25.2V14M13.6 18.6 18 14l4.4 4.6" />
-          </svg>
-          <div>
-            <strong>{stats ? formatRate(stats.netUpBps) : "—"}</strong>
-            <span>Upload</span>
-          </div>
-        </div>
       </article>
     </div>
 
@@ -365,6 +376,42 @@
             <div class="readout">
               <span class="kicker">Ping</span>
               <strong>{speed.pingMs == null ? "—" : Math.round(speed.pingMs)}{#if speed.pingMs != null}<span class="unit">ms</span>{/if}</strong>
+            </div>
+          </div>
+          <div class="ring-row">
+            <div class="ring-item">
+              <svg class="ring" viewBox="0 0 36 36" aria-hidden="true">
+                <circle cx="18" cy="18" r="14" class="ring-track" />
+                <circle
+                  cx="18"
+                  cy="18"
+                  r="14"
+                  class="ring-level ring-level-loss"
+                  pathLength="100"
+                  style:stroke-dasharray={`${lossFill(speed.lossPercent)} 100`}
+                />
+              </svg>
+              <div>
+                <strong>{formatLoss(speed.lossPercent)}</strong>
+                <span>Loss</span>
+              </div>
+            </div>
+            <div class="ring-item">
+              <svg class="ring" viewBox="0 0 36 36" aria-hidden="true">
+                <circle cx="18" cy="18" r="14" class="ring-track" />
+                <circle
+                  cx="18"
+                  cy="18"
+                  r="14"
+                  class="ring-level ring-level-jitter"
+                  pathLength="100"
+                  style:stroke-dasharray={`${jitterFill(speed.jitterMs)} 100`}
+                />
+              </svg>
+              <div>
+                <strong>{formatJitter(speed.jitterMs)}</strong>
+                <span>Jitter</span>
+              </div>
             </div>
           </div>
         </article>
@@ -438,7 +485,7 @@
     height: auto;
     min-height: 0;
     margin: 1.4rem 2.2rem 1.4rem calc(var(--side-inset, 144px) + 1.2rem);
-    padding: 0.45rem 2.4rem 6.2rem;
+    padding: 1.15rem 2.4rem 2.8rem;
     border-radius: 32px;
     overflow: hidden;
     background-color: rgba(10, 14, 22, 0.38);
@@ -455,15 +502,18 @@
     grid-area: 1 / 1;
     min-width: 0;
     flex-direction: column;
-    justify-content: center;
-    gap: 0.35rem;
+    justify-content: flex-start;
+    gap: 0.2rem;
     transition: opacity 0.38s ease, transform 0.38s ease;
   }
 
   .swap-hidden {
+    position: absolute;
+    inset: 0;
     opacity: 0;
     transform: translateY(10px);
     pointer-events: none;
+    overflow: hidden;
   }
 
   .speed-actions {
@@ -507,11 +557,16 @@
   }
 
   .speed-where {
-    margin: 1.15rem 0 0;
+    margin: 0.85rem 0 0;
     color: rgba(244, 247, 251, 0.86);
     font-size: 0.98rem;
     font-weight: 650;
     text-align: center;
+  }
+
+  .swap:not(:has(.disks)) > .gauges + .speed-where,
+  .swap:not(:has(.disks)) > .gauges + .speed-status {
+    margin-top: -3.2rem;
   }
 
   .speed-status {
@@ -533,13 +588,21 @@
   .gauges {
     display: grid;
     grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.4fr) minmax(0, 0.72fr);
-    align-items: end;
+    align-items: start;
     gap: 0.4rem;
   }
 
   .gauge {
     position: relative;
     min-width: 0;
+  }
+
+  .gauges > .gauge:not(.gauge-hero) {
+    transform: translateY(8rem);
+  }
+
+  .gauges > .gauge:not(.gauge-hero) .dial {
+    transform: none;
   }
 
   .gauge > .dial > svg {
@@ -575,14 +638,16 @@
   }
 
   .public-ip {
+    position: relative;
+    z-index: 2;
     display: block;
-    margin: 0 auto 0.15rem;
-    padding: 0.2rem 0.55rem;
+    margin: 0.35rem auto -2.35rem;
+    padding: 0;
     border: none;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.08);
-    color: rgba(244, 247, 251, 0.82);
-    font-size: 0.9rem;
+    border-radius: 0;
+    background: transparent;
+    color: rgba(244, 247, 251, 0.88);
+    font-size: 1.8rem;
     font-weight: 650;
     letter-spacing: 0.02em;
     font-variant-numeric: tabular-nums;
@@ -590,7 +655,7 @@
   }
 
   .public-ip:hover {
-    background: rgba(255, 255, 255, 0.14);
+    background: transparent;
     color: #f4f7fb;
   }
 
@@ -599,7 +664,7 @@
   }
 
   .gauge-hero .dial {
-    transform: translateY(-0.7rem) scale(1.05, 0.98);
+    transform: translateY(-2rem) scale(1.05, 0.98);
     transform-origin: center center;
   }
 
@@ -669,24 +734,29 @@
   }
 
   .ring-row {
-    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 0.65rem;
     width: 100%;
-    height: 3.1rem;
+    min-height: 3.1rem;
     margin-top: 0.15rem;
   }
 
-  .ring-row > div {
-    position: absolute;
-    left: calc(50% + 1.65rem + 5px);
+  .ring-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-width: 0;
+  }
+
+  .ring-item > div {
     text-align: left;
   }
 
   .ring {
-    width: 3.1rem;
-    height: 3.1rem;
+    width: 2.7rem;
+    height: 2.7rem;
     flex: 0 0 auto;
     color: #f4f7fb;
   }
@@ -714,9 +784,17 @@
     stroke: #3dde7a;
   }
 
-  .ring-row strong {
+  .ring-level-loss {
+    stroke: #ff8fa3;
+  }
+
+  .ring-level-jitter {
+    stroke: #8ec5ff;
+  }
+
+  .ring-item strong {
     display: block;
-    font-size: clamp(1.15rem, 2vw, 1.55rem);
+    font-size: clamp(0.95rem, 1.6vw, 1.25rem);
     font-weight: 700;
     letter-spacing: -0.03em;
     line-height: 1;
@@ -724,9 +802,9 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .ring-row span {
+  .ring-item span {
     color: rgba(244, 247, 251, 0.62);
-    font-size: 0.82rem;
+    font-size: 0.72rem;
     font-weight: 650;
   }
 
@@ -734,18 +812,22 @@
     display: grid;
     grid-template-columns: repeat(var(--disk-count), minmax(0, 1fr));
     width: min(100%, calc(var(--disk-count) * 18rem));
-    margin-inline: auto;
+    margin: -3.4rem auto 0;
     gap: 1.2rem 1.8rem;
   }
 
   .disk-label {
-    color: rgba(244, 247, 251, 0.62);
-    font-size: 0.92rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.8rem;
+    margin-bottom: 0.5rem;
+    color: rgba(244, 247, 251, 0.72);
+    font-size: 1.05rem;
     font-weight: 650;
   }
 
   .disk-track {
-    height: 7px;
+    height: 10px;
     overflow: hidden;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.12);
@@ -758,13 +840,6 @@
     border-radius: inherit;
     background: #d7dee8;
     transition: width 1s cubic-bezier(0.22, 0.61, 0.36, 1);
-  }
-
-  .disk-label {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.8rem;
-    margin-bottom: 0.45rem;
   }
 
   .empty {
