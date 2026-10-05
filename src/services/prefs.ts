@@ -326,18 +326,23 @@ export type ClockSettings = {
   digitBorder: boolean;
   digitBorderColor: string;
   digitBorderWidth: number;
+  bgColorCustom: boolean;
+  bgColor: string;
 };
 
 export const DEFAULT_TEMPERATURE_UNIT: TemperatureUnit = "celsius";
 export const DEFAULT_CLOCK_DIGIT_COLOR = "#f3d37a";
 export const DEFAULT_CLOCK_DIGIT_BORDER_COLOR = "#111111";
 export const DEFAULT_CLOCK_DIGIT_BORDER_WIDTH = 4;
+export const DEFAULT_CLOCK_BG_COLOR = "#3b82f6";
 const TEMPERATURE_UNIT_KEY = "astrodeck:temperatureUnit";
 const CLOCK_LOCATION_KEY = "astrodeck:clockLocation";
 const CLOCK_DIGIT_COLOR_KEY = "astrodeck:clockDigitColor";
 const CLOCK_DIGIT_BORDER_KEY = "astrodeck:clockDigitBorder";
 const CLOCK_DIGIT_BORDER_COLOR_KEY = "astrodeck:clockDigitBorderColor";
 const CLOCK_DIGIT_BORDER_WIDTH_KEY = "astrodeck:clockDigitBorderWidth";
+const CLOCK_BG_COLOR_CUSTOM_KEY = "astrodeck:clockBgColorCustom";
+const CLOCK_BG_COLOR_KEY = "astrodeck:clockBgColor";
 
 export function parseClockDigitColor(value: unknown): string {
   return parseHexColor(value, DEFAULT_CLOCK_DIGIT_COLOR);
@@ -351,6 +356,10 @@ export function parseClockDigitBorderWidth(value: unknown): number {
   const width = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(width)) return DEFAULT_CLOCK_DIGIT_BORDER_WIDTH;
   return Math.min(16, Math.max(1, Math.round(width)));
+}
+
+export function parseClockBgColor(value: unknown): string {
+  return parseHexColor(value, DEFAULT_CLOCK_BG_COLOR);
 }
 
 export function parseTemperatureUnit(value: unknown): TemperatureUnit {
@@ -371,6 +380,8 @@ export async function getClockSettings(): Promise<ClockSettings> {
         digitBorderWidth: parseClockDigitBorderWidth(
           window.localStorage.getItem(CLOCK_DIGIT_BORDER_WIDTH_KEY)
         ),
+        bgColorCustom: window.localStorage.getItem(CLOCK_BG_COLOR_CUSTOM_KEY) === "true",
+        bgColor: parseClockBgColor(window.localStorage.getItem(CLOCK_BG_COLOR_KEY)),
       };
     } catch {
       return {
@@ -380,6 +391,8 @@ export async function getClockSettings(): Promise<ClockSettings> {
         digitBorder: false,
         digitBorderColor: DEFAULT_CLOCK_DIGIT_BORDER_COLOR,
         digitBorderWidth: DEFAULT_CLOCK_DIGIT_BORDER_WIDTH,
+        bgColorCustom: false,
+        bgColor: DEFAULT_CLOCK_BG_COLOR,
       };
     }
   }
@@ -395,6 +408,8 @@ function normalizeClockSettings(settings: ClockSettings): ClockSettings {
     digitBorder: !!settings.digitBorder,
     digitBorderColor: parseClockDigitBorderColor(settings.digitBorderColor),
     digitBorderWidth: parseClockDigitBorderWidth(settings.digitBorderWidth),
+    bgColorCustom: !!settings.bgColorCustom,
+    bgColor: parseClockBgColor(settings.bgColor),
   };
 }
 
@@ -408,6 +423,8 @@ export async function setClockSettings(settings: ClockSettings): Promise<ClockSe
       window.localStorage.setItem(CLOCK_DIGIT_BORDER_KEY, String(next.digitBorder));
       window.localStorage.setItem(CLOCK_DIGIT_BORDER_COLOR_KEY, next.digitBorderColor);
       window.localStorage.setItem(CLOCK_DIGIT_BORDER_WIDTH_KEY, String(next.digitBorderWidth));
+      window.localStorage.setItem(CLOCK_BG_COLOR_CUSTOM_KEY, String(next.bgColorCustom));
+      window.localStorage.setItem(CLOCK_BG_COLOR_KEY, next.bgColor);
     } catch {
       // ignore
     }
@@ -421,6 +438,8 @@ export async function setClockSettings(settings: ClockSettings): Promise<ClockSe
       digitBorder: next.digitBorder,
       digitBorderColor: next.digitBorderColor,
       digitBorderWidth: next.digitBorderWidth,
+      bgColorCustom: next.bgColorCustom,
+      bgColor: next.bgColor,
     })
   );
 }

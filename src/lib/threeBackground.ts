@@ -16,6 +16,7 @@ import {
 export type ThreeBackgroundHandle = {
   applyPalette: (palette: string[]) => void;
   setPlaying: (next: boolean) => void;
+  setFadeSeconds: (seconds: number) => void;
   getElapsed: () => number;
   dispose: () => void;
 };
@@ -80,6 +81,7 @@ export function createThreeBackground(
   let from = displayed.map((color) => color.clone());
   let to = displayed.map((color) => color.clone());
   let fade = 1;
+  let fadeSeconds = PALETTE_FADE_SEC;
   let disposed = false;
   let raf = 0;
   let playing = true;
@@ -556,7 +558,7 @@ export function createThreeBackground(
     const rawDt = Math.min(0.05, clock.getDelta());
     const dt = playing ? rawDt : 0;
     animElapsed += dt;
-    if (fade < 1) fade = Math.min(1, fade + rawDt / PALETTE_FADE_SEC);
+    if (fade < 1) fade = Math.min(1, fade + rawDt / fadeSeconds);
     const colors = currentColors();
     fogScratch.copy(night).lerp(colors[3], style === "horizon" || style === "warp" ? 0.18 : 0.07);
     renderer.setClearColor(fogScratch, 1);
@@ -585,6 +587,9 @@ export function createThreeBackground(
     },
     setPlaying(next: boolean) {
       playing = next;
+    },
+    setFadeSeconds(seconds: number) {
+      fadeSeconds = Math.max(0.2, seconds);
     },
     getElapsed() {
       return animElapsed;

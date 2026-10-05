@@ -186,7 +186,7 @@
   .digit {
     display: block;
     margin: 0 0.12em;
-    transform: scaleX(1.38) scaleY(1.32);
+    transform: scaleX(1.46) scaleY(1.32);
     transform-origin: center center;
   }
 

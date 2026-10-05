@@ -1,10 +1,12 @@
 import { get, writable } from "svelte/store";
 import {
+  DEFAULT_CLOCK_BG_COLOR,
   DEFAULT_CLOCK_DIGIT_BORDER_COLOR,
   DEFAULT_CLOCK_DIGIT_BORDER_WIDTH,
   DEFAULT_CLOCK_DIGIT_COLOR,
   DEFAULT_TEMPERATURE_UNIT,
   getClockSettings,
+  parseClockBgColor,
   parseClockDigitBorderColor,
   parseClockDigitBorderWidth,
   parseClockDigitColor,
@@ -19,6 +21,8 @@ export const clockDigitColor = writable(DEFAULT_CLOCK_DIGIT_COLOR);
 export const clockDigitBorder = writable(false);
 export const clockDigitBorderColor = writable(DEFAULT_CLOCK_DIGIT_BORDER_COLOR);
 export const clockDigitBorderWidth = writable(DEFAULT_CLOCK_DIGIT_BORDER_WIDTH);
+export const clockBgColorCustom = writable(false);
+export const clockBgColor = writable(DEFAULT_CLOCK_BG_COLOR);
 
 function applyClockSettings(settings: ClockSettings): void {
   temperatureUnit.set(settings.temperatureUnit);
@@ -27,6 +31,8 @@ function applyClockSettings(settings: ClockSettings): void {
   clockDigitBorder.set(settings.digitBorder);
   clockDigitBorderColor.set(settings.digitBorderColor);
   clockDigitBorderWidth.set(settings.digitBorderWidth);
+  clockBgColorCustom.set(settings.bgColorCustom);
+  clockBgColor.set(settings.bgColor);
 }
 
 function currentClockSettings(overrides: Partial<ClockSettings> = {}): ClockSettings {
@@ -37,6 +43,8 @@ function currentClockSettings(overrides: Partial<ClockSettings> = {}): ClockSett
     digitBorder: get(clockDigitBorder),
     digitBorderColor: get(clockDigitBorderColor),
     digitBorderWidth: get(clockDigitBorderWidth),
+    bgColorCustom: get(clockBgColorCustom),
+    bgColor: get(clockBgColor),
     ...overrides,
   };
 }
@@ -65,6 +73,23 @@ export async function saveClockDigitColor(color: string): Promise<void> {
   applyClockSettings(await setClockSettings(currentClockSettings({ digitColor: next })));
 }
 
+export function previewClockBgColor(color: string): void {
+  clockBgColor.set(parseClockBgColor(color));
+}
+
+export async function saveClockBgColor(custom: boolean, color?: string): Promise<void> {
+  const nextColor = parseClockBgColor(color ?? get(clockBgColor));
+  clockBgColorCustom.set(custom);
+  clockBgColor.set(nextColor);
+  applyClockSettings(
+    await setClockSettings(
+      currentClockSettings({
+        bgColorCustom: custom,
+        bgColor: nextColor,
+      })
+    )
+  );
+}
 export function previewClockDigitBorderColor(color: string): void {
   clockDigitBorderColor.set(parseClockDigitBorderColor(color));
 }

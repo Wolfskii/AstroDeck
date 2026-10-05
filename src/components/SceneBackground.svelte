@@ -19,15 +19,16 @@
     imageUrl = null,
     placement = "full",
     playing = true,
+    fadeMs = 700,
   }: {
     style: SceneBackgroundId;
     colors: string[];
     imageUrl?: string | null;
     placement?: "full" | "artwork";
     playing?: boolean;
+    fadeMs?: number;
   } = $props();
 
-  const PALETTE_FADE_MS = 700;
   const PLAYING_OFF_DELAY_MS = 350;
 
   let host = $state<HTMLDivElement | null>(null);
@@ -66,6 +67,7 @@
     applyPalette: (palette: string[]) => void;
     applyImage: (image: HTMLImageElement) => void;
     setPlaying: (next: boolean) => void;
+    setFadeMs: (ms: number) => void;
     getFrameMs: () => number;
   };
 
@@ -94,6 +96,11 @@
   $effect(() => {
     const isPlaying = renderPlaying;
     untrack(() => live)?.setPlaying(isPlaying);
+  });
+
+  $effect(() => {
+    const ms = fadeMs;
+    untrack(() => live)?.setFadeMs(ms);
   });
 
   $effect(() => {
@@ -160,6 +167,7 @@
           applyPalette: (palette) => three?.applyPalette(palette),
           applyImage: () => {},
           setPlaying: (next) => three?.setPlaying(next),
+          setFadeMs: (ms) => three?.setFadeSeconds(ms / 1000),
           getFrameMs: () => (three ? three.getElapsed() * 1000 : animFrameMs),
         };
       } catch {
@@ -184,6 +192,7 @@
     let mount: ShaderMount | null = null;
     let raf = 0;
     let lerpRaf = 0;
+    let paletteFadeMs = untrack(() => fadeMs);
     let image: HTMLImageElement | undefined;
     let displayed = untrack(() => [...pendingPalette]);
     let lerpFrom = displayed;
@@ -192,7 +201,7 @@
 
     function tickLerp(now: number) {
       if (disposed || !mount) return;
-      const t = Math.min(1, (now - lerpStarted) / PALETTE_FADE_MS);
+      const t = Math.min(1, (now - lerpStarted) / paletteFadeMs);
       const eased = easeInOut(t);
       displayed = mixHexPalette(lerpFrom, lerpTo, eased);
       mount.setUniforms(
@@ -297,6 +306,9 @@
         applyImage,
         setPlaying(next) {
           shaderPlaying = next;
+        },
+        setFadeMs(ms) {
+          paletteFadeMs = Math.max(200, ms);
         },
         getFrameMs: () => (mount ? mount.getCurrentFrame() : animFrameMs),
       };
