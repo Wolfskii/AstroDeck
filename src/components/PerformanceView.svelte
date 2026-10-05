@@ -1,8 +1,8 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
-  import { performanceFrosted } from "../stores/appearance";
-  import { runSpeedTest, type SpeedSnapshot } from "../lib/speedTest";
+  import { performanceFrosted, speedTestProvider } from "../stores/appearance";
+  import { runSpeedTest, speedProviderLabel, type SpeedSnapshot } from "../lib/speedTest";
 
   type DiskStat = { name: string; used: number; total: number };
   type SystemSnapshot = {
@@ -21,14 +21,19 @@
   };
 
   let stats = $state<SystemSnapshot | null>(null);
+  let publicIp = $state<string | null>(null);
+  let ipCopied = $state(false);
   let speed = $state<SpeedSnapshot>({
     phase: "idle",
     pingMs: null,
     downMbps: null,
     upMbps: null,
+    server: null,
+    location: null,
     error: null,
   });
   let speedAbort: AbortController | null = null;
+  let ipCopyTimer: number | null = null;
 
   const speedRunning = $derived(
     speed.phase === "ping" || speed.phase === "download" || speed.phase === "upload"
@@ -48,21 +53,33 @@
         })
         .catch(() => {});
     };
+    const pullIp = () => {
+      void fetchPublicIp()
+        .then((ip) => {
+          if (!stopped && ip) publicIp = ip;
+        })
+        .catch(() => {});
+    };
     pull();
+    pullIp();
     const timer = window.setInterval(pull, 1000);
+    const ipTimer = window.setInterval(pullIp, 5 * 60_000);
     return () => {
       stopped = true;
       window.clearInterval(timer);
+      window.clearInterval(ipTimer);
+      if (ipCopyTimer != null) window.clearTimeout(ipCopyTimer);
       speedAbort?.abort();
     };
   });
 
   const showSpeed = $derived(speed.phase !== "idle");
+  const speedWhere = $derived([speed.server, speed.location].filter(Boolean).join(" · "));
 
   function startSpeedTest() {
     speedAbort?.abort();
     speedAbort = new AbortController();
-    void runSpeedTest((next) => {
+    void runSpeedTest($speedTestProvider, (next) => {
       speed = next;
     }, speedAbort.signal);
   }
@@ -70,7 +87,39 @@
   function closeSpeedTest() {
     speedAbort?.abort();
     speedAbort = null;
-    speed = { phase: "idle", pingMs: null, downMbps: null, upMbps: null, error: null };
+    speed = {
+      phase: "idle",
+      pingMs: null,
+      downMbps: null,
+      upMbps: null,
+      server: null,
+      location: null,
+      error: null,
+    };
+  }
+
+  async function fetchPublicIp() {
+    const response = await fetch("https://1.1.1.1/cdn-cgi/trace", { cache: "no-store" });
+    if (!response.ok) return null;
+    const text = await response.text();
+    const line = text.split("\n").find((row) => row.startsWith("ip="));
+    const ip = line?.slice(3).trim() ?? "";
+    return ip || null;
+  }
+
+  async function copyPublicIp() {
+    if (!publicIp) return;
+    try {
+      await navigator.clipboard.writeText(publicIp);
+      ipCopied = true;
+      if (ipCopyTimer != null) window.clearTimeout(ipCopyTimer);
+      ipCopyTimer = window.setTimeout(() => {
+        ipCopied = false;
+        ipCopyTimer = null;
+      }, 1400);
+    } catch {
+      // clipboard may be unavailable
+    }
   }
 
   function formatMbps(value: number | null) {
@@ -158,7 +207,7 @@
   <div class="stage" class:stage-opaque={!$performanceFrosted}>
     <div class="speed-actions">
       {#if !showSpeed}
-        <button type="button" class="speed-btn" onclick={startSpeedTest}>Speed test</button>
+        <button type="button" class="speed-btn" onclick={startSpeedTest}>Test speed</button>
       {:else if speedRunning}
         <span class="speed-btn is-quiet">Testing…</span>
         <button type="button" class="speed-btn speed-btn-ghost" onclick={closeSpeedTest}>Back</button>
@@ -210,6 +259,17 @@
       </article>
 
       <article class="gauge gauge-hero">
+        {#if publicIp}
+          <button
+            type="button"
+            class="public-ip"
+            class:copied={ipCopied}
+            title={ipCopied ? "Copied" : "Copy IP"}
+            onclick={copyPublicIp}
+          >
+            {ipCopied ? "Copied" : publicIp}
+          </button>
+        {/if}
         <div class="dial">
         <svg viewBox="0 0 100 78" aria-hidden="true">
           <path d={heroArc} class="track" />
@@ -341,6 +401,9 @@
           </div>
         </article>
       </div>
+      {#if speedWhere}
+        <p class="speed-where">{speedWhere}</p>
+      {/if}
       <p class="speed-status" class:speed-error={speed.phase === "error"}>
         {speed.phase === "ping"
           ? "Measuring ping"
@@ -350,7 +413,7 @@
               ? "Measuring upload"
               : speed.phase === "error"
                 ? speed.error
-                : "Measured with Cloudflare"}
+                : `Measured with ${speedProviderLabel($speedTestProvider)}`}
       </p>
     </div>
   </div>
@@ -373,10 +436,9 @@
     position: relative;
     display: grid;
     height: auto;
-    max-height: calc(100% - 2.8rem);
     min-height: 0;
     margin: 1.4rem 2.2rem 1.4rem calc(var(--side-inset, 144px) + 1.2rem);
-    padding: 0.45rem 2.4rem 3.6rem;
+    padding: 0.45rem 2.4rem 6.2rem;
     border-radius: 32px;
     overflow: hidden;
     background-color: rgba(10, 14, 22, 0.38);
@@ -444,8 +506,16 @@
     stroke: #f3d37a;
   }
 
+  .speed-where {
+    margin: 1.15rem 0 0;
+    color: rgba(244, 247, 251, 0.86);
+    font-size: 0.98rem;
+    font-weight: 650;
+    text-align: center;
+  }
+
   .speed-status {
-    margin: 1.1rem 0 0;
+    margin: 0.4rem 0 1.8rem;
     color: rgba(244, 247, 251, 0.62);
     font-size: 0.78rem;
     font-weight: 600;
@@ -504,8 +574,32 @@
     position: relative;
   }
 
+  .public-ip {
+    display: block;
+    margin: 0 auto 0.15rem;
+    padding: 0.2rem 0.55rem;
+    border: none;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(244, 247, 251, 0.82);
+    font-size: 0.9rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+
+  .public-ip:hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: #f4f7fb;
+  }
+
+  .public-ip.copied {
+    color: #7dffb3;
+  }
+
   .gauge-hero .dial {
-    transform: translateY(-1.1rem) scale(1.13, 1.02);
+    transform: translateY(-0.7rem) scale(1.05, 0.98);
     transform-origin: center center;
   }
 

@@ -199,6 +199,31 @@ export async function setPerformanceFrosted(enabled: boolean): Promise<void> {
   await invoke("set_performance_frosted", { enabled });
 }
 
+const SPEED_TEST_PROVIDER_KEY = "astrodeck:speedTestProvider";
+
+export async function getSpeedTestProvider(): Promise<string> {
+  if (!isTauri) {
+    try {
+      return window.localStorage.getItem(SPEED_TEST_PROVIDER_KEY) ?? "cloudflare";
+    } catch {
+      return "cloudflare";
+    }
+  }
+  return invoke<string>("get_speed_test_provider");
+}
+
+export async function setSpeedTestProvider(provider: string): Promise<string> {
+  if (!isTauri) {
+    try {
+      window.localStorage.setItem(SPEED_TEST_PROVIDER_KEY, provider);
+    } catch {
+      // ignore
+    }
+    return provider;
+  }
+  return invoke<string>("set_speed_test_provider", { provider });
+}
+
 const CONTROLS_BACKDROP_KEY = "astrodeck:controlsBackdrop";
 const CONTROLS_TRANSPARENCY_KEY = "astrodeck:controlsTransparency";
 
