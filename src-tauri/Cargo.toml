@@ -1,6 +1,6 @@
 [package]
 name = "astrodeck"
-version = "0.1.21"
+version = "0.1.22"
 description = "A free dashboard for your other screen: time, music, and everyday apps"
 authors = ["AstroDeck Contributors"]
 edition = "2021"
