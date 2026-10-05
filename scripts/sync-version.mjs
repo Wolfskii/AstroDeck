@@ -79,6 +79,18 @@ const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
 packageJson.version = version;
 writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
 
+const packageLockPath = path.join(rootDir, "package-lock.json");
+try {
+  const packageLock = JSON.parse(readFileSync(packageLockPath, "utf8"));
+  packageLock.version = version;
+  if (packageLock.packages?.[""]) {
+    packageLock.packages[""].version = version;
+  }
+  writeFileSync(packageLockPath, `${JSON.stringify(packageLock, null, 2)}\n`, "utf8");
+} catch {
+  // package-lock.json may be absent in some checkouts
+}
+
 const cargoTomlPath = path.join(rootDir, "src-tauri", "Cargo.toml");
 let cargoToml = readFileSync(cargoTomlPath, "utf8");
 cargoToml = cargoToml.replace(/^version = ".*"$/m, `version = "${version}"`);
