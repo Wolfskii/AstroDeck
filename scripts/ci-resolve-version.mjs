@@ -13,7 +13,7 @@ if (channel !== "develop" && channel !== "production") {
 }
 
 function parseSemver(value) {
-  const match = value.trim().match(/^(\d+)\.(\d+)\.(\d+)(?:-(?:dev|\d+))?$/);
+  const match = String(value).trim().match(/^(\d+)\.(\d+)\.(\d+)(?:-(?:dev|\d+))?$/);
   if (!match) return null;
   return {
     major: Number(match[1]),
@@ -36,11 +36,25 @@ function maxSemver(versions) {
 }
 
 function bumpPatch(version) {
-  return `${version.major}.${version.minor}.${version.patch + 1}`;
+  return {
+    major: version.major,
+    minor: version.minor,
+    patch: version.patch + 1,
+    raw: `${version.major}.${version.minor}.${version.patch + 1}`,
+  };
 }
 
 function bumpMinorResetPatch(version) {
-  return `${version.major}.${version.minor + 1}.0`;
+  return {
+    major: version.major,
+    minor: version.minor + 1,
+    patch: 0,
+    raw: `${version.major}.${version.minor + 1}.0`,
+  };
+}
+
+function channelTag(versionRaw, releaseChannel) {
+  return releaseChannel === "develop" ? `v${versionRaw}-dev` : `v${versionRaw}`;
 }
 
 function runGit(command) {
@@ -49,6 +63,12 @@ function runGit(command) {
 
 function listTags() {
   try {
+    // Prefer a fresh remote tag list so local clones/CI checkouts do not miss tags.
+    try {
+      runGit("git fetch --tags --force");
+    } catch {
+      // offline / shallow mirrors may not allow fetch; fall back to local tags
+    }
     const output = runGit('git tag -l "v*"');
     return output ? output.split("\n").filter(Boolean) : [];
   } catch {
@@ -69,6 +89,22 @@ function versionChangedInCommit() {
   }
 }
 
+/** Walk patch numbers until the channel tag is free. */
+function nextFreeVersion(start, releaseChannel, existingTags) {
+  let current = typeof start === "string" ? parseSemver(start) : start;
+  if (!current) {
+    throw new Error(`Invalid semver start: ${start}`);
+  }
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    const tag = channelTag(current.raw, releaseChannel);
+    if (!existingTags.includes(tag)) {
+      return { version: current.raw, tag };
+    }
+    current = bumpPatch(current);
+  }
+  throw new Error("Could not find a free release version after 1000 bumps");
+}
+
 const versionPath = path.join(rootDir, "VERSION");
 const fileVersionRaw = readFileSync(versionPath, "utf8").trim();
 const fileVersion = parseSemver(fileVersionRaw);
@@ -82,47 +118,67 @@ const tags = listTags();
 const stableVersions = tags
   .filter((tag) => !tag.endsWith("-dev"))
   .map((tag) => tagToVersion(tag));
-const devVersions = tags
-  .filter((tag) => tag.endsWith("-dev"))
-  .map((tag) => tagToVersion(tag));
 const allVersions = tags.map((tag) => tagToVersion(tag));
 
 const latestStable = maxSemver(stableVersions);
 const latestAny = maxSemver(allVersions);
 const fallbackBase = latestStable || fileVersion;
 
-let autoVersion;
+let autoStart;
 let prerelease;
-let tagName;
 
 if (channel === "develop") {
   const base = latestAny || fileVersion;
-  autoVersion = bumpPatch(base);
+  autoStart = bumpPatch(base);
   prerelease = true;
-  tagName = `v${autoVersion}-dev`;
 } else {
-  autoVersion = bumpMinorResetPatch(fallbackBase);
+  autoStart = bumpMinorResetPatch(fallbackBase);
   prerelease = false;
-  tagName = `v${autoVersion}`;
 }
 
-let releaseVersion = autoVersion;
-const manualOverride =
-  versionChangedInCommit() && fileVersion.raw !== autoVersion;
+let candidate = autoStart;
+let manualOverride = false;
+const wantsManual =
+  versionChangedInCommit() && fileVersion.raw !== autoStart.raw;
 
-if (manualOverride) {
-  releaseVersion = fileVersion.raw;
-  tagName = channel === "develop" ? `v${releaseVersion}-dev` : `v${releaseVersion}`;
-  console.log(
-    `[ci-resolve-version] Using manual VERSION override: ${releaseVersion} (auto would be ${autoVersion})`
-  );
+if (wantsManual) {
+  const manualTag = channelTag(fileVersion.raw, channel);
+  if (!tags.includes(manualTag)) {
+    candidate = fileVersion;
+    manualOverride = true;
+    console.log(
+      `[ci-resolve-version] Using manual VERSION override: ${fileVersion.raw} (auto would be ${autoStart.raw})`
+    );
+  } else {
+    // Stale or reused VERSION — never fail the build; take the next free slot.
+    const floor =
+      compareSemver(fileVersion, autoStart) >= 0 ? fileVersion : autoStart;
+    candidate = floor;
+    console.log(
+      `[ci-resolve-version] Manual VERSION ${fileVersion.raw} tag ${manualTag} already exists; using next free version from ${floor.raw}`
+    );
+  }
 } else {
-  console.log(`[ci-resolve-version] Auto version: ${releaseVersion}`);
+  console.log(`[ci-resolve-version] Auto version start: ${autoStart.raw}`);
 }
 
-if (tags.includes(tagName)) {
-  console.error(`[ci-resolve-version] Tag ${tagName} already exists`);
+let releaseVersion;
+let tagName;
+try {
+  ({ version: releaseVersion, tag: tagName } = nextFreeVersion(candidate, channel, tags));
+} catch (error) {
+  console.error(`[ci-resolve-version] ${error instanceof Error ? error.message : error}`);
   process.exit(1);
+}
+
+if (releaseVersion !== candidate.raw) {
+  console.log(
+    `[ci-resolve-version] Advanced ${candidate.raw} → ${releaseVersion} to avoid existing tag`
+  );
+  // If we had to skip because of collisions, it is no longer a pure manual pin.
+  if (manualOverride && releaseVersion !== fileVersion.raw) {
+    manualOverride = false;
+  }
 }
 
 writeFileSync(versionPath, `${releaseVersion}\n`, "utf8");
@@ -133,7 +189,7 @@ const manifest = {
   prerelease,
   channel,
   manualOverride,
-  autoVersion,
+  autoVersion: autoStart.raw,
 };
 
 const manifestPath = path.join(rootDir, "version-manifest.json");
