@@ -54,6 +54,16 @@ export async function setStartMinimized(enabled: boolean): Promise<void> {
   await invoke("set_start_minimized", { enabled });
 }
 
+export async function getHideTaskbarIcon(): Promise<boolean> {
+  if (!isTauri) return false;
+  return invoke<boolean>("get_hide_taskbar_icon");
+}
+
+export async function setHideTaskbarIcon(enabled: boolean): Promise<void> {
+  if (!isTauri) return;
+  await invoke("set_hide_taskbar_icon", { enabled });
+}
+
 export async function getStartFullscreen(): Promise<boolean> {
   if (!isTauri) return false;
   return invoke<boolean>("get_start_fullscreen");
@@ -328,6 +338,8 @@ export type ClockSettings = {
   digitBorderWidth: number;
   bgColorCustom: boolean;
   bgColor: string;
+  weatherCard: boolean;
+  weatherCardColor: string;
 };
 
 export const DEFAULT_TEMPERATURE_UNIT: TemperatureUnit = "celsius";
@@ -335,6 +347,7 @@ export const DEFAULT_CLOCK_DIGIT_COLOR = "#f3d37a";
 export const DEFAULT_CLOCK_DIGIT_BORDER_COLOR = "#111111";
 export const DEFAULT_CLOCK_DIGIT_BORDER_WIDTH = 4;
 export const DEFAULT_CLOCK_BG_COLOR = "#3b82f6";
+export const DEFAULT_CLOCK_WEATHER_CARD_COLOR = "#c5dbe8";
 const TEMPERATURE_UNIT_KEY = "astrodeck:temperatureUnit";
 const CLOCK_LOCATION_KEY = "astrodeck:clockLocation";
 const CLOCK_DIGIT_COLOR_KEY = "astrodeck:clockDigitColor";
@@ -343,6 +356,8 @@ const CLOCK_DIGIT_BORDER_COLOR_KEY = "astrodeck:clockDigitBorderColor";
 const CLOCK_DIGIT_BORDER_WIDTH_KEY = "astrodeck:clockDigitBorderWidth";
 const CLOCK_BG_COLOR_CUSTOM_KEY = "astrodeck:clockBgColorCustom";
 const CLOCK_BG_COLOR_KEY = "astrodeck:clockBgColor";
+const CLOCK_WEATHER_CARD_KEY = "astrodeck:clockWeatherCard";
+const CLOCK_WEATHER_CARD_COLOR_KEY = "astrodeck:clockWeatherCardColor";
 
 export function parseClockDigitColor(value: unknown): string {
   return parseHexColor(value, DEFAULT_CLOCK_DIGIT_COLOR);
@@ -360,6 +375,10 @@ export function parseClockDigitBorderWidth(value: unknown): number {
 
 export function parseClockBgColor(value: unknown): string {
   return parseHexColor(value, DEFAULT_CLOCK_BG_COLOR);
+}
+
+export function parseClockWeatherCardColor(value: unknown): string {
+  return parseHexColor(value, DEFAULT_CLOCK_WEATHER_CARD_COLOR);
 }
 
 export function parseTemperatureUnit(value: unknown): TemperatureUnit {
@@ -382,6 +401,10 @@ export async function getClockSettings(): Promise<ClockSettings> {
         ),
         bgColorCustom: window.localStorage.getItem(CLOCK_BG_COLOR_CUSTOM_KEY) === "true",
         bgColor: parseClockBgColor(window.localStorage.getItem(CLOCK_BG_COLOR_KEY)),
+        weatherCard: window.localStorage.getItem(CLOCK_WEATHER_CARD_KEY) === "true",
+        weatherCardColor: parseClockWeatherCardColor(
+          window.localStorage.getItem(CLOCK_WEATHER_CARD_COLOR_KEY)
+        ),
       };
     } catch {
       return {
@@ -393,6 +416,8 @@ export async function getClockSettings(): Promise<ClockSettings> {
         digitBorderWidth: DEFAULT_CLOCK_DIGIT_BORDER_WIDTH,
         bgColorCustom: false,
         bgColor: DEFAULT_CLOCK_BG_COLOR,
+        weatherCard: false,
+        weatherCardColor: DEFAULT_CLOCK_WEATHER_CARD_COLOR,
       };
     }
   }
@@ -410,6 +435,8 @@ function normalizeClockSettings(settings: ClockSettings): ClockSettings {
     digitBorderWidth: parseClockDigitBorderWidth(settings.digitBorderWidth),
     bgColorCustom: !!settings.bgColorCustom,
     bgColor: parseClockBgColor(settings.bgColor),
+    weatherCard: !!settings.weatherCard,
+    weatherCardColor: parseClockWeatherCardColor(settings.weatherCardColor),
   };
 }
 
@@ -425,6 +452,8 @@ export async function setClockSettings(settings: ClockSettings): Promise<ClockSe
       window.localStorage.setItem(CLOCK_DIGIT_BORDER_WIDTH_KEY, String(next.digitBorderWidth));
       window.localStorage.setItem(CLOCK_BG_COLOR_CUSTOM_KEY, String(next.bgColorCustom));
       window.localStorage.setItem(CLOCK_BG_COLOR_KEY, next.bgColor);
+      window.localStorage.setItem(CLOCK_WEATHER_CARD_KEY, String(next.weatherCard));
+      window.localStorage.setItem(CLOCK_WEATHER_CARD_COLOR_KEY, next.weatherCardColor);
     } catch {
       // ignore
     }
@@ -440,6 +469,8 @@ export async function setClockSettings(settings: ClockSettings): Promise<ClockSe
       digitBorderWidth: next.digitBorderWidth,
       bgColorCustom: next.bgColorCustom,
       bgColor: next.bgColor,
+      weatherCard: next.weatherCard,
+      weatherCardColor: next.weatherCardColor,
     })
   );
 }

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import ChooseViewButton from "./ChooseViewButton.svelte";
   import microphoneLyricsUrl from "../assets/microphone-reference.png";
   import type { DeckButtonConfig } from "../types";
   import {
@@ -56,8 +55,6 @@
     source?: string;
     onVolumeCommit?: (value: number) => Promise<void> | void;
     onSeekCommit?: (positionMs: number) => Promise<void> | void;
-    showSettingsButton?: boolean;
-    onOpenSettings?: () => void;
     playlistsEnabled?: boolean;
     youtubeMusicEnabled?: boolean;
     youtubeMusicLibraryEnabled?: boolean;
@@ -97,8 +94,6 @@
     source = "media window",
     onVolumeCommit,
     onSeekCommit,
-    showSettingsButton = false,
-    onOpenSettings,
     playlistsEnabled = false,
     youtubeMusicEnabled = false,
     youtubeMusicLibraryEnabled = false,
@@ -606,14 +601,10 @@
 >
   <div
     class="car-thing-body"
-    class:car-thing-body--has-icon={showSettingsButton && onOpenSettings}
     class:car-thing-body--shader={showFullViewShader}
   >
     {#if showFullViewShader}
       <div class="car-shader-scrim" aria-hidden="true"></div>
-    {/if}
-    {#if showSettingsButton && onOpenSettings}
-      <ChooseViewButton onclick={() => onOpenSettings()} />
     {/if}
     {#if playlistsEnabled}
       <button
@@ -833,7 +824,7 @@
                   fill="none"
                   stroke="currentColor"
                   stroke-width="1.8"
-                  d="M12 4.5v15M4.5 12h15"
+                  d="M12 7.4v9.2M7.4 12h9.2"
                 />
                 <circle
                   cx="12"
@@ -1049,12 +1040,12 @@
         {#if localVolume === 0}
           <path
             fill="currentColor"
-            d="M4 9v6h4l5 4V5L8 9H4zm12.3.7 1.4-1.4 1.8 1.8 1.8-1.8 1.4 1.4-1.8 1.8 1.8 1.8-1.4 1.4-1.8-1.8-1.8 1.8-1.4-1.4 1.8-1.8-1.8-1.8z"
+            d="M4 9.2h3.1L11.6 5v14l-4.5-4.2H4A1.2 1.2 0 0 1 2.8 13.6V10.4A1.2 1.2 0 0 1 4 9.2Zm12.3.5 1.4-1.4 1.8 1.8 1.8-1.8 1.4 1.4-1.8 1.8 1.8 1.8-1.4 1.4-1.8-1.8-1.8 1.8-1.4-1.4 1.8-1.8-1.8-1.8Z"
           />
         {:else}
           <path
             fill="currentColor"
-            d="M4 9v6h4l5 4V5L8 9H4zm11.5 3a3.5 3.5 0 0 0-1.8-3.06v6.12A3.5 3.5 0 0 0 15.5 12zm-1.8-6.32v2.06a5.5 5.5 0 0 1 0 8.52v2.06a7.5 7.5 0 0 0 0-12.64z"
+            d="M4 9.2h3.1L11.6 5v14l-4.5-4.2H4A1.2 1.2 0 0 1 2.8 13.6V10.4A1.2 1.2 0 0 1 4 9.2Zm11.7-2.15a1 1 0 0 1 1.4.05 6.6 6.6 0 0 1 0 9.8 1 1 0 1 1-1.35-1.48 4.6 4.6 0 0 0 0-6.84 1 1 0 0 1-.05-1.53Zm-2.55 2.5a1 1 0 0 1 1.4.02 3.3 3.3 0 0 1 0 4.86 1 1 0 0 1-1.38-1.45 1.3 1.3 0 0 0 0-1.96 1 1 0 0 1-.02-1.47Z"
           />
         {/if}
       </svg>
@@ -1215,17 +1206,13 @@
     display: flex;
     align-items: center;
     justify-content: flex-start;
-    padding: 0 20px 44px clamp(172px, 19vw, 300px);
+    padding: 44px 20px 44px calc(var(--side-inset, clamp(48px, 8vw, 180px)) + 4vw);
     overflow: hidden;
   }
 
   .car-now-playing--lyrics {
     justify-content: flex-start;
-    padding: 0 20px 44px clamp(172px, 19vw, 300px);
-  }
-
-  .car-thing-body--has-icon .car-now-playing--lyrics {
-    padding-top: 0;
+    padding: 44px 20px 44px calc(var(--side-inset, clamp(48px, 8vw, 180px)) + 4vw);
   }
 
   .car-lyrics {
@@ -1359,10 +1346,6 @@
     text-align: left;
   }
 
-  .car-thing-body--has-icon .car-now-playing {
-    padding-top: 112px;
-  }
-
   .car-now-playing-inner {
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr);
@@ -1440,10 +1423,6 @@
 
   .car-artwork-incoming--in {
     opacity: 1;
-  }
-
-  .car-thing-body--has-icon .car-artwork {
-    height: 100%;
   }
 
   .car-artwork-placeholder {
@@ -1619,7 +1598,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: max(20px, env(safe-area-inset-bottom, 0px)) 24px;
+    padding: max(20px, env(safe-area-inset-bottom, 0px)) 24px
+      max(20px, env(safe-area-inset-bottom, 0px)) var(--side-inset, 24px);
     min-height: 148px;
     position: relative;
     z-index: 1;
@@ -1815,10 +1795,6 @@
 
   .car-thing--shader .car-fader {
     isolation: isolate;
-  }
-
-  .car-thing--controls-backdrop .car-fader {
-    background: rgba(var(--controls-overlay-rgb, 0, 0, 0), var(--controls-overlay-alpha, 0.65));
   }
 
   .car-volume-value {

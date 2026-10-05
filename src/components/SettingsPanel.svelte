@@ -33,6 +33,7 @@
     clockDigitBorderWidth,
     clockDigitColor,
     clockLocation,
+    clockWeatherCard,
     previewClockBgColor,
     previewClockDigitBorderColor,
     previewClockDigitColor,
@@ -40,6 +41,7 @@
     saveClockDigitBorder,
     saveClockDigitColor,
     saveClockSettings,
+    saveClockWeatherCard,
     temperatureUnit,
   } from "../stores/clock";
   import { formatPlace, searchPlaces, type GeoPlace } from "../services/weather";
@@ -73,6 +75,8 @@
     startOnBootBusy,
     startMinimized,
     startMinimizedBusy,
+    hideTaskbarIcon,
+    hideTaskbarIconBusy,
     startFullscreen,
     startFullscreenBusy,
     showSettingsTerminal,
@@ -80,6 +84,7 @@
     startupError,
     onStartOnBootChange,
     onStartMinimizedChange,
+    onHideTaskbarIconChange,
     onStartFullscreenChange,
     onShowSettingsTerminalChange,
     appVersion,
@@ -127,6 +132,8 @@
     startOnBootBusy: boolean;
     startMinimized: boolean;
     startMinimizedBusy: boolean;
+    hideTaskbarIcon: boolean;
+    hideTaskbarIconBusy: boolean;
     startFullscreen: boolean;
     startFullscreenBusy: boolean;
     showSettingsTerminal: boolean;
@@ -134,6 +141,7 @@
     startupError: string | null;
     onStartOnBootChange: (event: Event) => void;
     onStartMinimizedChange: (event: Event) => void;
+    onHideTaskbarIconChange: (event: Event) => void;
     onStartFullscreenChange: (event: Event) => void;
     onShowSettingsTerminalChange: (event: Event) => void;
     appVersion: string;
@@ -450,6 +458,23 @@
           />
           <span class="md-check" aria-hidden="true"></span>
         </label>
+        <label class="setting-row" for="hide-taskbar-icon">
+          <div class="setting-copy">
+            <span class="setting-title">Hide the taskbar icon</span>
+            <span class="setting-desc">
+              Keep AstroDeck off the Windows taskbar while the window is open. The tray icon still
+              shows the window, hides it, and quits the app.
+            </span>
+          </div>
+          <input
+            id="hide-taskbar-icon"
+            type="checkbox"
+            checked={hideTaskbarIcon}
+            disabled={hideTaskbarIconBusy}
+            onchange={onHideTaskbarIconChange}
+          />
+          <span class="md-check" aria-hidden="true"></span>
+        </label>
         <label class="setting-row" for="start-fullscreen">
           <div class="setting-copy">
             <span class="setting-title">Fullscreen mode</span>
@@ -748,6 +773,24 @@
             onCommit={(hex) => void saveClockBgColor(true, hex)}
           />
         {/if}
+      </div>
+      <div class="settings-card settings-card-pad">
+        <label class="setting-row" for="clock-weather-card">
+          <div class="setting-copy">
+            <span class="setting-title">Weather glass</span>
+            <span class="setting-desc">
+              Optional liquid-glass background behind the Home weather.
+            </span>
+          </div>
+          <input
+            id="clock-weather-card"
+            type="checkbox"
+            checked={$clockWeatherCard}
+            onchange={(event) =>
+              void saveClockWeatherCard((event.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="md-check" aria-hidden="true"></span>
+        </label>
       </div>
       <div class="settings-card settings-card-pad">
         <p class="setting-title">Location</p>

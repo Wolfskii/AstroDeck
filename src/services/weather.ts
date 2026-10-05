@@ -23,6 +23,7 @@ export type WeatherSnapshot = {
   isDay: boolean;
   label: string;
   place: string;
+  city: string;
   humidity: number | null;
   rainChance: number | null;
   days: WeatherDay[];
@@ -214,6 +215,7 @@ export async function fetchWeather(
     code,
     isDay: data.current?.is_day !== 0,
     label: weatherLabel(code),
+    city: place.name,
     place:
       place.country && place.country !== place.name
         ? `${place.name}, ${place.country}`

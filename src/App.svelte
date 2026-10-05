@@ -8,14 +8,14 @@
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import ClockWeatherView from "./components/ClockWeatherView.svelte";
+  import WeatherView from "./components/WeatherView.svelte";
   import DeckGrid from "./components/DeckGrid.svelte";
   import MediaPlayerView from "./components/MediaPlayerView.svelte";
-  import SceneLauncher from "./components/SceneLauncher.svelte";
   import ReleaseNotes from "./components/ReleaseNotes.svelte";
   import SettingsPanel from "./components/SettingsPanel.svelte";
+  import SideNav from "./components/SideNav.svelte";
   import TeamsScene from "./components/TeamsScene.svelte";
   import VsCodeScene from "./components/VsCodeScene.svelte";
-  import ChooseViewButton from "./components/ChooseViewButton.svelte";
   import SceneBackground from "./components/SceneBackground.svelte";
   import {
     executeActionValue,
@@ -52,6 +52,7 @@
   } from "./layouts/layouts";
   import { usesCoverImage, usesFullViewBackground } from "./lib/sceneBackgrounds";
   import { hexToHsv, isNeutralAccent, shaderColorsFromAccent, shaderColorsFromHue } from "./lib/color";
+  import { extractAlbumPalette, paletteToShaderColors } from "./lib/albumArtColor";
   import { logs, logInfo, logError, pushExternal, type LogEntry } from "./services/logger";
   import {
     checkForAppUpdate,
@@ -65,6 +66,8 @@
   import {
     getStartMinimized,
     setStartMinimized,
+    getHideTaskbarIcon,
+    setHideTaskbarIcon,
     getStartFullscreen,
     setStartFullscreen,
     getShowSettingsTerminal,
@@ -78,6 +81,8 @@
   import { hydrateSceneBackground, sceneBackgroundId } from "./stores/appearance";
   import { sceneShaderColors, sceneShaderImage } from "./stores/sceneVisual";
   import { clockBgColor, clockBgColorCustom, clockDigitColor, loadClockSettings } from "./stores/clock";
+  import { weatherDetailOpen } from "./stores/navigation";
+  import { startWeatherUpdates } from "./stores/weather";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
 
@@ -99,15 +104,14 @@
   let windowLabel = $state("");
   let seenScenes = $state<string[]>([]);
   // Tauri: main window can show deck or settings (viewMode). Browser: always settings/debug.
-  let viewMode = $state<"deck" | "launcher" | "settings">("deck");
+  let viewMode = $state<"deck" | "settings">("deck");
   let showSettingsTerminal = $state(!isTauri);
   let showSettingsTerminalBusy = $state(false);
   let autoSwitchScenes = $state<Record<string, boolean>>({});
   let autoSwitchBusyId = $state<string | null>(null);
   const isSettingsWindow = $derived(!isTauri || viewMode === "settings");
-  const isLauncherView = $derived(isTauri && viewMode === "launcher");
   const showGlobalSceneBackground = $derived(
-    !isSettingsWindow && !isLauncherView && usesFullViewBackground($sceneBackgroundId)
+    !isSettingsWindow && !$weatherDetailOpen && usesFullViewBackground($sceneBackgroundId)
   );
   const showLogsPanel = $derived(isSettingsWindow && showSettingsTerminal);
   let logStatus = $state<"connecting" | "connected" | "disconnected">("connecting");
@@ -136,6 +140,8 @@
   let startOnBootError = $state<string | null>(null);
   let startMinimized = $state(true);
   let startMinimizedBusy = $state(false);
+  let hideTaskbarIcon = $state(false);
+  let hideTaskbarIconBusy = $state(false);
   let startFullscreen = $state(false);
   let startFullscreenBusy = $state(false);
   let osLocalNowPlaying = $state<OsNowPlaying | null>(null);
@@ -209,6 +215,65 @@
         ? "playing"
         : "paused"
   );
+  let homePlaybackScene = $state<"spotify" | "youtubeMusic" | "media" | null>(null);
+  const homeNowPlaying = $derived.by(() => {
+    const spotifyTitle = spotifyStatus?.currentTrackName?.trim() ?? "";
+    const spotifyArtist = spotifyStatus?.currentArtistName?.trim() ?? "";
+    const youtubeTitle = youtubeMusicStatus?.currentTrackName?.trim() ?? "";
+    const youtubeArtist = youtubeMusicStatus?.currentArtistName?.trim() ?? "";
+    const mediaTitle = osLocalNowPlaying?.title?.trim() ?? "";
+    const mediaArtist = osLocalNowPlaying?.artist?.trim() ?? "";
+    const spotify =
+      spotifyTitle || spotifyArtist
+        ? {
+            sceneId: "spotify" as const,
+            title: spotifyTitle,
+            artist: spotifyArtist,
+            coverUrl: spotifyStatus?.currentCoverArtUrl ?? null,
+            playing: effectiveSpotifyPlaybackState === "playing",
+          }
+        : null;
+    const youtube =
+      youtubeTitle || youtubeArtist
+        ? {
+            sceneId: "youtubeMusic" as const,
+            title: youtubeTitle,
+            artist: youtubeArtist,
+            coverUrl: youtubeMusicStatus?.currentCoverArtUrl ?? null,
+            playing: !!youtubeMusicStatus?.isPlaying,
+          }
+        : null;
+    const media =
+      mediaTitle || mediaArtist
+        ? {
+            sceneId: "media" as const,
+            title: mediaTitle,
+            artist: mediaArtist,
+            coverUrl: osLocalNowPlaying?.coverArtUrl ?? null,
+            playing: effectiveOsMediaPlaybackState === "playing",
+          }
+        : null;
+    return spotify?.playing
+      ? spotify
+      : youtube?.playing
+        ? youtube
+        : media?.playing
+          ? media
+          : homePlaybackScene === "spotify"
+            ? spotify
+            : homePlaybackScene === "youtubeMusic"
+              ? youtube
+              : homePlaybackScene === "media"
+                ? media
+                : (spotify ?? youtube ?? media);
+  });
+
+  $effect(() => {
+    if (effectiveSpotifyPlaybackState === "playing") homePlaybackScene = "spotify";
+    else if (youtubeMusicStatus?.isPlaying) homePlaybackScene = "youtubeMusic";
+    else if (effectiveOsMediaPlaybackState === "playing") homePlaybackScene = "media";
+  });
+
   const currentMediaView = $derived.by(() => {
     const media = currentPlugin?.view?.type === "mediaPlayer"
       ? currentPlugin.view.mediaPlayer
@@ -269,8 +334,8 @@
     () =>
       isTauri &&
       !isSettingsWindow &&
-      !isLauncherView &&
-      (currentMediaView !== null ||
+      ($weatherDetailOpen ||
+        currentMediaView !== null ||
         sceneId === "teams" ||
         sceneId === "vscode" ||
         sceneId === "clock")
@@ -327,16 +392,18 @@
     if (!isTauri || viewMode !== "settings") return;
     void (async () => {
       try {
-        const [boot, minimized, fullscreen, terminal] = await Promise.all([
+        const [boot, minimized, fullscreen, terminal, hideTaskbar] = await Promise.all([
           isAutostartEnabled(),
           getStartMinimized(),
           getStartFullscreen(),
           getShowSettingsTerminal(),
+          getHideTaskbarIcon(),
         ]);
         startOnBoot = boot;
         startMinimized = minimized;
         startFullscreen = fullscreen;
         showSettingsTerminal = terminal;
+        hideTaskbarIcon = hideTaskbar;
         startOnBootError = null;
       } catch (e) {
         startOnBootError = String(e);
@@ -475,6 +542,30 @@
       logError(`Failed to update start minimized: ${String(e)}`, "Settings");
     } finally {
       startMinimizedBusy = false;
+    }
+  }
+
+  async function onHideTaskbarIconChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const checked = input.checked;
+    hideTaskbarIconBusy = true;
+    startOnBootError = null;
+    try {
+      await setHideTaskbarIcon(checked);
+      hideTaskbarIcon = checked;
+      logInfo(
+        checked
+          ? "AstroDeck stays off the Windows taskbar while the window is open"
+          : "AstroDeck shows a Windows taskbar button while the window is open",
+        "Settings"
+      );
+    } catch (e) {
+      hideTaskbarIcon = !checked;
+      input.checked = !checked;
+      startOnBootError = String(e);
+      logError(`Failed to update taskbar icon: ${String(e)}`, "Settings");
+    } finally {
+      hideTaskbarIconBusy = false;
     }
   }
 
@@ -1372,23 +1463,78 @@
   }
 
   let sceneId = $state("clock");
+  let returnHomeFromWeather = $state(false);
+  const sideNavActive = $derived(
+    viewMode === "settings" ? "settings" : $weatherDetailOpen ? "weather" : sceneId
+  );
+
+  function closeWeatherToHome() {
+    viewMode = "deck";
+    if (sceneId === "clock") {
+      weatherDetailOpen.set(false);
+      return;
+    }
+    returnHomeFromWeather = true;
+    selectScene("clock");
+  }
+
+  function onSideNavSelect(id: string) {
+    if (id === "settings") {
+      weatherDetailOpen.set(false);
+      viewMode = "settings";
+      return;
+    }
+    if (id === "weather") {
+      weatherDetailOpen.set(true);
+      viewMode = "deck";
+      return;
+    }
+    if (id === "clock") {
+      closeWeatherToHome();
+      return;
+    }
+    weatherDetailOpen.set(false);
+    selectScene(id);
+  }
+
+  $effect(() => {
+    if (!returnHomeFromWeather || sceneId !== "clock") return;
+    returnHomeFromWeather = false;
+    weatherDetailOpen.set(false);
+  });
   let layout = $state<LayoutConfig | null>(null);
   let availableScenes = $state<string[]>([]);
   let loading = $state(true);
   const isHomeScene = $derived(sceneId === "clock");
   let homeHue = $state(Math.floor(Math.random() * 360));
+  const homePalette = $derived(
+    $clockBgColorCustom
+      ? shaderColorsFromHue(hexToHsv($clockBgColor).h)
+      : isNeutralAccent($clockDigitColor)
+        ? shaderColorsFromHue(homeHue, true)
+        : shaderColorsFromAccent($clockDigitColor)
+  );
   const globalSceneColors = $derived(
-    !isHomeScene
-      ? $sceneShaderColors
-      : $clockBgColorCustom
-        ? shaderColorsFromHue(hexToHsv($clockBgColor).h)
-        : isNeutralAccent($clockDigitColor)
-          ? shaderColorsFromHue(homeHue, true)
-          : shaderColorsFromAccent($clockDigitColor)
+    !isHomeScene || homeNowPlaying?.playing ? $sceneShaderColors : homePalette
   );
 
   $effect(() => {
-    if (!isHomeScene || $clockBgColorCustom || !isNeutralAccent($clockDigitColor)) return;
+    if (!isHomeScene || !homeNowPlaying?.playing) return;
+    const url = homeNowPlaying.coverUrl;
+    if (!url) return;
+    let cancelled = false;
+    void extractAlbumPalette(url).then((palette) => {
+      if (cancelled || !palette?.[0]) return;
+      sceneShaderColors.set(paletteToShaderColors(palette));
+      sceneShaderImage.set(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  $effect(() => {
+    if (!isHomeScene || homeNowPlaying?.playing || $clockBgColorCustom || !isNeutralAccent($clockDigitColor)) return;
     const timer = window.setInterval(() => {
       const jump = 50 + Math.floor(Math.random() * 160);
       homeHue = (homeHue + jump) % 360;
@@ -1456,15 +1602,10 @@
   }
 
   async function showAstroDeckFromTray() {
-    viewMode = isIdleScene(sceneId) ? "launcher" : "deck";
+    viewMode = "deck";
     await revealMainWindow();
     await setTrayToggleVisible(true);
-    logInfo(
-      isIdleScene(sceneId)
-        ? "Showed Settings from tray; no supported app is running"
-        : `Showed AstroDeck window from tray (${sceneId})`,
-      "Tray"
-    );
+    logInfo(`Showed AstroDeck window from tray (${sceneId})`, "Tray");
   }
 
   async function syncWindowToPresence(nextSceneId = sceneId) {
@@ -1632,7 +1773,14 @@
     }
     loadSeenScenes();
     void hydrateSceneBackground();
-    void loadClockSettings();
+    let weatherUpdatesStopped = false;
+    let stopWeatherUpdates = () => {
+      weatherUpdatesStopped = true;
+    };
+    void loadClockSettings().finally(() => {
+      if (weatherUpdatesStopped) return;
+      stopWeatherUpdates = startWeatherUpdates();
+    });
     const handleCoreAction = async (ev: Event) => {
       const detail = (ev as CustomEvent<{ action: string; label: string }>).detail;
       if (!detail) return;
@@ -1641,6 +1789,7 @@
       if (action === "core.settings") {
         logInfo(`Settings requested from button: ${label}`, "Settings window");
         if (isTauri) {
+          weatherDetailOpen.set(false);
           viewMode = "settings";
           const win = getCurrentWindow();
           if (!(await win.isVisible())) {
@@ -1923,6 +2072,7 @@
       connectLogBus();
 
       return () => {
+        stopWeatherUpdates();
         clearSpotifyTransportRefreshTimers();
         if (retryTimer !== null) clearTimeout(retryTimer);
         logBusSocket?.close();
@@ -1979,6 +2129,11 @@
           startMinimized = await getStartMinimized();
         } catch {
           startMinimized = true;
+        }
+        try {
+          hideTaskbarIcon = await getHideTaskbarIcon();
+        } catch {
+          hideTaskbarIcon = false;
         }
         try {
           autoSwitchScenes = await getAutoSwitchScenes();
@@ -2080,6 +2235,7 @@
       );
 
       return () => {
+        stopWeatherUpdates();
         clearSpotifyTransportRefreshTimers();
         window.removeEventListener("resize", syncDeckFullscreenState);
         window.removeEventListener("keydown", onDeckPresentationKeydown, true);
@@ -2100,19 +2256,26 @@
   });
 </script>
 
-<div class="app" class:app-settings={isSettingsWindow}>
+<div class="app" class:app-settings={isSettingsWindow} class:has-side-nav={isTauri}>
+  {#if isTauri}
+    <SideNav active={sideNavActive} onSelect={onSideNavSelect} />
+  {/if}
   {#if showGlobalSceneBackground}
     <div class="app-scene-bg">
       <SceneBackground
         style={$sceneBackgroundId}
         colors={globalSceneColors}
-        imageUrl={isHomeScene || !usesCoverImage($sceneBackgroundId) ? null : $sceneShaderImage}
+        imageUrl={
+          usesCoverImage($sceneBackgroundId) && (!isHomeScene || homeNowPlaying?.playing)
+            ? $sceneShaderImage
+            : null
+        }
         playing={true}
-        fadeMs={isHomeScene && !$clockBgColorCustom && isNeutralAccent($clockDigitColor) ? 7000 : 700}
+        fadeMs={isHomeScene && homeNowPlaying ? 6500 : isHomeScene && !$clockBgColorCustom && isNeutralAccent($clockDigitColor) ? 7000 : 700}
       />
     </div>
   {/if}
-  {#if !isImmersiveDeckView && !isSettingsWindow && !isLauncherView}
+  {#if !isImmersiveDeckView && !isSettingsWindow}
     <header class="app-header">
       <div class="app-header-left">
         <h1 class="app-title">AstroDeck</h1>
@@ -2146,7 +2309,6 @@
               {/if}
             </button>
           {/if}
-          <ChooseViewButton placement="inline" onclick={() => (viewMode = "launcher")} />
         </div>
       {/if}
     </header>
@@ -2174,25 +2336,16 @@
   {/if}
 
   <main class="app-main">
-    {#if isLauncherView}
-      <SceneLauncher
-        sceneIds={settingsSceneIds}
-        pluginsById={pluginsById}
-        sceneId={sceneId}
-        seenScenes={seenScenes}
-        onSelectScene={selectScene}
-        onOpenSettings={() => (viewMode = "settings")}
-      />
-    {:else if isSettingsWindow}
+    {#if isSettingsWindow}
       <SettingsPanel
         isTauri={isTauri}
-        onBackToDeck={isTauri
-          ? () => (viewMode = isIdleScene(sceneId) ? "launcher" : "deck")
-          : undefined}
+        onBackToDeck={isTauri ? () => (viewMode = "deck") : undefined}
         startOnBoot={startOnBoot}
         startOnBootBusy={startOnBootBusy}
         startMinimized={startMinimized}
         startMinimizedBusy={startMinimizedBusy}
+        hideTaskbarIcon={hideTaskbarIcon}
+        hideTaskbarIconBusy={hideTaskbarIconBusy}
         startFullscreen={startFullscreen}
         startFullscreenBusy={startFullscreenBusy}
         showSettingsTerminal={showSettingsTerminal}
@@ -2200,6 +2353,7 @@
         startupError={startOnBootError}
         onStartOnBootChange={onStartOnBootChange}
         onStartMinimizedChange={onStartMinimizedChange}
+        onHideTaskbarIconChange={onHideTaskbarIconChange}
         onStartFullscreenChange={onStartFullscreenChange}
         onShowSettingsTerminalChange={onShowSettingsTerminalChange}
         appVersion={appVersion}
@@ -2247,7 +2401,9 @@
         onAutoSwitchChange={onAutoSwitchChange}
       />
     {:else}
-      {#if loading}
+      {#if $weatherDetailOpen}
+        <WeatherView />
+      {:else if loading}
         <div class="loading">Detecting environment...</div>
       {:else if currentMediaView}
         <MediaPlayerView
@@ -2338,8 +2494,6 @@
                   positionMs
                 )
               : Promise.resolve()}
-          showSettingsButton={isTauri}
-          onOpenSettings={() => (viewMode = "launcher")}
           playlistsEnabled={isSpotifyScene}
           youtubeMusicEnabled={isYouTubeMusicScene}
           youtubeMusicLibraryEnabled={isYouTubeMusicScene}
@@ -2369,20 +2523,17 @@
           useLyricsFallback={isYouTubeMusicScene}
         />
       {:else if sceneId === "clock"}
-        <ClockWeatherView onOpenSettings={isTauri ? () => (viewMode = "launcher") : undefined} />
+        <ClockWeatherView
+          nowPlaying={homeNowPlaying}
+          onOpenPlaying={(sceneIdToOpen) => selectScene(sceneIdToOpen)}
+        />
       {:else if sceneId === "teams" && displayedLayout}
         <TeamsScene
           buttons={displayedLayout.buttons}
           teamsStatus={teamsStatus}
-          showSettingsButton={isTauri}
-          onOpenSettings={() => (viewMode = "launcher")}
         />
       {:else if sceneId === "vscode" && displayedLayout}
-        <VsCodeScene
-          buttons={displayedLayout.buttons}
-          showSettingsButton={isTauri}
-          onOpenSettings={() => (viewMode = "launcher")}
-        />
+        <VsCodeScene buttons={displayedLayout.buttons} />
       {:else if displayedLayout}
         <DeckGrid
           grid={displayedLayout.grid}
@@ -2513,6 +2664,16 @@
     flex-direction: column;
     height: 100%;
     background: var(--bg-primary);
+  }
+
+  .app.has-side-nav {
+    --side-inset: 144px;
+  }
+
+  .app.has-side-nav .app-header,
+  .app.has-side-nav .logs-panel,
+  .app.has-side-nav .app-main > :global(*:not(.car-thing)) {
+    padding-left: var(--side-inset);
   }
 
   .app-scene-bg {

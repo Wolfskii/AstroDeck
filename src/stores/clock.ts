@@ -4,12 +4,14 @@ import {
   DEFAULT_CLOCK_DIGIT_BORDER_COLOR,
   DEFAULT_CLOCK_DIGIT_BORDER_WIDTH,
   DEFAULT_CLOCK_DIGIT_COLOR,
+  DEFAULT_CLOCK_WEATHER_CARD_COLOR,
   DEFAULT_TEMPERATURE_UNIT,
   getClockSettings,
   parseClockBgColor,
   parseClockDigitBorderColor,
   parseClockDigitBorderWidth,
   parseClockDigitColor,
+  parseClockWeatherCardColor,
   setClockSettings,
   type ClockSettings,
   type TemperatureUnit,
@@ -23,6 +25,8 @@ export const clockDigitBorderColor = writable(DEFAULT_CLOCK_DIGIT_BORDER_COLOR);
 export const clockDigitBorderWidth = writable(DEFAULT_CLOCK_DIGIT_BORDER_WIDTH);
 export const clockBgColorCustom = writable(false);
 export const clockBgColor = writable(DEFAULT_CLOCK_BG_COLOR);
+export const clockWeatherCard = writable(false);
+export const clockWeatherCardColor = writable(DEFAULT_CLOCK_WEATHER_CARD_COLOR);
 
 function applyClockSettings(settings: ClockSettings): void {
   temperatureUnit.set(settings.temperatureUnit);
@@ -33,6 +37,8 @@ function applyClockSettings(settings: ClockSettings): void {
   clockDigitBorderWidth.set(settings.digitBorderWidth);
   clockBgColorCustom.set(settings.bgColorCustom);
   clockBgColor.set(settings.bgColor);
+  clockWeatherCard.set(settings.weatherCard);
+  clockWeatherCardColor.set(settings.weatherCardColor);
 }
 
 function currentClockSettings(overrides: Partial<ClockSettings> = {}): ClockSettings {
@@ -45,6 +51,8 @@ function currentClockSettings(overrides: Partial<ClockSettings> = {}): ClockSett
     digitBorderWidth: get(clockDigitBorderWidth),
     bgColorCustom: get(clockBgColorCustom),
     bgColor: get(clockBgColor),
+    weatherCard: get(clockWeatherCard),
+    weatherCardColor: get(clockWeatherCardColor),
     ...overrides,
   };
 }
@@ -90,6 +98,24 @@ export async function saveClockBgColor(custom: boolean, color?: string): Promise
     )
   );
 }
+export function previewClockWeatherCardColor(color: string): void {
+  clockWeatherCardColor.set(parseClockWeatherCardColor(color));
+}
+
+export async function saveClockWeatherCard(enabled: boolean, color?: string): Promise<void> {
+  const nextColor = parseClockWeatherCardColor(color ?? get(clockWeatherCardColor));
+  clockWeatherCard.set(enabled);
+  clockWeatherCardColor.set(nextColor);
+  applyClockSettings(
+    await setClockSettings(
+      currentClockSettings({
+        weatherCard: enabled,
+        weatherCardColor: nextColor,
+      })
+    )
+  );
+}
+
 export function previewClockDigitBorderColor(color: string): void {
   clockDigitBorderColor.set(parseClockDigitBorderColor(color));
 }
