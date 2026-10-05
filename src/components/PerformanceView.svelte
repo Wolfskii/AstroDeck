@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
   import { performanceFrosted } from "../stores/appearance";
+  import { runSpeedTest, type SpeedSnapshot } from "../lib/speedTest";
 
   type DiskStat = { name: string; used: number; total: number };
   type SystemSnapshot = {
@@ -20,6 +21,18 @@
   };
 
   let stats = $state<SystemSnapshot | null>(null);
+  let speed = $state<SpeedSnapshot>({
+    phase: "idle",
+    pingMs: null,
+    downMbps: null,
+    upMbps: null,
+    error: null,
+  });
+  let speedAbort: AbortController | null = null;
+
+  const speedRunning = $derived(
+    speed.phase === "ping" || speed.phase === "download" || speed.phase === "upload"
+  );
 
   const ramPercent = $derived(
     stats && stats.memoryTotal > 0 ? (stats.memoryUsed / stats.memoryTotal) * 100 : 0
@@ -40,8 +53,35 @@
     return () => {
       stopped = true;
       window.clearInterval(timer);
+      speedAbort?.abort();
     };
   });
+
+  const showSpeed = $derived(speed.phase !== "idle");
+
+  function startSpeedTest() {
+    speedAbort?.abort();
+    speedAbort = new AbortController();
+    void runSpeedTest((next) => {
+      speed = next;
+    }, speedAbort.signal);
+  }
+
+  function closeSpeedTest() {
+    speedAbort?.abort();
+    speedAbort = null;
+    speed = { phase: "idle", pingMs: null, downMbps: null, upMbps: null, error: null };
+  }
+
+  function formatMbps(value: number | null) {
+    if (value == null) return "—";
+    return value >= 100 ? value.toFixed(0) : value.toFixed(1);
+  }
+
+  function mbpsFill(value: number | null) {
+    if (value == null) return 0;
+    return Math.min(100, (value / 500) * 100);
+  }
 
   function arc(start: number, sweep: number, r = 38, cx = 50, cy = 46) {
     const point = (deg: number) => {
@@ -116,6 +156,18 @@
 
 <section class="perf-view">
   <div class="stage" class:stage-opaque={!$performanceFrosted}>
+    <div class="speed-actions">
+      {#if !showSpeed}
+        <button type="button" class="speed-btn" onclick={startSpeedTest}>Speed test</button>
+      {:else if speedRunning}
+        <span class="speed-btn is-quiet">Testing…</span>
+        <button type="button" class="speed-btn speed-btn-ghost" onclick={closeSpeedTest}>Back</button>
+      {:else}
+        <button type="button" class="speed-btn" onclick={startSpeedTest}>Run again</button>
+        <button type="button" class="speed-btn speed-btn-ghost" onclick={closeSpeedTest}>Back</button>
+      {/if}
+    </div>
+    <div class="swap" class:swap-hidden={showSpeed} inert={showSpeed}>
     <div class="gauges">
       <article class="gauge">
         <div class="dial">
@@ -128,7 +180,7 @@
             d={sideArc}
             class="level"
             pathLength="100"
-            stroke-dasharray={`${ramPercent} 100`}
+            style:stroke-dasharray={`${ramPercent} 100`}
           />
         </svg>
         <div class="readout">
@@ -146,7 +198,7 @@
               r="14"
               class="ring-level ring-level-down"
               pathLength="100"
-              stroke-dasharray={`${ratePercent(stats?.netDownBps ?? 0)} 100`}
+              style:stroke-dasharray={`${ratePercent(stats?.netDownBps ?? 0)} 100`}
             />
             <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M18 10.2v11.2M13.6 16.8 18 21.4l4.4-4.6" />
           </svg>
@@ -168,7 +220,7 @@
             d={heroArc}
             class="level"
             pathLength="100"
-            stroke-dasharray={`${stats?.cpuPercent ?? 0} 100`}
+            style:stroke-dasharray={`${stats?.cpuPercent ?? 0} 100`}
           />
         </svg>
         <div class="readout readout-hero">
@@ -190,7 +242,7 @@
             d={sideArc}
             class="level"
             pathLength="100"
-            stroke-dasharray={`${gpuPercent} 100`}
+            style:stroke-dasharray={`${gpuPercent} 100`}
           />
         </svg>
         <div class="readout">
@@ -208,7 +260,7 @@
               r="14"
               class="ring-level"
               pathLength="100"
-              stroke-dasharray={`${ratePercent(stats?.netUpBps ?? 0)} 100`}
+              style:stroke-dasharray={`${ratePercent(stats?.netUpBps ?? 0)} 100`}
             />
             <path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" d="M18 25.2V14M13.6 18.6 18 14l4.4 4.6" />
           </svg>
@@ -229,13 +281,77 @@
               <span>{formatBytes(disk.used)} / {formatBytes(disk.total)}</span>
             </div>
             <div class="disk-track">
-              <i style={`width: ${diskPercent(disk)}%; background: ${diskColors[index % diskColors.length]}`}></i>
+              <i style:width={`${diskPercent(disk)}%`} style:background={diskColors[index % diskColors.length]}></i>
             </div>
           </div>
         {/each}
       {:else}
         <p class="empty">Looking for storage…</p>
       {/if}
+    </div>
+    </div>
+
+    <div class="swap" class:swap-hidden={!showSpeed} inert={!showSpeed}>
+      <div class="gauges">
+        <article class="gauge" class:speed-live={speed.phase === "ping"}>
+          <div class="dial">
+            <svg viewBox="0 0 100 78" aria-hidden="true">
+              <path d={sideArc} class="track" />
+              {#each sideTicks as tick}
+                <line x1={tick.x1} y1={tick.y1} x2={tick.x2} y2={tick.y2} class="tick" />
+              {/each}
+              <path d={sideArc} class="level" pathLength="100" style:stroke-dasharray={`${speed.pingMs == null ? 0 : Math.min(100, Math.max(8, 120 - speed.pingMs))} 100`} />
+            </svg>
+            <div class="readout">
+              <span class="kicker">Ping</span>
+              <strong>{speed.pingMs == null ? "—" : Math.round(speed.pingMs)}{#if speed.pingMs != null}<span class="unit">ms</span>{/if}</strong>
+            </div>
+          </div>
+        </article>
+        <article class="gauge gauge-hero" class:speed-live={speed.phase === "download"}>
+          <div class="dial">
+            <svg viewBox="0 0 100 78" aria-hidden="true">
+              <path d={heroArc} class="track" />
+              {#each heroTicks as tick}
+                <line x1={tick.x1} y1={tick.y1} x2={tick.x2} y2={tick.y2} class="tick" />
+              {/each}
+              <path d={heroArc} class="level" pathLength="100" style:stroke-dasharray={`${mbpsFill(speed.downMbps)} 100`} />
+            </svg>
+            <div class="readout">
+              <span class="kicker">Download</span>
+              <strong>{formatMbps(speed.downMbps)}</strong>
+              <em>Mbps</em>
+            </div>
+          </div>
+        </article>
+        <article class="gauge" class:speed-live={speed.phase === "upload"}>
+          <div class="dial">
+            <svg viewBox="0 0 100 78" aria-hidden="true">
+              <path d={sideArc} class="track" />
+              {#each sideTicks as tick}
+                <line x1={tick.x1} y1={tick.y1} x2={tick.x2} y2={tick.y2} class="tick" />
+              {/each}
+              <path d={sideArc} class="level" pathLength="100" style:stroke-dasharray={`${mbpsFill(speed.upMbps)} 100`} />
+            </svg>
+            <div class="readout">
+              <span class="kicker">Upload</span>
+              <strong>{formatMbps(speed.upMbps)}</strong>
+              <em>Mbps</em>
+            </div>
+          </div>
+        </article>
+      </div>
+      <p class="speed-status" class:speed-error={speed.phase === "error"}>
+        {speed.phase === "ping"
+          ? "Measuring ping"
+          : speed.phase === "download"
+            ? "Measuring download"
+            : speed.phase === "upload"
+              ? "Measuring upload"
+              : speed.phase === "error"
+                ? speed.error
+                : "Measured with Cloudflare"}
+      </p>
     </div>
   </div>
 </section>
@@ -254,16 +370,15 @@
   }
 
   .stage {
-    display: flex;
+    position: relative;
+    display: grid;
     height: auto;
     max-height: calc(100% - 2.8rem);
     min-height: 0;
-    flex-direction: column;
-    justify-content: center;
-    gap: 0.35rem;
     margin: 1.4rem 2.2rem 1.4rem calc(var(--side-inset, 144px) + 1.2rem);
     padding: 0.45rem 2.4rem 3.6rem;
     border-radius: 32px;
+    overflow: hidden;
     background-color: rgba(10, 14, 22, 0.38);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
   }
@@ -271,6 +386,78 @@
   .stage-opaque {
     background-color: #05060a;
     box-shadow: none;
+  }
+
+  .swap {
+    display: flex;
+    grid-area: 1 / 1;
+    min-width: 0;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.35rem;
+    transition: opacity 0.38s ease, transform 0.38s ease;
+  }
+
+  .swap-hidden {
+    opacity: 0;
+    transform: translateY(10px);
+    pointer-events: none;
+  }
+
+  .speed-actions {
+    position: absolute;
+    top: 0.85rem;
+    right: 1.1rem;
+    z-index: 2;
+    display: flex;
+    gap: 0.45rem;
+  }
+
+  .speed-btn {
+    min-height: 2.1rem;
+    padding: 0.35rem 0.85rem;
+    border: none;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.14);
+    color: #f4f7fb;
+    font-size: 0.82rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+  }
+
+  .speed-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.22);
+  }
+
+  .speed-btn-ghost {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+  }
+
+  .is-quiet {
+    opacity: 0.7;
+    cursor: default;
+  }
+
+  .speed-live .level {
+    stroke: #f3d37a;
+  }
+
+  .speed-status {
+    margin: 1.1rem 0 0;
+    color: rgba(244, 247, 251, 0.62);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-align: center;
+    text-transform: uppercase;
+  }
+
+  .speed-error {
+    color: #ffb4b4;
+    text-transform: none;
+    letter-spacing: 0;
   }
 
   .gauges {
@@ -303,6 +490,8 @@
     stroke: #f7f8fb;
     stroke-width: 3.2;
     stroke-linecap: round;
+    stroke-dasharray: 0 100;
+    transition: stroke-dasharray 1s cubic-bezier(0.22, 0.61, 0.36, 1);
   }
 
   .tick {
@@ -421,8 +610,10 @@
 
   .ring-level {
     stroke: #f4f7fb;
+    stroke-dasharray: 0 100;
     transform: rotate(-90deg);
     transform-origin: 18px 18px;
+    transition: stroke-dasharray 1s cubic-bezier(0.22, 0.61, 0.36, 1);
   }
 
   .ring-level-down {
@@ -468,9 +659,11 @@
 
   .disk-track i {
     display: block;
+    width: 0;
     height: 100%;
     border-radius: inherit;
     background: #d7dee8;
+    transition: width 1s cubic-bezier(0.22, 0.61, 0.36, 1);
   }
 
   .disk-label {
