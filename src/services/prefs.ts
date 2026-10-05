@@ -323,16 +323,34 @@ export type ClockSettings = {
   temperatureUnit: TemperatureUnit;
   location: string;
   digitColor: string;
+  digitBorder: boolean;
+  digitBorderColor: string;
+  digitBorderWidth: number;
 };
 
 export const DEFAULT_TEMPERATURE_UNIT: TemperatureUnit = "celsius";
 export const DEFAULT_CLOCK_DIGIT_COLOR = "#f3d37a";
+export const DEFAULT_CLOCK_DIGIT_BORDER_COLOR = "#111111";
+export const DEFAULT_CLOCK_DIGIT_BORDER_WIDTH = 4;
 const TEMPERATURE_UNIT_KEY = "astrodeck:temperatureUnit";
 const CLOCK_LOCATION_KEY = "astrodeck:clockLocation";
 const CLOCK_DIGIT_COLOR_KEY = "astrodeck:clockDigitColor";
+const CLOCK_DIGIT_BORDER_KEY = "astrodeck:clockDigitBorder";
+const CLOCK_DIGIT_BORDER_COLOR_KEY = "astrodeck:clockDigitBorderColor";
+const CLOCK_DIGIT_BORDER_WIDTH_KEY = "astrodeck:clockDigitBorderWidth";
 
 export function parseClockDigitColor(value: unknown): string {
   return parseHexColor(value, DEFAULT_CLOCK_DIGIT_COLOR);
+}
+
+export function parseClockDigitBorderColor(value: unknown): string {
+  return parseHexColor(value, DEFAULT_CLOCK_DIGIT_BORDER_COLOR);
+}
+
+export function parseClockDigitBorderWidth(value: unknown): number {
+  const width = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(width)) return DEFAULT_CLOCK_DIGIT_BORDER_WIDTH;
+  return Math.min(16, Math.max(1, Math.round(width)));
 }
 
 export function parseTemperatureUnit(value: unknown): TemperatureUnit {
@@ -346,49 +364,63 @@ export async function getClockSettings(): Promise<ClockSettings> {
         temperatureUnit: parseTemperatureUnit(window.localStorage.getItem(TEMPERATURE_UNIT_KEY)),
         location: window.localStorage.getItem(CLOCK_LOCATION_KEY) ?? "",
         digitColor: parseClockDigitColor(window.localStorage.getItem(CLOCK_DIGIT_COLOR_KEY)),
+        digitBorder: window.localStorage.getItem(CLOCK_DIGIT_BORDER_KEY) === "true",
+        digitBorderColor: parseClockDigitBorderColor(
+          window.localStorage.getItem(CLOCK_DIGIT_BORDER_COLOR_KEY)
+        ),
+        digitBorderWidth: parseClockDigitBorderWidth(
+          window.localStorage.getItem(CLOCK_DIGIT_BORDER_WIDTH_KEY)
+        ),
       };
     } catch {
       return {
         temperatureUnit: DEFAULT_TEMPERATURE_UNIT,
         location: "",
         digitColor: DEFAULT_CLOCK_DIGIT_COLOR,
+        digitBorder: false,
+        digitBorderColor: DEFAULT_CLOCK_DIGIT_BORDER_COLOR,
+        digitBorderWidth: DEFAULT_CLOCK_DIGIT_BORDER_WIDTH,
       };
     }
   }
   const settings = await invoke<ClockSettings>("get_clock_settings");
+  return normalizeClockSettings(settings);
+}
+
+function normalizeClockSettings(settings: ClockSettings): ClockSettings {
   return {
     temperatureUnit: parseTemperatureUnit(settings.temperatureUnit),
-    location: settings.location ?? "",
+    location: (settings.location ?? "").trim(),
     digitColor: parseClockDigitColor(settings.digitColor),
+    digitBorder: !!settings.digitBorder,
+    digitBorderColor: parseClockDigitBorderColor(settings.digitBorderColor),
+    digitBorderWidth: parseClockDigitBorderWidth(settings.digitBorderWidth),
   };
 }
 
-export async function setClockSettings(
-  temperatureUnit: TemperatureUnit,
-  location: string,
-  digitColor: string
-): Promise<ClockSettings> {
-  const nextUnit = parseTemperatureUnit(temperatureUnit);
-  const nextLocation = location.trim();
-  const nextColor = parseClockDigitColor(digitColor);
+export async function setClockSettings(settings: ClockSettings): Promise<ClockSettings> {
+  const next = normalizeClockSettings(settings);
   if (!isTauri) {
     try {
-      window.localStorage.setItem(TEMPERATURE_UNIT_KEY, nextUnit);
-      window.localStorage.setItem(CLOCK_LOCATION_KEY, nextLocation);
-      window.localStorage.setItem(CLOCK_DIGIT_COLOR_KEY, nextColor);
+      window.localStorage.setItem(TEMPERATURE_UNIT_KEY, next.temperatureUnit);
+      window.localStorage.setItem(CLOCK_LOCATION_KEY, next.location);
+      window.localStorage.setItem(CLOCK_DIGIT_COLOR_KEY, next.digitColor);
+      window.localStorage.setItem(CLOCK_DIGIT_BORDER_KEY, String(next.digitBorder));
+      window.localStorage.setItem(CLOCK_DIGIT_BORDER_COLOR_KEY, next.digitBorderColor);
+      window.localStorage.setItem(CLOCK_DIGIT_BORDER_WIDTH_KEY, String(next.digitBorderWidth));
     } catch {
       // ignore
     }
-    return { temperatureUnit: nextUnit, location: nextLocation, digitColor: nextColor };
+    return next;
   }
-  const settings = await invoke<ClockSettings>("set_clock_settings", {
-    temperatureUnit: nextUnit,
-    location: nextLocation,
-    digitColor: nextColor,
-  });
-  return {
-    temperatureUnit: parseTemperatureUnit(settings.temperatureUnit),
-    location: settings.location ?? "",
-    digitColor: parseClockDigitColor(settings.digitColor),
-  };
+  return normalizeClockSettings(
+    await invoke<ClockSettings>("set_clock_settings", {
+      temperatureUnit: next.temperatureUnit,
+      location: next.location,
+      digitColor: next.digitColor,
+      digitBorder: next.digitBorder,
+      digitBorderColor: next.digitBorderColor,
+      digitBorderWidth: next.digitBorderWidth,
+    })
+  );
 }

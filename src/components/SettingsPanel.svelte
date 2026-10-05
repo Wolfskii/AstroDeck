@@ -26,9 +26,14 @@
   } from "../stores/appearance";
   import ClockColorPicker from "./ClockColorPicker.svelte";
   import {
+    clockDigitBorder,
+    clockDigitBorderColor,
+    clockDigitBorderWidth,
     clockDigitColor,
     clockLocation,
+    previewClockDigitBorderColor,
     previewClockDigitColor,
+    saveClockDigitBorder,
     saveClockDigitColor,
     saveClockSettings,
     temperatureUnit,
@@ -173,7 +178,7 @@
   const titles: Record<SettingsSection, string> = {
     general: "General",
     appearance: "Appearance",
-    clock: "Clock",
+    clock: "Home",
     updates: "Updates",
     spotify: "Spotify",
     youtubeMusic: "YouTube Music",
@@ -321,7 +326,7 @@
             d="M12 2a10 10 0 1 0 .01 20.01A10 10 0 0 0 12 2zm.75 5v4.69l3.2 1.92-1.1 1.83L11 13.2V7h1.75z"
           />
         </svg>
-        Clock
+        Home
       </button>
       <button
         type="button"
@@ -634,7 +639,7 @@
         <div class="setting-row setting-row-theme">
           <div class="setting-copy">
             <span class="setting-title">Temperature</span>
-            <span class="setting-desc">Weather on the clock view uses Celsius unless you switch it.</span>
+            <span class="setting-desc">Weather on the home view uses Celsius unless you switch it.</span>
           </div>
           <div class="theme-seg" role="radiogroup" aria-label="Temperature unit">
             {#each UNIT_OPTIONS as option (option.id)}
@@ -659,6 +664,61 @@
           onChange={previewClockDigitColor}
           onCommit={(hex) => void saveClockDigitColor(hex)}
         />
+      </div>
+      <div class="settings-card settings-card-pad">
+        <label class="setting-row" for="clock-digit-border">
+          <div class="setting-copy">
+            <span class="setting-title">Digit border</span>
+            <span class="setting-desc">Draw an outline around the clock numbers.</span>
+          </div>
+          <input
+            id="clock-digit-border"
+            type="checkbox"
+            checked={$clockDigitBorder}
+            onchange={(event) =>
+              void saveClockDigitBorder({
+                enabled: (event.currentTarget as HTMLInputElement).checked,
+              })}
+          />
+          <span class="md-check" aria-hidden="true"></span>
+        </label>
+        {#if $clockDigitBorder}
+          <p class="setting-title">Border color</p>
+          <ClockColorPicker
+            value={$clockDigitBorderColor}
+            onChange={previewClockDigitBorderColor}
+            onCommit={(hex) => void saveClockDigitBorder({ color: hex })}
+          />
+          <div class="setting-row setting-row-slider">
+            <div class="setting-copy">
+              <span class="setting-title">Border thickness</span>
+              <span class="setting-desc">How heavy the outline is.</span>
+            </div>
+            <div class="md-slider">
+              <span class="md-slider-value">{$clockDigitBorderWidth}px</span>
+              <div class="md-slider-ui">
+                <div class="md-slider-track" aria-hidden="true"></div>
+                <div
+                  class="md-slider-fill"
+                  style={`width: ${(($clockDigitBorderWidth - 1) / 15) * 100}%; background: ${$clockDigitBorderColor}`}
+                  aria-hidden="true"
+                ></div>
+                <input
+                  type="range"
+                  min="1"
+                  max="16"
+                  step="1"
+                  value={$clockDigitBorderWidth}
+                  aria-label="Clock digit border thickness"
+                  oninput={(event) =>
+                    void saveClockDigitBorder({
+                      width: Number((event.currentTarget as HTMLInputElement).value),
+                    })}
+                />
+              </div>
+            </div>
+          </div>
+        {/if}
       </div>
       <div class="settings-card settings-card-pad">
         <p class="setting-title">Location</p>

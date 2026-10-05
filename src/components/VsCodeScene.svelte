@@ -2,6 +2,8 @@
   import ChooseViewButton from "./ChooseViewButton.svelte";
   import Icon from "./Icon.svelte";
   import SceneActionButton from "./SceneActionButton.svelte";
+  import { sceneBackgroundId } from "../stores/appearance";
+  import { usesFullViewBackground } from "../lib/sceneBackgrounds";
   import type { DeckButtonConfig } from "../types";
 
   let {
@@ -13,9 +15,11 @@
     showSettingsButton?: boolean;
     onOpenSettings?: () => void;
   } = $props();
+
+  const showShader = $derived(usesFullViewBackground($sceneBackgroundId));
 </script>
 
-<section class="vscode" class:has-settings={showSettingsButton && onOpenSettings}>
+<section class="vscode" class:has-settings={showSettingsButton && onOpenSettings} class:shader={showShader}>
   {#if showSettingsButton && onOpenSettings}
     <ChooseViewButton onclick={() => onOpenSettings()} />
   {/if}
@@ -55,6 +59,10 @@
       linear-gradient(90deg, #007acc 0 4px, transparent 4px),
       #1e1e1e;
     color: #cccccc;
+  }
+
+  .vscode.shader {
+    background: transparent;
   }
 
   .vscode.has-settings {

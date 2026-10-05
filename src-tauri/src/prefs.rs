@@ -36,6 +36,12 @@ pub struct AppPreferences {
     pub clock_location: String,
     #[serde(default = "default_clock_digit_color")]
     pub clock_digit_color: String,
+    #[serde(default)]
+    pub clock_digit_border: bool,
+    #[serde(default = "default_clock_digit_border_color")]
+    pub clock_digit_border_color: String,
+    #[serde(default = "default_clock_digit_border_width")]
+    pub clock_digit_border_width: u8,
 }
 
 impl Default for AppPreferences {
@@ -56,6 +62,9 @@ impl Default for AppPreferences {
             temperature_unit: default_temperature_unit(),
             clock_location: String::new(),
             clock_digit_color: default_clock_digit_color(),
+            clock_digit_border: false,
+            clock_digit_border_color: default_clock_digit_border_color(),
+            clock_digit_border_width: default_clock_digit_border_width(),
         }
     }
 }
@@ -101,6 +110,18 @@ fn parse_temperature_unit(value: &str) -> String {
 
 fn default_clock_digit_color() -> String {
     "#f3d37a".to_string()
+}
+
+fn default_clock_digit_border_color() -> String {
+    "#111111".to_string()
+}
+
+fn default_clock_digit_border_width() -> u8 {
+    4
+}
+
+fn parse_clock_digit_border_width(value: u8) -> u8 {
+    value.clamp(1, 16)
 }
 
 fn parse_clock_digit_color(value: &str) -> String {
@@ -433,6 +454,9 @@ pub struct ClockSettings {
     pub temperature_unit: String,
     pub location: String,
     pub digit_color: String,
+    pub digit_border: bool,
+    pub digit_border_color: String,
+    pub digit_border_width: u8,
 }
 
 fn clock_settings_from(preferences: &AppPreferences) -> ClockSettings {
@@ -440,6 +464,9 @@ fn clock_settings_from(preferences: &AppPreferences) -> ClockSettings {
         temperature_unit: parse_temperature_unit(&preferences.temperature_unit),
         location: preferences.clock_location.trim().to_string(),
         digit_color: parse_clock_digit_color(&preferences.clock_digit_color),
+        digit_border: preferences.clock_digit_border,
+        digit_border_color: parse_clock_digit_color(&preferences.clock_digit_border_color),
+        digit_border_width: parse_clock_digit_border_width(preferences.clock_digit_border_width),
     }
 }
 
@@ -456,12 +483,18 @@ pub fn set_clock_settings(
     temperature_unit: String,
     location: String,
     digit_color: String,
+    digit_border: bool,
+    digit_border_color: String,
+    digit_border_width: u8,
 ) -> Result<ClockSettings, String> {
     let path = preferences_path(&app)?;
     let mut preferences = load_preferences(&path)?;
     preferences.temperature_unit = parse_temperature_unit(&temperature_unit);
     preferences.clock_location = location.trim().to_string();
     preferences.clock_digit_color = parse_clock_digit_color(&digit_color);
+    preferences.clock_digit_border = digit_border;
+    preferences.clock_digit_border_color = parse_clock_digit_color(&digit_border_color);
+    preferences.clock_digit_border_width = parse_clock_digit_border_width(digit_border_width);
     save_preferences(&path, &preferences)?;
     Ok(clock_settings_from(&preferences))
 }

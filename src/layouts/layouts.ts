@@ -65,7 +65,7 @@ const builtinScenes: Record<string, BuiltinSceneMeta> = {
   },
   clock: {
     id: "clock",
-    name: "Clock",
+    name: "Home",
     description: "Local time and weather for this computer.",
     accent: "#f5f5f5",
     layout: {

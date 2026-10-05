@@ -96,6 +96,18 @@ export function hexToRgbCss(hex: string): string {
   return `${r}, ${g}, ${b}`;
 }
 
+export function shaderColorsFromAccent(hex: string): string[] {
+  const hsv = hexToHsv(hex);
+  const complement = (hsv.h + 180) % 360;
+  const tone = (value: number, hueShift = 0, saturation = 0.72) =>
+    hsvToHex({
+      h: (complement + hueShift + 360) % 360,
+      s: saturation,
+      v: value,
+    });
+  return [tone(0.72, -18), tone(0.58, 16, 0.8), tone(0.42, 34, 0.66), tone(0.84, -8, 0.55)];
+}
+
 export function mixHex(from: string, to: string, amount: number): string {
   const t = Math.min(1, Math.max(0, amount));
   const a = hexToRgb(from);

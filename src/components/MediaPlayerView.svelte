@@ -1,5 +1,4 @@
 <script lang="ts">
-  import "@fontsource/dseg7-classic/400.css";
   import ChooseViewButton from "./ChooseViewButton.svelte";
   import microphoneLyricsUrl from "../assets/microphone-reference.png";
   import type { DeckButtonConfig } from "../types";
@@ -18,6 +17,7 @@
   import { logError } from "../services/logger";
   import SceneBackground from "./SceneBackground.svelte";
   import { sceneBackgroundId, controlsBackdropEnabled, controlsTransparency, controlsOverlayColor, controlsOverlayCustom } from "../stores/appearance";
+  import { sceneShaderColors, sceneShaderImage } from "../stores/sceneVisual";
   import { DEFAULT_CONTROLS_OVERLAY_COLOR, hexToRgbCss } from "../lib/color";
   import { usesCoverImage, usesFullViewBackground } from "../lib/sceneBackgrounds";
   import {
@@ -120,6 +120,7 @@
   let faderTrackEl = $state<HTMLElement | null>(null);
   let faderSlotEl = $state<HTMLElement | null>(null);
   let faderDragging = $state(false);
+  let volumeOpen = $state(false);
   let liveVolumeQueued = $state<number | null>(null);
   let liveVolumeInFlight = false;
   const FADER_THUMB_HEIGHT_PX = 78;
@@ -350,6 +351,8 @@
       carBodyBg = DEFAULT_CAR_BACKGROUNDS.body;
       carFooterBg = DEFAULT_CAR_BACKGROUNDS.footer;
       shaderColors = [...DEFAULT_SHADER_COLORS];
+      sceneShaderColors.set([...DEFAULT_SHADER_COLORS]);
+      sceneShaderImage.set(null);
       return;
     }
 
@@ -360,12 +363,16 @@
         carBodyBg = DEFAULT_CAR_BACKGROUNDS.body;
         carFooterBg = DEFAULT_CAR_BACKGROUNDS.footer;
         shaderColors = [...DEFAULT_SHADER_COLORS];
+        sceneShaderColors.set([...DEFAULT_SHADER_COLORS]);
+        sceneShaderImage.set(url);
         return;
       }
       const surfaces = paletteToCarThingBackgrounds(palette[0]);
       carBodyBg = surfaces.body;
       carFooterBg = surfaces.footer;
       shaderColors = paletteToShaderColors(palette);
+      sceneShaderColors.set(shaderColors);
+      sceneShaderImage.set(url);
     });
 
     return () => {
@@ -597,14 +604,6 @@
   class:car-thing--controls-backdrop={showControlsBackdrop}
   style={`--car-body-bg: ${carBodyBg}; --car-footer-bg: ${carFooterBg}; --controls-overlay-alpha: ${controlsOverlayAlpha}; --controls-overlay-rgb: ${controlsOverlayRgb};`}
 >
-  {#if showFullViewShader}
-    <SceneBackground
-      style={backgroundStyle}
-      colors={shaderColors}
-      imageUrl={usesCoverImage(backgroundStyle) ? artworkUrl : null}
-      playing={isPlaying}
-    />
-  {/if}
   <div
     class="car-thing-body"
     class:car-thing-body--has-icon={showSettingsButton && onOpenSettings}
@@ -668,7 +667,7 @@
                   style="pulsing-border"
                   colors={shaderColors}
                   placement="artwork"
-                  playing={isPlaying}
+                  playing={true}
                 />
               {/if}
               <div class="car-art-plate">
@@ -728,7 +727,7 @@
                 style="pulsing-border"
                 colors={shaderColors}
                 placement="artwork"
-                playing={isPlaying}
+                playing={true}
               />
             {/if}
             <div class="car-art-plate">
@@ -975,13 +974,17 @@
   />
 
   {#if volumeAction}
+    {#if volumeOpen}
+    <button
+      type="button"
+      class="car-volume-backdrop"
+      aria-label="Close volume"
+      onclick={() => {
+        if (!faderDragging) volumeOpen = false;
+      }}
+    ></button>
     <aside class="car-fader" aria-label="Volume">
-      <div class="car-volume-display" aria-hidden="true">
-        <span
-          class="car-volume-led"
-          class:car-volume-led-triple={localVolume >= 100}
-        >{localVolume}</span>
-      </div>
+      <p class="car-volume-value" aria-hidden="true">{localVolume}</p>
       <div
         class="car-fader-track"
         class:car-fader-locked={volumeBusy}
@@ -1032,6 +1035,30 @@
         </div>
       </div>
     </aside>
+    {/if}
+    <button
+      type="button"
+      class="car-volume-btn"
+      class:car-volume-btn-open={volumeOpen}
+      title={localVolume === 0 ? "Muted" : "Volume"}
+      aria-label={localVolume === 0 ? "Muted" : "Volume"}
+      aria-expanded={volumeOpen}
+      onclick={() => (volumeOpen = !volumeOpen)}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        {#if localVolume === 0}
+          <path
+            fill="currentColor"
+            d="M4 9v6h4l5 4V5L8 9H4zm12.3.7 1.4-1.4 1.8 1.8 1.8-1.8 1.4 1.4-1.8 1.8 1.8 1.8-1.4 1.4-1.8-1.8-1.8 1.8-1.4-1.4 1.8-1.8-1.8-1.8z"
+          />
+        {:else}
+          <path
+            fill="currentColor"
+            d="M4 9v6h4l5 4V5L8 9H4zm11.5 3a3.5 3.5 0 0 0-1.8-3.06v6.12A3.5 3.5 0 0 0 15.5 12zm-1.8-6.32v2.06a5.5 5.5 0 0 1 0 8.52v2.06a7.5 7.5 0 0 0 0-12.64z"
+          />
+        {/if}
+      </svg>
+    </button>
   {/if}
 </div>
 
@@ -1052,19 +1079,11 @@
   }
 
   .car-thing--shader {
-    background: #000;
+    background: transparent;
   }
 
   .car-thing > :global(.scene-background) {
     z-index: 0;
-  }
-
-  .car-thing:has(.car-fader) {
-    grid-template-columns: minmax(0, 1fr) 124px;
-  }
-
-  .car-thing:has(.car-fader) .car-thing-body {
-    padding-right: 8px;
   }
 
   .car-thing-body {
@@ -1455,10 +1474,11 @@
   }
 
   .car-track-title {
-    margin: 0;
+    margin: 0 0 -0.18em;
+    padding-bottom: 0.18em;
     font-size: clamp(2.1rem, 5vw, 3.5rem);
     font-weight: 800;
-    line-height: 1.05;
+    line-height: 1.2;
     letter-spacing: -0.02em;
     width: 100%;
     display: -webkit-box;
@@ -1485,12 +1505,12 @@
     grid-row: 2;
     flex-shrink: 0;
     box-sizing: border-box;
-    height: 18px;
-    min-height: 18px;
-    max-height: 18px;
-    padding: 0 0 10px;
+    height: 8px;
+    min-height: 8px;
+    max-height: 8px;
+    padding: 0;
     display: flex;
-    align-items: flex-end;
+    align-items: stretch;
     overflow: visible;
     cursor: pointer;
     touch-action: none;
@@ -1596,7 +1616,10 @@
     grid-column: 1 / -1;
     grid-row: 3;
     flex-shrink: 0;
-    padding: 12px 24px max(20px, env(safe-area-inset-bottom, 0px));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: max(20px, env(safe-area-inset-bottom, 0px)) 24px;
     min-height: 148px;
     position: relative;
     z-index: 1;
@@ -1729,18 +1752,63 @@
     box-shadow: 0 0 0 0 rgba(29, 185, 84, 0.2);
   }
 
+  .car-volume-btn {
+    position: absolute;
+    right: 18px;
+    bottom: max(22px, env(safe-area-inset-bottom, 0px));
+    z-index: 6;
+    display: grid;
+    place-items: center;
+    width: 104px;
+    height: 104px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.92);
+    cursor: pointer;
+    transition: color 0.15s ease, transform 0.12s ease;
+  }
+
+  .car-volume-btn svg {
+    width: 56px;
+    height: 56px;
+  }
+
+  .car-volume-btn:hover,
+  .car-volume-btn-open {
+    color: #fff;
+  }
+
+  .car-volume-btn:active {
+    transform: scale(0.94);
+  }
+
+  .car-volume-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    border: none;
+    background: transparent;
+    cursor: default;
+  }
+
   .car-fader {
-    grid-column: 2;
-    grid-row: 1 / -1;
+    position: absolute;
+    top: 16px;
+    right: 12px;
+    bottom: calc(max(148px, 116px + max(20px, env(safe-area-inset-bottom, 0px))) + 18px);
+    width: 124px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: stretch;
     gap: 0;
-    padding: 20px 20px max(20px, env(safe-area-inset-bottom, 0px));
-    position: relative;
-    z-index: 1;
+    padding: 10px 12px 8px;
+    z-index: 5;
+    border: none;
+    border-radius: 18px;
     background: var(--car-footer-bg, #0c0808);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
     min-height: 0;
     transition: background 0.7s ease;
   }
@@ -1753,44 +1821,15 @@
     background: rgba(var(--controls-overlay-rgb, 0, 0, 0), var(--controls-overlay-alpha, 0.65));
   }
 
-  .car-volume-display {
+  .car-volume-value {
     flex-shrink: 0;
-    width: calc(100% - 8px);
-    padding: 12px 6px 14px;
-    margin: 4px 4px 28px;
-    overflow: hidden;
-    background: linear-gradient(180deg, #050505 0%, #0a0a0a 100%);
-    border: 2px solid #1a1a1a;
-    border-radius: 4px;
-    box-shadow:
-      inset 0 2px 8px rgba(0, 0, 0, 0.9),
-      inset 0 0 12px rgba(255, 0, 0, 0.04),
-      0 1px 0 rgba(255, 255, 255, 0.04);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .car-volume-led {
-    font-family: "DSEG7 Classic", "Courier New", monospace;
-    font-size: 1.22rem;
-    font-weight: 400;
-    line-height: 1.2;
-    color: #ff1a1a;
-    text-shadow:
-      0 0 4px rgba(255, 30, 30, 0.95),
-      0 0 12px rgba(255, 20, 20, 0.75),
-      0 0 24px rgba(255, 0, 0, 0.45);
-    display: block;
-    width: 100%;
+    margin: 20px 0 0;
+    color: #fff;
+    font-size: 2.05rem;
+    font-weight: 750;
+    line-height: 1;
     text-align: center;
     font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .car-volume-led-triple {
-    letter-spacing: -0.03em;
-    transform: translateX(-0.2em);
   }
 
   .car-fader-track {
@@ -1799,7 +1838,7 @@
     width: 100%;
     min-height: 0;
     max-height: none;
-    margin: 8px 0 32px;
+    margin: -10px 0 0;
     display: grid;
     grid-template-columns: 14px 1fr 14px;
     gap: 6px;

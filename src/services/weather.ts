@@ -214,7 +214,10 @@ export async function fetchWeather(
     code,
     isDay: data.current?.is_day !== 0,
     label: weatherLabel(code),
-    place: place.name,
+    place:
+      place.country && place.country !== place.name
+        ? `${place.name}, ${place.country}`
+        : place.name,
     humidity,
     rainChance,
     days,

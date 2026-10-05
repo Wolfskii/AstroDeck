@@ -63,7 +63,9 @@ pub fn resolve(app_handle: &tauri::AppHandle, matched_ids: &[String]) {
         .filter(|p| matched_ids.contains(&p.id))
         .max_by_key(|p| p.priority);
 
-    let new_scene_id = best.map(|p| p.id.clone()).unwrap_or_else(|| "idle".to_string());
+    let new_scene_id = best
+        .map(|p| p.id.clone())
+        .unwrap_or_else(|| "clock".to_string());
 
     let mut current = state.active_scene_id.lock().expect("failed to lock scene id");
     if *current != new_scene_id {
