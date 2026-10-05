@@ -172,6 +172,33 @@ export async function setShowSettingsTerminal(enabled: boolean): Promise<void> {
   await invoke("set_show_settings_terminal", { enabled });
 }
 
+const PERFORMANCE_FROSTED_KEY = "astrodeck:performanceFrosted";
+
+export async function getPerformanceFrosted(): Promise<boolean> {
+  if (!isTauri) {
+    try {
+      const stored = window.localStorage.getItem(PERFORMANCE_FROSTED_KEY);
+      if (stored == null) return true;
+      return stored === "true";
+    } catch {
+      return true;
+    }
+  }
+  return invoke<boolean>("get_performance_frosted");
+}
+
+export async function setPerformanceFrosted(enabled: boolean): Promise<void> {
+  if (!isTauri) {
+    try {
+      window.localStorage.setItem(PERFORMANCE_FROSTED_KEY, String(enabled));
+    } catch {
+      // ignore
+    }
+    return;
+  }
+  await invoke("set_performance_frosted", { enabled });
+}
+
 const CONTROLS_BACKDROP_KEY = "astrodeck:controlsBackdrop";
 const CONTROLS_TRANSPARENCY_KEY = "astrodeck:controlsTransparency";
 

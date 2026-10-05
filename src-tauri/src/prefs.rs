@@ -29,6 +29,9 @@ pub struct AppPreferences {
     pub controls_overlay_custom: Option<bool>,
     #[serde(default)]
     pub audio_visualizer: bool,
+    /// Frosted performance panel. Off is a solid panel.
+    #[serde(default = "default_performance_frosted")]
+    pub performance_frosted: bool,
     #[serde(default = "default_settings_theme")]
     pub settings_theme: String,
     #[serde(default)]
@@ -73,6 +76,7 @@ impl Default for AppPreferences {
             controls_overlay_color: default_controls_overlay_color(),
             controls_overlay_custom: None,
             audio_visualizer: false,
+            performance_frosted: default_performance_frosted(),
             settings_theme: default_settings_theme(),
             auto_switch_scenes: HashMap::new(),
             temperature_unit: default_temperature_unit(),
@@ -443,7 +447,7 @@ pub fn set_custom_views(
 fn known_app_id(id: &str) -> bool {
     matches!(
         id,
-        "clock" | "spotify" | "youtubeMusic" | "media" | "teams" | "vscode" | "weather"
+        "clock" | "spotify" | "youtubeMusic" | "media" | "teams" | "vscode" | "weather" | "performance"
     ) || (id.starts_with("view-")
         && (12..=64).contains(&id.len())
         && id
@@ -608,6 +612,10 @@ pub fn set_controls_overlay_custom(app: tauri::AppHandle, enabled: bool) -> Resu
     Ok(())
 }
 
+fn default_performance_frosted() -> bool {
+    true
+}
+
 pub fn audio_visualizer_enabled(app: &tauri::AppHandle) -> bool {
     preferences_path(app)
         .and_then(|path| load_preferences(&path))
@@ -629,6 +637,22 @@ pub fn set_audio_visualizer_enabled(app: tauri::AppHandle, enabled: bool) -> Res
     crate::audio_viz::sync(&app, enabled);
     let _ = app.emit("audio-visualizer-changed", enabled);
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_performance_frosted(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(preferences_path(&app)
+        .and_then(|path| load_preferences(&path))
+        .map(|preferences| preferences.performance_frosted)
+        .unwrap_or(true))
+}
+
+#[tauri::command]
+pub fn set_performance_frosted(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.performance_frosted = enabled;
+    save_preferences(&path, &preferences)
 }
 
 #[tauri::command]

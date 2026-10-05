@@ -22,6 +22,7 @@ Open an app from the bar on the left. **Settings → Apps** turns any of them on
 | Spotify | Now playing, playlists, likes, shuffle, volume, and seek |
 | YouTube | YouTube Music search and playback, saved songs, and local playlists |
 | System media | Whatever the computer is already playing |
+| Performance | CPU, memory, graphics, network, and storage |
 | Teams | Meeting controls: reactions, mute, camera, share, raise hand, chat, and leave |
 | VS Code | A workspace page aimed at VS Code and Cursor |
 | Weather | A forecast for the same place shown on Home |
