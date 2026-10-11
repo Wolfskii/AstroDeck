@@ -39,6 +39,7 @@ const SPOTIFY_RECENTLY_PLAYED_URL: &str =
 const SPOTIFY_COLOR_LYRICS_URL: &str = "https://spclient.wg.spotify.com/color-lyrics/v2/track";
 const SPOTIFY_LAST_PLAYBACK_FILE: &str = "spotify_last_playback.json";
 const SPOTIFY_VOLUME_FILE: &str = "spotify_volume.json";
+const SPOTIFY_DESKTOP_QUEUE_FILE: &str = "spotify_desktop_queue.json";
 pub(crate) const DEFAULT_SPOTIFY_VOLUME_PERCENT: u8 = 80;
 #[derive(Serialize)]
 struct LibraryUrisBody {
@@ -79,6 +80,28 @@ struct ApiRateLimitState {
     playback_read_until: Option<SystemTime>,
     library_until: Option<SystemTime>,
     playlists_until: Option<SystemTime>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpotifyQueueView {
+    pub context_uri: Option<String>,
+    pub context_name: Option<String>,
+    pub current: Option<TrackPreview>,
+    pub up_next: Vec<TrackPreview>,
+    /// Every up-next track, including those past this page.
+    pub total: u32,
+    pub offset: u32,
+    /// AstroDeck can reorder and remove tracks (only in its own player).
+    pub editable: bool,
+    pub message: Option<String>,
+}
+
+/// The newest entry in Spotify's listening history, from any Spotify app.
+pub(crate) struct RecentPlay {
+    pub track_id: String,
+    pub context_uri: Option<String>,
+    pub played_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -163,6 +186,9 @@ struct IdlePlaybackDisplay {
     item_type: Option<String>,
     duration_ms: Option<u64>,
     progress_ms: Option<u64>,
+    /// When this was played (history) or saved (AstroDeck), in unix ms.
+    #[serde(default)]
+    at_ms: Option<u64>,
 }
 
 const SPOTIFY_HTTP_TIMEOUT: Duration = Duration::from_secs(12);
@@ -220,6 +246,8 @@ pub struct SpotifyState {
     pub(crate) desktop_queue: Arc<Mutex<crate::spotify_desktop::PlayQueue>>,
     pub(crate) desktop_playback: Arc<Mutex<crate::spotify_desktop::OfficialPlayback>>,
     pub(crate) app_handle: Mutex<Option<tauri::AppHandle>>,
+    /// Queue row details for AstroDeck's own player, by track id.
+    pub(crate) desktop_track_meta: Mutex<HashMap<String, TrackPreview>>,
     lyrics_cache: Mutex<Option<SpotifyTrackLyrics>>,
     current_user_id: Mutex<Option<String>>,
 }
@@ -521,6 +549,8 @@ pub struct SpotifyConfig {
     pub desktop_cache_path: Option<PathBuf>,
     pub last_playback_path: Option<PathBuf>,
     pub volume_path: Option<PathBuf>,
+    /// AstroDeck player's queue, kept so a restart carries on where listening stopped.
+    pub desktop_queue_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -806,6 +836,8 @@ struct RecentlyPlayedResponse {
 struct RecentlyPlayedItem {
     track: PlaybackItem,
     context: Option<RecentlyPlayedContext>,
+    #[serde(default)]
+    played_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -979,7 +1011,9 @@ pub fn init(app: &tauri::AppHandle, spotify: &SpotifyState) -> Result<(), String
         config.desktop_cache_path = Some(desktop_cache_path);
         config.last_playback_path = Some(base.join(SPOTIFY_LAST_PLAYBACK_FILE));
         config.volume_path = Some(base.join(SPOTIFY_VOLUME_FILE));
+        config.desktop_queue_path = Some(base.join(SPOTIFY_DESKTOP_QUEUE_FILE));
     }
+    crate::spotify_desktop::restore_saved_queue(spotify);
 
     if let Some(path) = spotify
         .config
@@ -1154,6 +1188,7 @@ fn recently_played_album_line(
 fn idle_display_from_track(
     track: &PlaybackItem,
     context: Option<RecentlyPlayedContext>,
+    played_at_ms: Option<u64>,
 ) -> Option<IdlePlaybackDisplay> {
     let preview = playback_item_to_preview(track)?;
     Some(IdlePlaybackDisplay {
@@ -1165,6 +1200,7 @@ fn idle_display_from_track(
         item_type: Some(preview.item_type),
         duration_ms: preview.duration_ms,
         progress_ms: None,
+        at_ms: played_at_ms,
     })
 }
 
@@ -1179,6 +1215,7 @@ fn idle_display_from_playback(playback: &PlaybackSummary) -> Option<IdlePlayback
         item_type: playback.item_type.clone(),
         duration_ms: playback.duration_ms,
         progress_ms: playback.progress_ms,
+        at_ms: None,
     })
 }
 
@@ -1195,6 +1232,7 @@ fn idle_display_from_desktop(
         item_type: playback.item_type.clone(),
         duration_ms: playback.duration_ms,
         progress_ms: playback.progress_ms,
+        at_ms: None,
     })
 }
 
@@ -1207,7 +1245,9 @@ fn persist_idle_playback(spotify: &SpotifyState, display: &IdlePlaybackDisplay) 
     let Some(path) = path else {
         return;
     };
-    match serde_json::to_string_pretty(display) {
+    let mut display = display.clone();
+    display.at_ms = Some(unix_now_ms());
+    match serde_json::to_string_pretty(&display) {
         Ok(json) => {
             if let Err(err) = fs::write(path, json) {
                 log::warn!("Failed to persist Spotify last playback: {err}");
@@ -1259,7 +1299,115 @@ fn fetch_recently_played_display(spotify: &SpotifyState) -> Option<IdlePlaybackD
     payload
         .items
         .first()
-        .and_then(|item| idle_display_from_track(&item.track, item.context.clone()))
+        .and_then(|item| {
+            idle_display_from_track(
+                &item.track,
+                item.context.clone(),
+                item.played_at.as_deref().and_then(parse_rfc3339_ms),
+            )
+        })
+}
+
+/// The newest entry in Spotify's listening history with the playlist, album or artist it was
+/// played from, so AstroDeck can carry on from music last played in the Spotify apps.
+pub(crate) fn last_played_with_context(spotify: &SpotifyState) -> Option<RecentPlay> {
+    if !has_saved_tokens(spotify) || is_playback_read_rate_limited(spotify) {
+        return None;
+    }
+    let access_token = get_access_token(spotify).ok()?;
+    let client = spotify_http_client().ok()?;
+    let response = client
+        .get(SPOTIFY_RECENTLY_PLAYED_URL)
+        .bearer_auth(&access_token)
+        .send()
+        .ok()?;
+    if !response.status().is_success() {
+        if response.status().as_u16() == 429 {
+            apply_scope_rate_limit_from_response(
+                spotify,
+                RateLimitScope::PlaybackRead,
+                &response,
+            );
+        }
+        return None;
+    }
+    let payload: RecentlyPlayedResponse = response.json().ok()?;
+    let item = payload.items.into_iter().next()?;
+    if item.track.item_type != "track" {
+        return None;
+    }
+    Some(RecentPlay {
+        track_id: item.track.id.clone()?,
+        context_uri: item.context.as_ref().and_then(resume_context_uri),
+        played_at_ms: item.played_at.as_deref().and_then(parse_rfc3339_ms)?,
+    })
+}
+
+/// The context URI AstroDeck's player can load for a history entry, or `None` for contexts it
+/// cannot play from (shows, radio and the like).
+fn resume_context_uri(context: &RecentlyPlayedContext) -> Option<String> {
+    let uri = context.uri.as_deref()?;
+    match context.context_type.as_deref() {
+        Some("collection") => Some(LIKED_SONGS_URI.to_string()),
+        Some("playlist") => uri
+            .rsplit_once(":playlist:")
+            .map(|(_, id)| format!("spotify:playlist:{id}")),
+        Some("album") if uri.starts_with("spotify:album:") => Some(uri.to_string()),
+        Some("artist") if uri.starts_with("spotify:artist:") => Some(uri.to_string()),
+        _ => None,
+    }
+}
+
+/// Unix milliseconds for an RFC 3339 time such as Spotify's `2026-10-11T12:34:56.789Z`.
+fn parse_rfc3339_ms(value: &str) -> Option<u64> {
+    let (date, time) = value.trim().split_once(['T', 't', ' '])?;
+    let mut date_parts = date.splitn(3, '-');
+    let year: i64 = date_parts.next()?.parse().ok()?;
+    let month: i64 = date_parts.next()?.parse().ok()?;
+    let day: i64 = date_parts.next()?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || time.len() < 8 {
+        return None;
+    }
+    let hour: i64 = time.get(0..2)?.parse().ok()?;
+    let minute: i64 = time.get(3..5)?.parse().ok()?;
+    let second: i64 = time.get(6..8)?.parse().ok()?;
+    let mut rest = &time[8..];
+    let mut millis = 0i64;
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let digits = fraction.chars().take_while(char::is_ascii_digit).count();
+        let padded = format!("{:0<3}", &fraction[..digits.min(3)]);
+        millis = padded.parse().ok()?;
+        rest = &fraction[digits..];
+    }
+    let offset_seconds = match rest {
+        "" | "Z" | "z" => 0,
+        zone => {
+            let sign = match zone.as_bytes().first()? {
+                b'+' => 1,
+                b'-' => -1,
+                _ => return None,
+            };
+            let hours: i64 = zone.get(1..3)?.parse().ok()?;
+            let minutes: i64 = zone.get(4..6)?.parse().ok()?;
+            sign * (hours * 3600 + minutes * 60)
+        }
+    };
+    // Days since 1970-01-01 (Howard Hinnant's days_from_civil).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let seconds = days * 86_400 + hour * 3600 + minute * 60 + second - offset_seconds;
+    u64::try_from(seconds * 1000 + millis).ok()
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn cached_recently_played_display(
@@ -1287,9 +1435,24 @@ fn cached_recently_played_display(
     display
 }
 
+/// The track to show when nothing plays: whichever was played last, in AstroDeck or in another
+/// Spotify app, matching where play will carry on from.
 fn idle_playback_display(spotify: &SpotifyState, fresh: bool) -> Option<IdlePlaybackDisplay> {
-    cached_recently_played_display(spotify, fresh)
-        .or_else(|| load_persisted_idle_playback(spotify))
+    let recent = cached_recently_played_display(spotify, fresh);
+    let saved = load_persisted_idle_playback(spotify);
+    match (recent, saved) {
+        (Some(recent), Some(saved)) => {
+            let saved_is_newer = match (recent.at_ms, saved.at_ms) {
+                (Some(played), Some(saved_at)) => {
+                    saved_at.saturating_add(crate::spotify_desktop::RESUME_HISTORY_SLACK_MS)
+                        >= played
+                }
+                _ => false,
+            };
+            Some(if saved_is_newer { saved } else { recent })
+        }
+        (recent, saved) => recent.or(saved),
+    }
 }
 
 fn apply_idle_playback(status: &mut SpotifyStatus, display: &IdlePlaybackDisplay) {
@@ -1574,6 +1737,9 @@ pub fn get_status_fresh(spotify: &SpotifyState) -> Result<SpotifyStatus, String>
 
 pub(crate) fn publish_status(spotify: &SpotifyState) {
     persist_active_playback_snapshot(spotify);
+    if !uses_web_api(spotify) {
+        crate::spotify_desktop::persist_queue(spotify);
+    }
     let Ok(status) = get_status(spotify) else {
         return;
     };
@@ -2915,6 +3081,93 @@ pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
         let body = response.text().unwrap_or_default();
         Err(format!("Spotify shuffle update failed: {} {}", status, body))
     }
+}
+
+/// What plays now and next. AstroDeck's own player shows its whole queue and can edit it; music
+/// on another device shows Spotify's queue, which the Web API only lets apps read.
+pub fn get_queue(
+    spotify: &SpotifyState,
+    offset: u32,
+    limit: u32,
+) -> Result<SpotifyQueueView, String> {
+    if !uses_web_api(spotify) && remote_playback_cached(spotify).is_none() {
+        return crate::spotify_desktop::queue_view(spotify, offset as usize, limit as usize);
+    }
+    let current = read_playback_cache_stale(spotify);
+    let (up_next, message) = match fetch_playback_queue(spotify) {
+        Ok(items) => {
+            let items = dedupe_queue_previews(items);
+            let mut cache = spotify.queue_cache.lock().unwrap();
+            cache.up_next = items.clone();
+            cache.fetched_at = Some(SystemTime::now());
+            (items, None)
+        }
+        Err(err) => {
+            log::debug!("Spotify queue read failed: {err}");
+            let cached = spotify.queue_cache.lock().unwrap().up_next.clone();
+            let message = if has_scope(spotify, "user-read-playback-state").unwrap_or(false) {
+                "Spotify's queue could not be loaded right now.".to_string()
+            } else {
+                "Reconnect Spotify in Settings to see this device's queue.".to_string()
+            };
+            (cached, Some(message))
+        }
+    };
+    let current_id = current.as_ref().and_then(|summary| summary.item_id.clone());
+    let up_next: Vec<TrackPreview> = up_next
+        .into_iter()
+        .skip_while(|track| Some(&track.item_id) == current_id.as_ref())
+        .collect();
+    let total = up_next.len() as u32;
+    let device = current
+        .as_ref()
+        .map(|summary| summary.device_name.clone())
+        .unwrap_or_else(|| "the Spotify app".to_string());
+    Ok(SpotifyQueueView {
+        context_uri: None,
+        context_name: None,
+        current: current.as_ref().and_then(playback_summary_to_preview),
+        up_next: up_next
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .collect(),
+        total,
+        offset,
+        editable: false,
+        message: message.or_else(|| {
+            Some(format!(
+                "Playing on {device}. Spotify only lets other apps read this queue, so reorder it there."
+            ))
+        }),
+    })
+}
+
+fn queue_is_local(spotify: &SpotifyState) -> Result<(), String> {
+    if uses_web_api(spotify) || remote_playback_cached(spotify).is_some() {
+        return Err("Spotify only lets AstroDeck edit the queue of its own player.".to_string());
+    }
+    Ok(())
+}
+
+pub fn move_queue_item(
+    spotify: &SpotifyState,
+    from: usize,
+    to: usize,
+    item_id: &str,
+) -> Result<(), String> {
+    queue_is_local(spotify)?;
+    crate::spotify_desktop::move_queue_item(spotify, from, to, item_id)
+}
+
+pub fn remove_queue_item(spotify: &SpotifyState, index: usize, item_id: &str) -> Result<(), String> {
+    queue_is_local(spotify)?;
+    crate::spotify_desktop::remove_queue_item(spotify, index, item_id)
+}
+
+pub fn play_queue_item(spotify: &SpotifyState, index: usize, item_id: &str) -> Result<(), String> {
+    queue_is_local(spotify)?;
+    crate::spotify_desktop::play_queue_item(spotify, index, item_id)
 }
 
 fn playlist_context_uri(id_or_uri: &str) -> Result<String, String> {
@@ -4625,6 +4878,46 @@ mod tests {
     }
 
     #[test]
+    fn rfc3339_times_parse_to_unix_ms() {
+        assert_eq!(parse_rfc3339_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(
+            parse_rfc3339_ms("2024-02-29T12:34:56.789Z"),
+            Some(1_709_210_096_789)
+        );
+        assert_eq!(
+            parse_rfc3339_ms("2024-02-29T14:34:56.7+02:00"),
+            Some(1_709_210_096_700)
+        );
+        assert_eq!(parse_rfc3339_ms("not a time"), None);
+    }
+
+    #[test]
+    fn history_contexts_map_to_playable_uris() {
+        let context = |kind: &str, uri: &str| RecentlyPlayedContext {
+            context_type: Some(kind.to_string()),
+            name: None,
+            uri: Some(uri.to_string()),
+        };
+        assert_eq!(
+            resume_context_uri(&context("playlist", "spotify:user:alice:playlist:abc")).as_deref(),
+            Some("spotify:playlist:abc")
+        );
+        assert_eq!(
+            resume_context_uri(&context("collection", "spotify:user:alice:collection")).as_deref(),
+            Some(LIKED_SONGS_URI)
+        );
+        assert_eq!(
+            resume_context_uri(&context("album", "spotify:album:xyz")).as_deref(),
+            Some("spotify:album:xyz")
+        );
+        assert_eq!(
+            resume_context_uri(&context("artist", "spotify:artist:xyz")).as_deref(),
+            Some("spotify:artist:xyz")
+        );
+        assert_eq!(resume_context_uri(&context("show", "spotify:show:xyz")), None);
+    }
+
+    #[test]
     fn client_file_round_trips_auth_mode() {
         let file = SpotifyClientFile {
             auth_mode: Some(SpotifyAuthMode::Official),
@@ -4709,7 +5002,7 @@ mod tests {
         }"#;
         let payload: RecentlyPlayedResponse = serde_json::from_str(json).unwrap();
         let item = payload.items.first().unwrap();
-        let display = idle_display_from_track(&item.track, item.context.clone()).unwrap();
+        let display = idle_display_from_track(&item.track, item.context.clone(), None).unwrap();
         assert_eq!(display.track_name, "Track One");
         assert_eq!(display.artist_name.as_deref(), Some("Artist"));
         assert_eq!(display.album_line.as_deref(), Some("Discover Weekly"));
@@ -4752,6 +5045,7 @@ mod tests {
                 item_type: Some("track".to_string()),
                 duration_ms: Some(200_000),
                 progress_ms: Some(12_000),
+                at_ms: None,
             },
         );
         {

@@ -19,7 +19,7 @@ Open an app from the bar on the left. **Settings → Apps** turns any of them on
 | App | What you get |
 | --- | --- |
 | Home | Clock, today's date, local weather, and the track that is playing, with previous, play/pause, and next |
-| Spotify | Now playing, playlists, likes, shuffle, volume, and seek |
+| Spotify | Now playing, playlists, a reorderable queue, likes, shuffle, volume, and seek. After a restart, play or next carries on from the last playlist, album, or artist, including one last played in the Spotify apps |
 | YouTube | YouTube Music search and playback, saved songs, and local playlists |
 | System media | Whatever the computer is already playing |
 | Performance | CPU, memory, graphics, network, and storage |

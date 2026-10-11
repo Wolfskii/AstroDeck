@@ -444,6 +444,44 @@ fn play_spotify_playlist(
 }
 
 #[tauri::command]
+fn get_spotify_queue(
+    offset: Option<u32>,
+    limit: Option<u32>,
+    state: tauri::State<AppState>,
+) -> Result<spotify::SpotifyQueueView, String> {
+    spotify::get_queue(&state.spotify, offset.unwrap_or(0), limit.unwrap_or(50).min(100))
+}
+
+#[tauri::command]
+fn move_spotify_queue_item(
+    from: usize,
+    to: usize,
+    item_id: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    spotify::move_queue_item(&state.spotify, from, to, &item_id)
+}
+
+#[tauri::command]
+fn remove_spotify_queue_item(
+    index: usize,
+    item_id: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    spotify::remove_queue_item(&state.spotify, index, &item_id)
+}
+
+#[tauri::command]
+fn play_spotify_queue_item(
+    index: usize,
+    item_id: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    youtube_music::pause(&state.youtube_music);
+    spotify::play_queue_item(&state.spotify, index, &item_id)
+}
+
+#[tauri::command]
 fn list_spotify_add_playlists(
     track_id: String,
     state: tauri::State<AppState>,
@@ -632,6 +670,10 @@ pub fn run() {
             set_spotify_auth_mode,
             list_spotify_playlists,
             play_spotify_playlist,
+            get_spotify_queue,
+            move_spotify_queue_item,
+            remove_spotify_queue_item,
+            play_spotify_queue_item,
             list_spotify_add_playlists,
             set_spotify_playlist_track,
             create_spotify_playlist,

@@ -221,6 +221,42 @@ export async function playSpotifyPlaylist(playlist: string): Promise<void> {
   return invoke("play_spotify_playlist", { playlist });
 }
 
+export interface SpotifyQueueView {
+  contextUri?: string | null;
+  contextName?: string | null;
+  current?: SpotifyTrackPreview | null;
+  upNext: SpotifyTrackPreview[];
+  /** Every up-next track, including those past this page. */
+  total: number;
+  offset: number;
+  /** AstroDeck can reorder and remove tracks (only while it is the player). */
+  editable: boolean;
+  message?: string | null;
+}
+
+export async function getSpotifyQueue(options?: {
+  offset?: number;
+  limit?: number;
+}): Promise<SpotifyQueueView> {
+  return invoke<SpotifyQueueView>("get_spotify_queue", {
+    offset: options?.offset ?? 0,
+    limit: options?.limit ?? 50,
+  });
+}
+
+/** Indexes count from the next track; `itemId` guards against the queue having moved on. */
+export async function moveSpotifyQueueItem(from: number, to: number, itemId: string): Promise<void> {
+  return invoke("move_spotify_queue_item", { from, to, itemId });
+}
+
+export async function removeSpotifyQueueItem(index: number, itemId: string): Promise<void> {
+  return invoke("remove_spotify_queue_item", { index, itemId });
+}
+
+export async function playSpotifyQueueItem(index: number, itemId: string): Promise<void> {
+  return invoke("play_spotify_queue_item", { index, itemId });
+}
+
 export async function listSpotifyAddPlaylists(trackId: string): Promise<SpotifyAddPlaylist[]> {
   if (!isTauri) {
     return [

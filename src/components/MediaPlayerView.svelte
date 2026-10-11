@@ -9,6 +9,7 @@
     type LyricsProviderId,
   } from "../services/api";
   import PlaylistBrowser from "./PlaylistBrowser.svelte";
+  import SpotifyQueue from "./SpotifyQueue.svelte";
   import AddToPlaylistMenu from "./AddToPlaylistMenu.svelte";
   import YouTubeMusicSearch from "./YouTubeMusicSearch.svelte";
   import YouTubeMusicLibrary from "./YouTubeMusicLibrary.svelte";
@@ -475,6 +476,7 @@
   }
 
   let playlistsOpen = $state(false);
+  let queueOpen = $state(false);
   let youtubeMusicOpen = $state(false);
   let youtubeMusicLibraryOpen = $state(false);
   let addToPlaylistOpen = $state(false);
@@ -627,21 +629,38 @@
       <div class="car-shader-scrim" aria-hidden="true"></div>
     {/if}
     {#if playlistsEnabled}
-      <button
-        type="button"
-        class="car-playlists-btn"
-        title="Playlists"
-        aria-label="Browse playlists"
-        onclick={() => (playlistsOpen = true)}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            fill="currentColor"
-            d="M4 6h12v2H4V6zm0 5h12v2H4v-2zm0 5h8v2H4v-2zm13-1.5v-6.2c0-.7.6-1.3 1.3-1.3H22v2h-2.7v7.1c0 1.5-1.2 2.7-2.7 2.7s-2.6-1.2-2.6-2.7 1.2-2.6 2.6-2.6c.5 0 .9.1 1.4.3z"
-          />
-        </svg>
-        <span>Playlists</span>
-      </button>
+      <div class="car-top-actions">
+        <button
+          type="button"
+          class="car-playlists-btn"
+          title="Queue"
+          aria-label="Show the queue"
+          onclick={() => (queueOpen = true)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M3 5h12v2H3V5zm0 4h12v2H3V9zm0 4h8v2H3v-2zm13 0 6 3.5-6 3.5v-7zM3 17h8v2H3v-2z"
+            />
+          </svg>
+          <span>Queue</span>
+        </button>
+        <button
+          type="button"
+          class="car-playlists-btn"
+          title="Playlists"
+          aria-label="Browse playlists"
+          onclick={() => (playlistsOpen = true)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M4 6h12v2H4V6zm0 5h12v2H4v-2zm0 5h8v2H4v-2zm13-1.5v-6.2c0-.7.6-1.3 1.3-1.3H22v2h-2.7v7.1c0 1.5-1.2 2.7-2.7 2.7s-2.6-1.2-2.6-2.7 1.2-2.6 2.6-2.6c.5 0 .9.1 1.4.3z"
+            />
+          </svg>
+          <span>Playlists</span>
+        </button>
+      </div>
     {/if}
     {#if youtubeMusicEnabled}
       <button
@@ -990,6 +1009,7 @@
     currentPlaylistId={currentPlaylistId}
     onClose={() => (playlistsOpen = false)}
   />
+  <SpotifyQueue open={queueOpen} trackId={trackId} onClose={() => (queueOpen = false)} />
   <AddToPlaylistMenu
     open={addToPlaylistOpen}
     provider={playlistProvider ?? "spotify"}
@@ -1166,11 +1186,16 @@
     );
   }
 
-  .car-playlists-btn {
+  .car-top-actions {
     position: absolute;
     top: 18px;
     right: 20px;
     z-index: 2;
+    display: flex;
+    gap: 10px;
+  }
+
+  .car-playlists-btn {
     display: inline-flex;
     align-items: center;
     gap: 10px;

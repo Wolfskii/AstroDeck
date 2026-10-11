@@ -15,9 +15,12 @@ use librespot_playback::player::{Player, PlayerEvent};
 use librespot_protocol::playlist4_external::{
     Add, CreateListReply, Delta, Item, ListAttributes, ListChanges, Op, Rem, SelectedListContent,
 };
+use librespot_metadata::image::ImageSize;
+use librespot_metadata::{Album, Artist, Metadata, Track};
 use protobuf::Message;
 use rand::seq::SliceRandom;
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -27,7 +30,8 @@ use tokio::runtime::Runtime;
 
 use crate::spotify::{
     get_access_token, parse_color_lyrics, token_has_streaming_scope, SpotifyPlaylist,
-    SpotifyPlaylistPage, SpotifyState, SpotifyTrackLyrics, OFFICIAL_CLIENT_ID,
+    SpotifyPlaylistPage, SpotifyQueueView, SpotifyState, SpotifyTrackLyrics, TrackPreview,
+    OFFICIAL_CLIENT_ID,
 };
 
 // Spotify may silently cap large rootlist requests at 250 entries without
@@ -43,6 +47,12 @@ const COLLECTION_SET: &str = "collection";
 const COLLECTION_CONTENT_TYPE: &str = "application/vnd.collection-v2.spotify.proto";
 const COLOR_LYRICS_URL: &str = "https://spclient.wg.spotify.com/color-lyrics/v2/track";
 const LYRICS_APP_PLATFORM: &str = "WebPlayer";
+/// Progress-only saves of the queue happen at most this often while a track plays.
+const QUEUE_PROGRESS_SAVE_INTERVAL: Duration = Duration::from_secs(10);
+/// Spotify's history must be this much newer than AstroDeck's saved queue before it wins, so the
+/// history entry for a track AstroDeck itself just played does not replace the queue.
+pub(crate) const RESUME_HISTORY_SLACK_MS: u64 = 90_000;
+const TRACK_META_CACHE_MAX: usize = 4_000;
 
 fn runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -101,11 +111,36 @@ pub struct PlayQueue {
     order: Vec<usize>,
     position: usize,
     context_uri: Option<String>,
+    context_name: Option<String>,
+    /// The player has been given a track from this queue during this run.
+    loaded: bool,
+    /// The saved queue was already compared with Spotify's listening history this run.
+    resume_checked: bool,
+    /// Where the current track was when the queue was saved, until the player takes over.
+    resume_progress_ms: Option<u64>,
+    /// When the restored queue was saved (unix ms).
+    saved_at_ms: Option<u64>,
+}
+
+/// The queue as written to disk, so a restart can carry on where listening stopped.
+#[derive(Serialize, Deserialize)]
+struct SavedQueue {
+    #[serde(default)]
+    context_uri: Option<String>,
+    #[serde(default)]
+    context_name: Option<String>,
+    tracks: Vec<String>,
+    order: Vec<usize>,
+    position: usize,
+    #[serde(default)]
+    progress_ms: u64,
+    #[serde(default)]
+    saved_at_ms: u64,
 }
 
 impl PlayQueue {
     fn replace(&mut self, tracks: Vec<SpotifyUri>, shuffle: bool) {
-        self.replace_context(tracks, shuffle, None);
+        self.replace_at(tracks, 0, shuffle, None, None);
     }
 
     fn replace_context(
@@ -113,11 +148,29 @@ impl PlayQueue {
         tracks: Vec<SpotifyUri>,
         shuffle: bool,
         context_uri: Option<String>,
+        context_name: Option<String>,
+    ) {
+        self.replace_at(tracks, 0, shuffle, context_uri, context_name);
+    }
+
+    /// Replaces the queue with `tracks`, starting at `start`. With shuffle on, only the tracks
+    /// after it are shuffled.
+    fn replace_at(
+        &mut self,
+        tracks: Vec<SpotifyUri>,
+        start: usize,
+        shuffle: bool,
+        context_uri: Option<String>,
+        context_name: Option<String>,
     ) {
         self.tracks = tracks;
         self.order = (0..self.tracks.len()).collect();
-        self.position = 0;
+        self.position = start.min(self.order.len().saturating_sub(1));
         self.context_uri = context_uri;
+        self.context_name = context_name;
+        self.resume_checked = true;
+        self.resume_progress_ms = None;
+        self.saved_at_ms = None;
         if shuffle {
             self.shuffle_rest();
         }
@@ -125,6 +178,104 @@ impl PlayQueue {
 
     pub fn context_uri(&self) -> Option<&str> {
         self.context_uri.as_deref()
+    }
+
+    fn upcoming_len(&self) -> usize {
+        self.order.len().saturating_sub(self.position + 1)
+    }
+
+    fn upcoming_index(&self, index: usize) -> Option<usize> {
+        let slot = self.position.checked_add(1)?.checked_add(index)?;
+        (slot < self.order.len()).then_some(slot)
+    }
+
+    fn upcoming_id(&self, index: usize) -> Option<String> {
+        let slot = self.upcoming_index(index)?;
+        self.tracks.get(self.order[slot])?.to_id().ok()
+    }
+
+    fn upcoming(&self, offset: usize, limit: usize) -> Vec<SpotifyUri> {
+        let start = (self.position + 1 + offset).min(self.order.len());
+        let end = start.saturating_add(limit).min(self.order.len());
+        self.order[start..end]
+            .iter()
+            .filter_map(|&index| self.tracks.get(index).cloned())
+            .collect()
+    }
+
+    /// Moves the up-next track at `from` to `to` (both counted from the next track).
+    fn move_upcoming(&mut self, from: usize, to: usize) -> bool {
+        let (Some(from), Some(to)) = (self.upcoming_index(from), self.upcoming_index(to)) else {
+            return false;
+        };
+        let entry = self.order.remove(from);
+        self.order.insert(to, entry);
+        true
+    }
+
+    fn remove_upcoming(&mut self, index: usize) -> bool {
+        let Some(slot) = self.upcoming_index(index) else {
+            return false;
+        };
+        self.order.remove(slot);
+        true
+    }
+
+    /// Makes the up-next track at `index` the current one; the tracks before it are passed over.
+    fn jump_upcoming(&mut self, index: usize) -> bool {
+        let Some(slot) = self.upcoming_index(index) else {
+            return false;
+        };
+        self.position = slot;
+        true
+    }
+
+    fn to_saved(&self, progress_ms: u64) -> SavedQueue {
+        SavedQueue {
+            context_uri: self.context_uri.clone(),
+            context_name: self.context_name.clone(),
+            tracks: self
+                .tracks
+                .iter()
+                .filter_map(|uri| uri.to_uri().ok())
+                .collect(),
+            order: self.order.clone(),
+            position: self.position,
+            progress_ms,
+            // A restored queue that has not played keeps its time, so listening done in the
+            // Spotify apps since then still counts as newer on the next start.
+            saved_at_ms: if self.loaded {
+                unix_now_ms()
+            } else {
+                self.saved_at_ms.unwrap_or_else(unix_now_ms)
+            },
+        }
+    }
+
+    fn from_saved(saved: SavedQueue) -> Option<Self> {
+        let tracks: Vec<SpotifyUri> = saved
+            .tracks
+            .iter()
+            .filter_map(|uri| SpotifyUri::from_uri(uri).ok())
+            .collect();
+        if tracks.is_empty()
+            || tracks.len() != saved.tracks.len()
+            || saved.position >= saved.order.len()
+            || saved.order.iter().any(|&index| index >= tracks.len())
+        {
+            return None;
+        }
+        Some(Self {
+            tracks,
+            order: saved.order,
+            position: saved.position,
+            context_uri: saved.context_uri,
+            context_name: saved.context_name,
+            loaded: false,
+            resume_checked: false,
+            resume_progress_ms: Some(saved.progress_ms),
+            saved_at_ms: Some(saved.saved_at_ms),
+        })
     }
 
     pub fn contains_track_id(&self, track_id: &str) -> bool {
@@ -213,6 +364,225 @@ pub fn clear_credentials(spotify: &SpotifyState) {
             let _ = fs::remove_file(credentials);
         }
     }
+    if let Some(path) = queue_path(spotify) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn queue_path(spotify: &SpotifyState) -> Option<PathBuf> {
+    spotify.config.lock().ok()?.desktop_queue_path.clone()
+}
+
+/// Loads the queue saved by the last run, so the playlist it came from is known before anything
+/// plays. Nothing is sent to the player until play, next or previous is pressed.
+pub fn restore_saved_queue(spotify: &SpotifyState) {
+    let Some(path) = queue_path(spotify) else {
+        return;
+    };
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return;
+    };
+    let restored = match serde_json::from_str::<SavedQueue>(&raw) {
+        Ok(saved) => PlayQueue::from_saved(saved),
+        Err(err) => {
+            log::warn!("Spotify saved queue could not be read: {err}");
+            None
+        }
+    };
+    let Some(restored) = restored else {
+        return;
+    };
+    if let Ok(mut queue) = spotify.desktop_queue.lock() {
+        if queue.current().is_none() {
+            log::info!(
+                "Spotify desktop: restored queue of {} tracks from {}",
+                restored.tracks.len(),
+                restored.context_uri.as_deref().unwrap_or("single tracks")
+            );
+            *queue = restored;
+        }
+    }
+}
+
+/// Writes the queue and where the current track is to disk. An empty queue never replaces a saved one.
+pub(crate) fn persist_queue(spotify: &SpotifyState) {
+    let Some(path) = queue_path(spotify) else {
+        return;
+    };
+    let progress = playback_snapshot(spotify).progress_ms.unwrap_or(0);
+    let saved = {
+        let Ok(queue) = spotify.desktop_queue.lock() else {
+            return;
+        };
+        if queue.current().is_none() {
+            return;
+        }
+        let progress = if queue.loaded {
+            progress
+        } else {
+            queue.resume_progress_ms.unwrap_or(0)
+        };
+        queue.to_saved(progress)
+    };
+    let json = match serde_json::to_string(&saved) {
+        Ok(json) => json,
+        Err(err) => {
+            log::warn!("Spotify queue could not be encoded: {err}");
+            return;
+        }
+    };
+    let temp = path.with_extension("json.tmp");
+    if let Err(err) = fs::write(&temp, json).and_then(|_| fs::rename(&temp, &path)) {
+        log::warn!("Spotify queue could not be saved: {err}");
+    }
+    if let Ok(mut last) = last_queue_save().lock() {
+        *last = Some(Instant::now());
+    }
+}
+
+fn last_queue_save() -> &'static Mutex<Option<Instant>> {
+    static LAST: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    LAST.get_or_init(|| Mutex::new(None))
+}
+
+/// Saves the queue's progress while a track plays, without writing on every position tick.
+fn persist_queue_progress(spotify: &SpotifyState) {
+    let due = last_queue_save()
+        .lock()
+        .map(|last| last.is_none_or(|at| at.elapsed() >= QUEUE_PROGRESS_SAVE_INTERVAL))
+        .unwrap_or(false);
+    if due {
+        persist_queue(spotify);
+    }
+}
+
+fn queue_loaded(spotify: &SpotifyState) -> bool {
+    spotify
+        .desktop_queue
+        .lock()
+        .map(|queue| queue.loaded)
+        .unwrap_or(false)
+}
+
+fn queue_has_current(spotify: &SpotifyState) -> bool {
+    spotify
+        .desktop_queue
+        .lock()
+        .map(|queue| queue.current().is_some())
+        .unwrap_or(false)
+}
+
+/// Before the first track of a run, decides where listening carries on from: AstroDeck's saved
+/// queue, or what the Spotify apps played after it according to Spotify's listening history.
+fn prepare_resume(spotify: &SpotifyState) {
+    let checked = spotify
+        .desktop_queue
+        .lock()
+        .map(|queue| queue.loaded || queue.resume_checked)
+        .unwrap_or(true);
+    if checked {
+        return;
+    }
+    if !queue_has_current(spotify) {
+        restore_saved_queue(spotify);
+    }
+    let (saved_at, current_id) = {
+        let Ok(mut queue) = spotify.desktop_queue.lock() else {
+            return;
+        };
+        queue.resume_checked = true;
+        (
+            queue.saved_at_ms,
+            queue.current().and_then(|uri| uri.to_id().ok()),
+        )
+    };
+
+    let Some(recent) = crate::spotify::last_played_with_context(spotify) else {
+        return;
+    };
+    let newer = saved_at.is_none_or(|saved| {
+        recent.played_at_ms > saved.saturating_add(RESUME_HISTORY_SLACK_MS)
+    });
+    let same_track = current_id
+        .as_deref()
+        .is_some_and(|id| id.eq_ignore_ascii_case(&recent.track_id));
+    if !newer || same_track {
+        return;
+    }
+    if let Err(err) = queue_from_history(spotify, &recent) {
+        log::warn!("Spotify desktop: could not pick up from Spotify history: {err}");
+    }
+}
+
+/// Builds the queue around the track Spotify last played elsewhere, inside the playlist, album
+/// or artist it was played from.
+fn queue_from_history(
+    spotify: &SpotifyState,
+    recent: &crate::spotify::RecentPlay,
+) -> Result<(), String> {
+    let track = SpotifyUri::from_uri(&format!("spotify:track:{}", recent.track_id))
+        .map_err(|e| format!("Spotify track id is invalid: {e}"))?;
+    let (mut tracks, name) = match recent.context_uri.as_deref() {
+        Some(context) => context_tracks(spotify, context).unwrap_or_else(|err| {
+            log::info!("Spotify desktop: {context} could not be loaded for resume: {err}");
+            (Vec::new(), None)
+        }),
+        None => (Vec::new(), None),
+    };
+    let context = (!tracks.is_empty())
+        .then(|| recent.context_uri.clone())
+        .flatten();
+    let start = match tracks.iter().position(|uri| uri == &track) {
+        Some(index) => index,
+        None => {
+            tracks.insert(0, track);
+            0
+        }
+    };
+    let shuffle = spotify
+        .desktop_playback
+        .lock()
+        .map(|playback| playback.shuffle)
+        .unwrap_or(false);
+    let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+    queue.replace_at(tracks, start, shuffle, context.clone(), name);
+    log::info!(
+        "Spotify desktop: picking up from Spotify history in {}",
+        context.as_deref().unwrap_or("a single track")
+    );
+    Ok(())
+}
+
+/// Hands the restored queue to the player for the first play, next or previous of a run.
+fn resume_queue(spotify: &SpotifyState, command: &str) -> Result<(), String> {
+    let progress = spotify
+        .desktop_queue
+        .lock()
+        .map_err(|e| e.to_string())?
+        .resume_progress_ms
+        .unwrap_or(0);
+    let position = match command {
+        "nextTrack" => {
+            spotify
+                .desktop_queue
+                .lock()
+                .map_err(|e| e.to_string())?
+                .step_next();
+            0
+        }
+        "prevTrack" => {
+            if progress <= PREV_RESTART_MS {
+                spotify
+                    .desktop_queue
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .step_prev();
+            }
+            0
+        }
+        _ => progress,
+    };
+    load_current_at(spotify, true, position)
 }
 
 pub fn ensure_session(spotify: &SpotifyState) -> Result<Session, String> {
@@ -302,32 +672,84 @@ pub fn should_show_spotify_scene(spotify: &SpotifyState) -> bool {
 
 pub fn play_context_uri(spotify: &SpotifyState, context_uri: &str) -> Result<(), String> {
     ensure_player(spotify)?;
-    let session = ensure_session(spotify)?;
-    let tracks = fetch_context_tracks(&session, context_uri)?;
+    let (tracks, name) = context_tracks(spotify, context_uri)?;
     if tracks.is_empty() {
         return Err("This playlist has no playable tracks.".to_string());
     }
-    start_context(spotify, tracks, context_uri)
+    start_context(spotify, tracks, context_uri, name)
 }
 
 /// Plays the user's Liked Songs, which is a library collection rather than a playlist.
 pub fn play_liked_songs(spotify: &SpotifyState) -> Result<(), String> {
     ensure_player(spotify)?;
-    let ids = crate::spotify::liked_track_ids(spotify)?;
-    let tracks: Vec<SpotifyUri> = ids
-        .iter()
-        .filter_map(|id| SpotifyUri::from_uri(&format!("spotify:track:{id}")).ok())
-        .collect();
+    let (tracks, name) = context_tracks(spotify, crate::spotify::LIKED_SONGS_URI)?;
     if tracks.is_empty() {
         return Err("Liked Songs has no playable tracks.".to_string());
     }
-    start_context(spotify, tracks, crate::spotify::LIKED_SONGS_URI)
+    start_context(spotify, tracks, crate::spotify::LIKED_SONGS_URI, name)
+}
+
+/// The tracks of a playlist, album, artist (their top tracks) or Liked Songs, with its name.
+fn context_tracks(
+    spotify: &SpotifyState,
+    context_uri: &str,
+) -> Result<(Vec<SpotifyUri>, Option<String>), String> {
+    if context_uri == crate::spotify::LIKED_SONGS_URI {
+        let ids = crate::spotify::liked_track_ids(spotify)?;
+        let tracks = ids
+            .iter()
+            .filter_map(|id| SpotifyUri::from_uri(&format!("spotify:track:{id}")).ok())
+            .collect();
+        return Ok((tracks, Some("Liked Songs".to_string())));
+    }
+    let session = ensure_session(spotify)?;
+    if context_uri.starts_with("spotify:album:") {
+        return fetch_album_tracks(&session, context_uri);
+    }
+    if context_uri.starts_with("spotify:artist:") {
+        return fetch_artist_tracks(&session, context_uri);
+    }
+    fetch_context_tracks(&session, context_uri)
+}
+
+fn fetch_album_tracks(
+    session: &Session,
+    context_uri: &str,
+) -> Result<(Vec<SpotifyUri>, Option<String>), String> {
+    let uri = SpotifyUri::from_uri(context_uri)
+        .map_err(|e| format!("Spotify album id is invalid: {e}"))?;
+    runtime().block_on(async {
+        let album = tokio::time::timeout(Duration::from_secs(20), Album::get(session, &uri))
+            .await
+            .map_err(|_| "Spotify album timed out".to_string())?
+            .map_err(|e| format!("Spotify album could not be loaded: {e}"))?;
+        let tracks = album.tracks().cloned().collect();
+        Ok((tracks, Some(album.name).filter(|name| !name.is_empty())))
+    })
+}
+
+fn fetch_artist_tracks(
+    session: &Session,
+    context_uri: &str,
+) -> Result<(Vec<SpotifyUri>, Option<String>), String> {
+    let uri = SpotifyUri::from_uri(context_uri)
+        .map_err(|e| format!("Spotify artist id is invalid: {e}"))?;
+    let country = session.country();
+    runtime().block_on(async {
+        let artist = tokio::time::timeout(Duration::from_secs(20), Artist::get(session, &uri))
+            .await
+            .map_err(|_| "Spotify artist timed out".to_string())?
+            .map_err(|e| format!("Spotify artist could not be loaded: {e}"))?;
+        let tracks = artist.top_tracks.for_country(&country).0;
+        Ok((tracks, Some(artist.name).filter(|name| !name.is_empty())))
+    })
 }
 
 fn start_context(
     spotify: &SpotifyState,
     tracks: Vec<SpotifyUri>,
     context_uri: &str,
+    context_name: Option<String>,
 ) -> Result<(), String> {
     let shuffle = spotify
         .desktop_playback
@@ -336,7 +758,7 @@ fn start_context(
         .unwrap_or(false);
     {
         let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
-        queue.replace_context(tracks, shuffle, Some(context_uri.to_string()));
+        queue.replace_context(tracks, shuffle, Some(context_uri.to_string()), context_name);
     }
 
     let epoch = playback_snapshot(spotify).metadata_epoch;
@@ -477,6 +899,12 @@ fn encode_lyrics_image_path(url: &str) -> String {
 
 pub fn handle_transport(spotify: &SpotifyState, command: &str) -> Result<(), String> {
     ensure_player(spotify)?;
+    if !queue_loaded(spotify) {
+        prepare_resume(spotify);
+        if queue_has_current(spotify) {
+            return resume_queue(spotify, command);
+        }
+    }
     match command {
         "togglePlay" => {
             let playing = spotify
@@ -538,6 +966,7 @@ pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
         playback.shuffle = next;
     }
     preload_next(spotify);
+    persist_queue(spotify);
     Ok(next)
 }
 
@@ -712,9 +1141,14 @@ fn start_player(
                 _ => None,
             };
             let publish = player_event_publishes_status(&event);
+            let position_tick = matches!(event, PlayerEvent::PositionChanged { .. });
             apply_player_event(&playback, event);
             if publish {
                 publish_status_from_app(app_handle.clone());
+            } else if position_tick {
+                if let Some(app) = app_handle.as_ref() {
+                    persist_queue_progress(&app.state::<crate::AppState>().spotify);
+                }
             }
             if let Some(track_id) = finished {
                 continue_if_current(&player_slot, &queue, &track_id);
@@ -737,19 +1171,32 @@ fn with_player<R>(
 }
 
 fn load_current(spotify: &SpotifyState, start_playing: bool) -> Result<(), String> {
+    load_current_at(spotify, start_playing, 0)
+}
+
+fn load_current_at(
+    spotify: &SpotifyState,
+    start_playing: bool,
+    position_ms: u64,
+) -> Result<(), String> {
     let uri = {
-        let queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
-        queue
+        let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+        let uri = queue
             .current()
             .cloned()
-            .ok_or_else(|| "Spotify queue is empty".to_string())?
+            .ok_or_else(|| "Spotify queue is empty".to_string())?;
+        queue.loaded = true;
+        queue.resume_progress_ms = None;
+        uri
     };
-    seed_playback_from_uri(spotify, &uri, start_playing);
+    seed_playback_from_uri(spotify, &uri, start_playing, position_ms);
+    let position = u32::try_from(position_ms).unwrap_or(0);
     with_player(spotify, |player| {
-        player.load(uri, start_playing, 0);
+        player.load(uri, start_playing, position);
         Ok(())
     })?;
     preload_next(spotify);
+    persist_queue(spotify);
     Ok(())
 }
 
@@ -770,7 +1217,12 @@ fn resume_last_played(spotify: &SpotifyState) -> Result<(), String> {
     load_current(spotify, true)
 }
 
-fn seed_playback_from_uri(spotify: &SpotifyState, uri: &SpotifyUri, start_playing: bool) {
+fn seed_playback_from_uri(
+    spotify: &SpotifyState,
+    uri: &SpotifyUri,
+    start_playing: bool,
+    position_ms: u64,
+) {
     let Ok(mut playback) = spotify.desktop_playback.lock() else {
         return;
     };
@@ -779,7 +1231,7 @@ fn seed_playback_from_uri(spotify: &SpotifyState, uri: &SpotifyUri, start_playin
         playback.item_type = Some("track".to_string());
     }
     playback.is_playing = start_playing;
-    playback.progress_ms = Some(0);
+    playback.progress_ms = Some(position_ms);
     playback.progress_at = Some(Instant::now());
 }
 
@@ -1036,15 +1488,18 @@ pub fn list_playlists(
     }
 }
 
-fn fetch_context_tracks(session: &Session, context_uri: &str) -> Result<Vec<SpotifyUri>, String> {
-    let playlist_id = context_uri
-        .strip_prefix("spotify:playlist:")
+fn fetch_context_tracks(
+    session: &Session,
+    context_uri: &str,
+) -> Result<(Vec<SpotifyUri>, Option<String>), String> {
+    let playlist_id = playlist_id_from_uri(context_uri)
         .ok_or_else(|| format!("Unsupported Spotify context: {context_uri}"))?;
     let playlist_id = SpotifyId::from_base62(playlist_id)
         .map_err(|e| format!("Spotify playlist id is invalid: {e}"))?;
 
     runtime().block_on(async {
         let mut tracks = Vec::new();
+        let mut name = None;
         let mut from = 0usize;
         for _ in 0..ROOTLIST_MAX_PAGES {
             let endpoint = format!(
@@ -1065,6 +1520,13 @@ fn fetch_context_tracks(session: &Session, context_uri: &str) -> Result<Vec<Spot
 
             let content = SelectedListContent::parse_from_bytes(&body)
                 .map_err(|e| format!("Spotify playlist could not be decoded: {e}"))?;
+            if name.is_none() {
+                name = content
+                    .attributes
+                    .as_ref()
+                    .map(|attributes| attributes.name().to_string())
+                    .filter(|name| !name.is_empty());
+            }
             let Some(contents) = content.contents.as_ref() else {
                 break;
             };
@@ -1084,7 +1546,7 @@ fn fetch_context_tracks(session: &Session, context_uri: &str) -> Result<Vec<Spot
             }
             from += page_len;
         }
-        Ok(tracks)
+        Ok((tracks, name))
     })
 }
 
@@ -1241,6 +1703,13 @@ fn collection_post(session: &Session, endpoint: &str, body: &[u8]) -> Result<Vec
         .map_err(|e| format!("Spotify liked-songs update failed: {e}"))?;
         Ok(bytes.to_vec())
     })
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 fn unix_now_i32() -> i32 {
@@ -1442,8 +1911,187 @@ pub fn fetch_playlist_track_ids(
     playlist_id: &str,
 ) -> Result<std::collections::HashSet<String>, String> {
     let session = ensure_session(spotify)?;
-    let tracks = fetch_context_tracks(&session, &format!("spotify:playlist:{playlist_id}"))?;
+    let (tracks, _) = fetch_context_tracks(&session, &format!("spotify:playlist:{playlist_id}"))?;
     Ok(tracks.iter().filter_map(|uri| uri.to_id().ok()).collect())
+}
+
+/// What plays now and next in AstroDeck's own player, `limit` up-next tracks from `offset`.
+pub fn queue_view(
+    spotify: &SpotifyState,
+    offset: usize,
+    limit: usize,
+) -> Result<SpotifyQueueView, String> {
+    if !queue_loaded(spotify) {
+        prepare_resume(spotify);
+    }
+    let (current, upcoming, total, context_uri, context_name) = {
+        let queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+        (
+            queue.current().cloned(),
+            queue.upcoming(offset, limit),
+            queue.upcoming_len(),
+            queue.context_uri.clone(),
+            queue.context_name.clone(),
+        )
+    };
+    let mut uris: Vec<SpotifyUri> = current.iter().cloned().collect();
+    uris.extend(upcoming);
+    let mut previews = if uris.is_empty() {
+        Vec::new()
+    } else {
+        let session = ensure_session(spotify)?;
+        track_previews(spotify, &session, &uris)
+    };
+    let current = current.is_some().then(|| previews.remove(0));
+    Ok(SpotifyQueueView {
+        context_uri,
+        context_name,
+        current,
+        up_next: previews,
+        total: total as u32,
+        offset: offset as u32,
+        editable: true,
+        message: None,
+    })
+}
+
+/// Checks that the up-next track at `index` is still `item_id`, so an edit made while the
+/// queue moved on does not hit the wrong track.
+fn check_upcoming(queue: &PlayQueue, index: usize, item_id: &str) -> Result<(), String> {
+    match queue.upcoming_id(index) {
+        Some(id) if id.eq_ignore_ascii_case(item_id) => Ok(()),
+        _ => Err("The queue changed. Showing it again.".to_string()),
+    }
+}
+
+pub fn move_queue_item(
+    spotify: &SpotifyState,
+    from: usize,
+    to: usize,
+    item_id: &str,
+) -> Result<(), String> {
+    {
+        let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+        check_upcoming(&queue, from, item_id)?;
+        if !queue.move_upcoming(from, to) {
+            return Err("That spot is outside the queue.".to_string());
+        }
+    }
+    after_queue_edit(spotify);
+    Ok(())
+}
+
+pub fn remove_queue_item(spotify: &SpotifyState, index: usize, item_id: &str) -> Result<(), String> {
+    {
+        let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+        check_upcoming(&queue, index, item_id)?;
+        queue.remove_upcoming(index);
+    }
+    after_queue_edit(spotify);
+    Ok(())
+}
+
+pub fn play_queue_item(spotify: &SpotifyState, index: usize, item_id: &str) -> Result<(), String> {
+    ensure_player(spotify)?;
+    {
+        let mut queue = spotify.desktop_queue.lock().map_err(|e| e.to_string())?;
+        check_upcoming(&queue, index, item_id)?;
+        queue.jump_upcoming(index);
+    }
+    let epoch = playback_snapshot(spotify).metadata_epoch;
+    load_current(spotify, true)?;
+    wait_for_metadata(spotify, epoch);
+    crate::spotify::publish_status(spotify);
+    Ok(())
+}
+
+fn after_queue_edit(spotify: &SpotifyState) {
+    if queue_loaded(spotify) {
+        preload_next(spotify);
+    }
+    persist_queue(spotify);
+}
+
+/// Names, artists and covers for queue rows, from Spotify's metadata service. Results are kept,
+/// so scrolling back through the queue does not ask again.
+fn track_previews(
+    spotify: &SpotifyState,
+    session: &Session,
+    uris: &[SpotifyUri],
+) -> Vec<TrackPreview> {
+    let ids: Vec<String> = uris.iter().map(|uri| uri.to_id().unwrap_or_default()).collect();
+    let missing: Vec<SpotifyUri> = {
+        let cache = spotify.desktop_track_meta.lock();
+        uris.iter()
+            .zip(&ids)
+            .filter(|(_, id)| cache.as_ref().map_or(true, |cache| !cache.contains_key(*id)))
+            .map(|(uri, _)| uri.clone())
+            .collect()
+    };
+    if !missing.is_empty() {
+        let fetched = runtime().block_on(async {
+            let requests = missing.iter().map(|uri| async move {
+                tokio::time::timeout(Duration::from_secs(20), Track::get(session, uri))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+            });
+            futures_util::future::join_all(requests).await
+        });
+        if let Ok(mut cache) = spotify.desktop_track_meta.lock() {
+            if cache.len() > TRACK_META_CACHE_MAX {
+                cache.clear();
+            }
+            for track in fetched.into_iter().flatten() {
+                if let Some(preview) = preview_from_track(track) {
+                    cache.insert(preview.item_id.clone(), preview);
+                }
+            }
+        }
+    }
+    let cache = spotify.desktop_track_meta.lock().ok();
+    ids.iter()
+        .map(|id| {
+            cache
+                .as_ref()
+                .and_then(|cache| cache.get(id).cloned())
+                .unwrap_or_else(|| TrackPreview {
+                    item_id: id.clone(),
+                    item_type: "track".to_string(),
+                    track_name: "Unavailable track".to_string(),
+                    artist_name: None,
+                    album_name: None,
+                    cover_art_url: None,
+                    duration_ms: None,
+                })
+        })
+        .collect()
+}
+
+fn preview_from_track(track: Track) -> Option<TrackPreview> {
+    let item_id = track.id.to_id().ok()?;
+    let artists: Vec<String> = track
+        .artists
+        .iter()
+        .map(|artist| artist.name.clone())
+        .filter(|name| !name.is_empty())
+        .collect();
+    let covers = &track.album.covers;
+    let cover = covers
+        .iter()
+        .find(|image| image.size == ImageSize::DEFAULT)
+        .or_else(|| covers.first())
+        .and_then(|image| image.id.to_base16().ok())
+        .map(|hex| format!("{IMAGE_CDN}{hex}"));
+    Some(TrackPreview {
+        item_id,
+        item_type: "track".to_string(),
+        track_name: track.name,
+        artist_name: (!artists.is_empty()).then(|| artists.join(", ")),
+        album_name: Some(track.album.name).filter(|name| !name.is_empty()),
+        cover_art_url: cover,
+        duration_ms: u64::try_from(track.duration).ok(),
+    })
 }
 
 pub fn set_playlist_track(
@@ -1727,6 +2375,66 @@ mod tests {
         assert_eq!(queue.step_prev(), Some(&track(1)));
         assert_eq!(queue.step_next(), Some(&track(2)));
         assert_eq!(queue.step_prev(), Some(&track(1)));
+    }
+
+    #[test]
+    fn queue_edits_only_touch_up_next() {
+        let mut queue = PlayQueue::default();
+        queue.replace(vec![track(1), track(2), track(3)], false);
+        assert_eq!(queue.upcoming(0, 10), vec![track(2), track(3)]);
+        assert!(queue.move_upcoming(1, 0));
+        assert_eq!(queue.upcoming(0, 10), vec![track(3), track(2)]);
+        assert!(queue.matches_current(&track(1)));
+        assert!(!queue.move_upcoming(0, 2));
+        assert!(queue.remove_upcoming(0));
+        assert_eq!(queue.upcoming(0, 10), vec![track(2)]);
+        assert!(queue.jump_upcoming(0));
+        assert!(queue.matches_current(&track(2)));
+        assert_eq!(queue.upcoming_len(), 0);
+    }
+
+    #[test]
+    fn queue_starts_at_a_chosen_track() {
+        let mut queue = PlayQueue::default();
+        queue.replace_at(vec![track(1), track(2), track(3)], 1, false, None, None);
+        assert!(queue.matches_current(&track(2)));
+        assert_eq!(queue.step_prev(), Some(&track(1)));
+    }
+
+    #[test]
+    fn saved_queue_restores_order_position_and_progress() {
+        let mut queue = PlayQueue::default();
+        queue.replace_context(
+            vec![track(1), track(2), track(3)],
+            false,
+            Some("spotify:album:abc".to_string()),
+            Some("Album".to_string()),
+        );
+        queue.move_upcoming(1, 0);
+        queue.step_next();
+        let saved = queue.to_saved(42_000);
+        let json = serde_json::to_string(&saved).expect("encode");
+        let restored = PlayQueue::from_saved(serde_json::from_str(&json).expect("decode"))
+            .expect("restore");
+        assert!(restored.matches_current(&track(3)));
+        assert_eq!(restored.upcoming(0, 10), vec![track(2)]);
+        assert_eq!(restored.resume_progress_ms, Some(42_000));
+        assert_eq!(restored.context_name.as_deref(), Some("Album"));
+        assert!(!restored.loaded && !restored.resume_checked);
+    }
+
+    #[test]
+    fn broken_saved_queue_is_ignored() {
+        let saved = SavedQueue {
+            context_uri: None,
+            context_name: None,
+            tracks: vec!["spotify:track:4uLU6hMCjMI75M1A2tKUQC".to_string()],
+            order: vec![0, 3],
+            position: 0,
+            progress_ms: 0,
+            saved_at_ms: 0,
+        };
+        assert!(PlayQueue::from_saved(saved).is_none());
     }
 
     #[test]
