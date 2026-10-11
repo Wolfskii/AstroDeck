@@ -74,19 +74,6 @@ pub fn apply_scene_change(
         "idle".to_string()
     };
 
-    let previous_scene = state
-        .active_scene_id
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
-    if previous_scene != target_id {
-        match previous_scene.as_str() {
-            "youtubeMusic" => youtube_music::pause(&state.youtube_music),
-            "spotify" => spotify_desktop::stop(&state.spotify),
-            _ => {}
-        }
-    }
-
     {
         let mut override_state = state
             .manual_scene_override
