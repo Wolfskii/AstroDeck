@@ -33,10 +33,96 @@ pub struct LyricsDocument {
 
 #[derive(Debug, Deserialize)]
 struct LrcLibResult {
+    #[serde(rename = "trackName")]
+    track_name: Option<String>,
+    #[serde(rename = "artistName")]
+    artist_name: Option<String>,
+    /// Seconds.
+    duration: Option<f64>,
     #[serde(rename = "syncedLyrics")]
     synced_lyrics: Option<String>,
     #[serde(rename = "plainLyrics")]
     _plain_lyrics: Option<String>,
+}
+
+/// Longest gap between the wanted track length and a result's length to still count as the same recording.
+const MATCH_DURATION_TOLERANCE_MS: u64 = 4_000;
+
+/// Lower-case letters and digits only, without bracketed notes, "feat." credits or " - Remastered" tails,
+/// so "Song (Remastered) - 2011" and "song" compare equal.
+fn normalize_for_match(text: &str) -> String {
+    let mut plain = String::new();
+    let mut depth = 0u32;
+    for ch in text.chars() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => plain.push(ch),
+            _ => {}
+        }
+    }
+    let mut plain = plain.to_lowercase();
+    for cut in [" - ", " – ", " feat.", " feat ", " ft.", " ft ", " featuring "] {
+        if let Some(index) = plain.find(cut) {
+            plain.truncate(index);
+        }
+    }
+    plain
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn titles_match(wanted: &str, found: &str) -> bool {
+    let (wanted, found) = (normalize_for_match(wanted), normalize_for_match(found));
+    if wanted.is_empty() || found.is_empty() {
+        return false;
+    }
+    if wanted == found {
+        return true;
+    }
+    let (short, long) = if wanted.len() <= found.len() {
+        (&wanted, &found)
+    } else {
+        (&found, &wanted)
+    };
+    short.chars().count() >= 6 && long.contains(short.as_str())
+}
+
+/// The wanted artist may be one of several credited names in the result, or the other way round.
+fn artists_match(wanted: &str, found: &str) -> bool {
+    let (wanted, found) = (normalize_for_match(wanted), normalize_for_match(found));
+    if wanted.is_empty() || found.is_empty() {
+        return false;
+    }
+    wanted == found
+        || (wanted.chars().count() >= 3 && found.contains(wanted.as_str()))
+        || (found.chars().count() >= 3 && wanted.contains(found.as_str()))
+}
+
+fn durations_match(wanted_ms: Option<u64>, found_ms: Option<u64>) -> bool {
+    match (wanted_ms, found_ms) {
+        (Some(wanted), Some(found)) => wanted.abs_diff(found) <= MATCH_DURATION_TOLERANCE_MS,
+        // Without a length on one side there is nothing to compare, so title and artist decide.
+        _ => true,
+    }
+}
+
+/// Whether a search result is the track we asked for.
+fn is_same_track(
+    title: &str,
+    artist: &str,
+    duration_ms: Option<u64>,
+    found_title: &str,
+    found_artist: &str,
+    found_duration_ms: Option<u64>,
+) -> bool {
+    titles_match(title, found_title)
+        && artists_match(artist, found_artist)
+        && durations_match(duration_ms, found_duration_ms)
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +138,18 @@ struct NetEaseSearchResult {
 #[derive(Debug, Deserialize)]
 struct NetEaseSong {
     id: u64,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    artists: Vec<NetEaseArtist>,
+    /// Milliseconds.
+    duration: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NetEaseArtist {
+    #[serde(default)]
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -144,6 +242,23 @@ fn fetch_musixmatch(
         .map_err(|error| error.to_string())?
         .json()
         .map_err(|error| error.to_string())?;
+    // Musixmatch's matcher can answer with a different song, so check what it actually found.
+    let matched = response.pointer("/message/body/macro_calls/matcher.track.get/message/body/track");
+    let matched_ok = matched.is_some_and(|track| {
+        let text = |key: &str| track.get(key).and_then(serde_json::Value::as_str).unwrap_or_default();
+        let seconds = track.get("track_length").and_then(serde_json::Value::as_u64);
+        is_same_track(
+            title,
+            artist,
+            duration_ms,
+            text("track_name"),
+            text("artist_name"),
+            seconds.map(|seconds| seconds * 1000),
+        )
+    });
+    if !matched_ok {
+        return Err("Musixmatch has no close match".to_string());
+    }
     let richsync = response
         .pointer("/message/body/macro_calls/track.richsync.get/message/body/richsync/richsync_body")
         .and_then(serde_json::Value::as_str)
@@ -220,8 +335,23 @@ fn fetch_kugou(
         .json()
         .map_err(|error| error.to_string())?;
     let song = search
-        .pointer("/data/info/0")
-        .ok_or("Kugou returned no matches")?;
+        .pointer("/data/info")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|songs| {
+            songs.iter().find(|song| {
+                let text = |key: &str| song.get(key).and_then(serde_json::Value::as_str).unwrap_or_default();
+                let seconds = song.get("duration").and_then(serde_json::Value::as_u64);
+                is_same_track(
+                    title,
+                    artist,
+                    duration_ms,
+                    text("songname"),
+                    text("singername"),
+                    seconds.map(|seconds| seconds * 1000),
+                )
+            })
+        })
+        .ok_or("Kugou has no close match")?;
     let hash = song.get("hash").and_then(serde_json::Value::as_str).ok_or("Kugou result has no hash")?;
     let duration = duration_ms.unwrap_or_default().to_string();
     let candidates: serde_json::Value = client
@@ -342,7 +472,27 @@ fn fetch_lrclib(
         return Err(format!("LRCLIB returned {}", response.status()));
     }
     let rows: Vec<LrcLibResult> = response.json().map_err(|error| error.to_string())?;
-    let row = rows.into_iter().next().ok_or("LRCLIB returned no matches")?;
+    let row = rows
+        .into_iter()
+        .filter(|row| {
+            row.synced_lyrics.as_deref().is_some_and(|lyrics| !lyrics.trim().is_empty())
+                && is_same_track(
+                    title,
+                    artist,
+                    duration_ms,
+                    row.track_name.as_deref().unwrap_or_default(),
+                    row.artist_name.as_deref().unwrap_or_default(),
+                    row.duration.map(|seconds| (seconds * 1000.0) as u64),
+                )
+        })
+        .min_by_key(|row| {
+            let found = row.duration.map(|seconds| (seconds * 1000.0) as u64);
+            match (duration_ms, found) {
+                (Some(wanted), Some(found)) => wanted.abs_diff(found),
+                _ => u64::MAX,
+            }
+        })
+        .ok_or("LRCLIB has no close match")?;
     let lines = row
         .synced_lyrics
         .as_deref()
@@ -387,8 +537,21 @@ fn fetch_netease(
     let song_id = search
         .result
         .and_then(|result| result.songs)
-        .and_then(|songs| songs.first().map(|song| song.id))
-        .ok_or("NetEase returned no matches")?;
+        .and_then(|songs| {
+            songs
+                .into_iter()
+                .find(|song| {
+                    let artists = song
+                        .artists
+                        .iter()
+                        .map(|artist| artist.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    is_same_track(title, artist, duration_ms, &song.name, &artists, song.duration)
+                })
+                .map(|song| song.id)
+        })
+        .ok_or("NetEase has no close match")?;
     let response = client
         .get(NETEASE_LYRIC)
         .query(&[
@@ -457,7 +620,44 @@ fn parse_lrc(text: &str) -> Vec<LyricLine> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_lrc;
+    use super::{is_same_track, parse_lrc};
+
+    #[test]
+    fn matches_the_same_track_despite_decorations() {
+        assert!(is_same_track(
+            "Sweater Weather",
+            "The Neighbourhood",
+            Some(240_400),
+            "Sweater Weather (Remastered)",
+            "The Neighbourhood",
+            Some(240_465),
+        ));
+        assert!(is_same_track(
+            "Blinding Lights - Radio Edit",
+            "The Weeknd",
+            Some(200_000),
+            "Blinding Lights",
+            "The Weeknd, Someone Else",
+            None,
+        ));
+    }
+
+    #[test]
+    fn rejects_other_songs_and_other_versions() {
+        // A different song entirely.
+        assert!(!is_same_track("Sweater Weather", "The Neighbourhood", Some(240_000), "NOKIA", "Drake", None));
+        // The right song, but a much shorter edit.
+        assert!(!is_same_track(
+            "Sweater Weather",
+            "The Neighbourhood",
+            Some(240_400),
+            "Sweater Weather",
+            "The Neighbourhood",
+            Some(138_000),
+        ));
+        // Same title by another artist.
+        assert!(!is_same_track("Home", "Edward Sharpe", Some(180_000), "Home", "Michael Buble", Some(180_000)));
+    }
 
     #[test]
     fn parses_lrc_timestamps() {

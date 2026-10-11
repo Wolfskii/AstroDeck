@@ -207,6 +207,16 @@ export async function listSpotifyPlaylists(options?: {
   });
 }
 
+/** Playlists pinned to the top of the browser. Spotify keeps its own pins private, so these are AstroDeck's. */
+export async function getPinnedPlaylists(): Promise<string[]> {
+  if (!isTauri) return [];
+  return invoke<string[]>("get_pinned_playlists");
+}
+
+export async function setPlaylistPinned(playlistId: string, pinned: boolean): Promise<string[]> {
+  return invoke<string[]>("set_playlist_pinned", { playlistId, pinned });
+}
+
 export async function playSpotifyPlaylist(playlist: string): Promise<void> {
   return invoke("play_spotify_playlist", { playlist });
 }

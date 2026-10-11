@@ -1,5 +1,4 @@
 <script lang="ts">
-  import microphoneLyricsUrl from "../assets/microphone-reference.png";
   import type { DeckButtonConfig } from "../types";
   import {
     executeAction,
@@ -483,6 +482,7 @@
   let lyricsOpen = $state(false);
   let lyricsBusy = $state(false);
   let lyricsError = $state<string | null>(null);
+  const lyricsUnavailable = $derived(lyricsError?.includes("aren't available") ?? false);
   let lyricsTrackId = $state<string | null>(null);
   let lyricsDoc = $state<LyricsDocument | null>(null);
 
@@ -552,22 +552,42 @@
     lyricsBusy = true;
     lyricsError = null;
     try {
-      const next = useLyricsFallback
-        ? await getLyrics({
-            trackId: id,
-            title: title ?? "",
-            artist: subtitle ?? "",
-            album: albumName,
-            durationMs,
-            providerOrder: lyricsProviderOrder,
-          })
-        : {
-            ...(await getSpotifyLyrics(id)),
-            provider: "spotify",
-          };
+      const searchOthers = () =>
+        getLyrics({
+          trackId: id,
+          title: title ?? "",
+          artist: subtitle ?? "",
+          album: albumName,
+          durationMs,
+          providerOrder: lyricsProviderOrder,
+        });
+      let next: LyricsDocument | null;
+      if (useLyricsFallback) {
+        next = await searchOthers();
+      } else {
+        // Spotify's own lyrics first. When it has none, look the song up elsewhere, which
+        // only counts when title, artist and length all match closely.
+        let spotifyDoc: typeof lyricsDoc = null;
+        let spotifyError: unknown = null;
+        try {
+          spotifyDoc = { ...(await getSpotifyLyrics(id)), provider: "spotify" };
+        } catch (e) {
+          spotifyError = e;
+        }
+        next = spotifyDoc;
+        if (!spotifyDoc?.available && title && subtitle) {
+          try {
+            const other = await searchOthers();
+            if (other.available) next = other;
+          } catch {
+            // keep whatever Spotify said
+          }
+        }
+        if (!next?.available && spotifyError) throw spotifyError;
+      }
       lyricsDoc = next;
       lyricsTrackId = id;
-      lyricsError = next.available ? null : "Lyrics aren't available for this track";
+      lyricsError = next?.available ? null : "Lyrics aren't available for this track";
     } catch (e) {
       lyricsDoc = null;
       lyricsTrackId = id;
@@ -935,18 +955,41 @@
             disabled={!trackId}
             onclick={() => void toggleLyrics()}
           >
-            <img
+            <!-- Lucide "mic-vocal" / "mic-off", the same icons Sonora's lyrics button uses. -->
+            <svg
               class="car-transport-icon car-lyrics-icon"
-              src={microphoneLyricsUrl}
-              alt=""
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
               aria-hidden="true"
-            />
+            >
+              {#if lyricsUnavailable}
+                <path d="M12 19v3" />
+                <path d="M15 9.34V5a3 3 0 0 0-5.68-1.33" />
+                <path d="M16.95 16.95A7 7 0 0 1 5 12v-2" />
+                <path d="M18.89 13.23A7 7 0 0 0 19 12v-2" />
+                <path d="m2 2 20 20" />
+                <path d="M9 9v3a3 3 0 0 0 5.12 2.12" />
+              {:else}
+                <path d="m11 7.601-5.994 8.19a1 1 0 0 0 .1 1.298l.817.818a1 1 0 0 0 1.314.087L15.09 12" />
+                <path d="M16.5 21.174C15.5 20.5 14.372 20 13 20c-2.058 0-3.928 2.356-6 2-2.072-.356-2.775-3.369-1.5-4.5" />
+                <circle cx="16" cy="7" r="5" />
+              {/if}
+            </svg>
           </button>
         {/if}
     </div>
   </footer>
 
-  <PlaylistBrowser open={playlistsOpen} onClose={() => (playlistsOpen = false)} />
+  <PlaylistBrowser
+    open={playlistsOpen}
+    preload={playlistsEnabled}
+    currentPlaylistId={currentPlaylistId}
+    onClose={() => (playlistsOpen = false)}
+  />
   <AddToPlaylistMenu
     open={addToPlaylistOpen}
     provider={playlistProvider ?? "spotify"}
@@ -1075,6 +1118,19 @@
 
   .car-thing > :global(.scene-background) {
     z-index: 0;
+  }
+
+  /* The dark left edge of the body area carries on down beside the progress bar and footer, so the
+     side menu column looks the same all the way down without the footer's own overlay under it. */
+  :global(.app.has-side-nav) .car-thing--shader::after {
+    content: "";
+    grid-column: 1;
+    grid-row: 2 / 4;
+    justify-self: start;
+    width: 120px;
+    z-index: 0;
+    pointer-events: none;
+    background: rgba(0, 0, 0, 0.4);
   }
 
   .car-thing-body {
@@ -1504,6 +1560,11 @@
     background: rgba(var(--controls-overlay-rgb, 0, 0, 0), var(--controls-overlay-alpha, 0.65));
   }
 
+  /* Start the bar to the right of the side menu so its left end can still be pressed. */
+  :global(.app.has-side-nav) .car-progress-wrap {
+    margin-left: 120px;
+  }
+
   .car-progress-wrap.car-progress-disabled {
     opacity: 0.45;
     cursor: default;
@@ -1611,6 +1672,12 @@
     background: rgba(var(--controls-overlay-rgb, 0, 0, 0), var(--controls-overlay-alpha, 0.65));
   }
 
+  /* Start the footer, and its overlay, at the side menu's edge so the two tints do not add up. */
+  :global(.app.has-side-nav) .car-controls {
+    margin-left: 120px;
+    padding-left: 24px;
+  }
+
   .car-controls-row {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1690,13 +1757,10 @@
   .car-lyrics-icon {
     width: 48px;
     height: 48px;
-    object-fit: contain;
-    filter: brightness(0) invert(1);
   }
 
-  .car-transport-lyrics-on .car-lyrics-icon {
-    filter: brightness(0) saturate(100%) invert(56%) sepia(91%) saturate(1175%)
-      hue-rotate(94deg) brightness(91%) contrast(82%);
+  .car-transport-lyrics-on {
+    color: #1db954;
   }
 
   .car-transport-icon-center {

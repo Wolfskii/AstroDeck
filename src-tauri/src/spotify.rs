@@ -4,6 +4,7 @@ use rand::{distributions::Alphanumeric, Rng};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -26,6 +27,13 @@ const SPOTIFY_QUEUE_URL: &str = "https://api.spotify.com/v1/me/player/queue";
 const SPOTIFY_PLAYLISTS_URL: &str = "https://api.spotify.com/v1/me/playlists";
 const SPOTIFY_ME_URL: &str = "https://api.spotify.com/v1/me";
 const SPOTIFY_PLAY_URL: &str = "https://api.spotify.com/v1/me/player/play";
+const SPOTIFY_PAUSE_URL: &str = "https://api.spotify.com/v1/me/player/pause";
+const SPOTIFY_NEXT_URL: &str = "https://api.spotify.com/v1/me/player/next";
+const SPOTIFY_PREVIOUS_URL: &str = "https://api.spotify.com/v1/me/player/previous";
+/// How long playback on another device is trusted before asking Spotify again.
+const REMOTE_PLAYBACK_TTL: Duration = Duration::from_secs(6);
+/// After finding no other active device, wait this long before asking again.
+const REMOTE_EMPTY_TTL: Duration = Duration::from_secs(10);
 const SPOTIFY_RECENTLY_PLAYED_URL: &str =
     "https://api.spotify.com/v1/me/player/recently-played?limit=1";
 const SPOTIFY_COLOR_LYRICS_URL: &str = "https://spclient.wg.spotify.com/color-lyrics/v2/track";
@@ -95,6 +103,8 @@ pub struct TrackPreview {
 struct PlaybackCache {
     summary: Option<PlaybackSummary>,
     fetched_at: Option<SystemTime>,
+    /// Last time Spotify reported no other active device (desktop-login mode).
+    empty_at: Option<SystemTime>,
     optimistic_item_id: Option<String>,
     optimistic_until: Option<SystemTime>,
 }
@@ -116,6 +126,25 @@ struct PlaylistCache {
 #[derive(Default)]
 struct PlaybackHistory {
     recent: Vec<TrackPreview>,
+}
+
+/// Track ids per playlist, so "which of my playlists contain this song" needs no network.
+#[derive(Default)]
+struct PlaylistTrackSets {
+    by_playlist: HashMap<String, (SystemTime, Arc<HashSet<String>>)>,
+    warmed_at: Option<SystemTime>,
+}
+
+#[derive(Default)]
+struct LikedSongsCache {
+    ids: Option<(SystemTime, Arc<Vec<String>>)>,
+    total: Option<(SystemTime, u32)>,
+}
+
+#[derive(Default)]
+struct RecentPlaylists {
+    ids: Vec<String>,
+    fetched_at: Option<SystemTime>,
 }
 
 #[derive(Default)]
@@ -142,6 +171,19 @@ const SAVED_TRACK_CACHE_TTL: Duration = Duration::from_secs(120);
 const PLAYBACK_CACHE_TTL: Duration = Duration::from_secs(30);
 const QUEUE_CACHE_TTL: Duration = Duration::from_secs(45);
 const PLAYLIST_CACHE_TTL: Duration = Duration::from_secs(300);
+const RECENT_PLAYLISTS_TTL: Duration = Duration::from_secs(90);
+/// Liked Songs is a library collection, not a playlist, so it gets its own id and URI here.
+pub const LIKED_SONGS_ID: &str = "likedsongs";
+pub const LIKED_SONGS_URI: &str = "spotify:collection:tracks";
+const LIKED_SONGS_IMAGE: &str = "https://misc.scdn.co/liked-songs/liked-songs-640.png";
+const LIKED_SONGS_TTL: Duration = Duration::from_secs(600);
+const LIKED_SONGS_MAX: u32 = 10_000;
+/// How long a playlist's track list is trusted before it is fetched again.
+const PLAYLIST_TRACKS_TTL: Duration = Duration::from_secs(600);
+/// Minimum time between background refreshes of the whole library.
+const LIBRARY_WARM_INTERVAL: Duration = Duration::from_secs(300);
+const LIBRARY_WARM_WORKERS: usize = 6;
+const SPOTIFY_RECENT_PLAYLISTS_URL: &str = "https://api.spotify.com/v1/me/player/recently-played?limit=50";
 const RECENT_PLAYBACK_CACHE_TTL: Duration = Duration::from_secs(120);
 const PLAYBACK_HISTORY_MAX: usize = 12;
 /// Default backoff when Spotify omits Retry-After on a 429.
@@ -166,6 +208,12 @@ pub struct SpotifyState {
     playlist_fetch: Mutex<()>,
     playback_history: Mutex<PlaybackHistory>,
     recent_playback_cache: Mutex<RecentPlaybackCache>,
+    recent_playlists: Mutex<RecentPlaylists>,
+    playlist_tracks: Mutex<PlaylistTrackSets>,
+    liked_songs: Mutex<LikedSongsCache>,
+    library_warming: std::sync::atomic::AtomicBool,
+    /// Playlists started in AstroDeck this run, newest first; Spotify's own history lags behind.
+    played_here: Mutex<Vec<String>>,
     pub(crate) desktop_session: Mutex<Option<librespot_core::session::Session>>,
     pub(crate) desktop_player: Arc<Mutex<Option<Arc<librespot_playback::player::Player>>>>,
     pub(crate) desktop_mixer: Mutex<Option<Arc<dyn librespot_playback::mixer::Mixer>>>,
@@ -180,6 +228,7 @@ pub fn invalidate_playback_cache(spotify: &SpotifyState) {
     let mut cache = spotify.playback_cache.lock().unwrap();
     cache.summary = None;
     cache.fetched_at = None;
+    cache.empty_at = None;
 }
 
 pub fn invalidate_queue_cache(spotify: &SpotifyState) {
@@ -765,6 +814,7 @@ struct RecentlyPlayedContext {
     #[allow(dead_code)]
     context_type: Option<String>,
     name: Option<String>,
+    uri: Option<String>,
 }
 
 fn read_stored_client_file(path: &PathBuf) -> Option<SpotifyClientFile> {
@@ -1477,6 +1527,10 @@ fn store_playback_from_api(spotify: &SpotifyState, summary: &PlaybackSummary) ->
 }
 
 pub fn apply_optimistic_skip(spotify: &SpotifyState, direction: &str) -> Option<TrackPreview> {
+    if !uses_web_api(spotify) && remote_playback_cached(spotify).is_none() {
+        // AstroDeck's own player is the one skipping; it has no Web API queue to preview.
+        return None;
+    }
     maybe_refresh_queue_cache(spotify, false);
     let current = read_playback_cache_stale(spotify)?;
     let preview = match direction {
@@ -1579,6 +1633,23 @@ fn official_desktop_status(spotify: &SpotifyState, fresh: bool) -> Result<Spotif
             message: "Sign in with Spotify desktop login. AstroDeck streams playback itself — no developer app, no Web API, and the Spotify desktop app is not required. Premium is required.".to_string(),
         });
     }
+
+    if let Some(remote) = remote_playback(spotify, fresh) {
+        maybe_refresh_queue_cache(spotify, fresh);
+        let message = format!(
+            "Playing on {}. The controls here steer that device.",
+            remote.device_name
+        );
+        return build_spotify_status_from_playback(
+            spotify,
+            &remote,
+            granted_scopes,
+            message,
+            fresh,
+        );
+    }
+
+    warm_library(spotify);
 
     let playback_state = if playback.is_playing {
         "playing"
@@ -2285,6 +2356,11 @@ fn send_library_track_update_json(
 }
 
 fn official_current_track(spotify: &SpotifyState) -> Result<(String, String), String> {
+    if let Some(remote) = remote_playback_cached(spotify) {
+        if let Some(item_id) = remote.item_id.filter(|id| !id.is_empty()) {
+            return Ok((item_id, remote.item_type.unwrap_or_else(|| "track".to_string())));
+        }
+    }
     let playback = crate::spotify_desktop::playback_snapshot(spotify);
     let item_id = playback
         .item_id
@@ -2516,7 +2592,7 @@ fn fetch_track_saved_state(spotify: &SpotifyState, track_id: &str) -> Result<Opt
 }
 
 pub fn adjust_volume(spotify: &SpotifyState, delta: i32) -> Result<u8, String> {
-    if !uses_web_api(spotify) {
+    if !uses_web_api(spotify) && remote_playback_cached(spotify).is_none() {
         return crate::spotify_desktop::adjust_volume(spotify, delta);
     }
     let playback = get_playback_for_mutation(spotify)?;
@@ -2527,7 +2603,7 @@ pub fn adjust_volume(spotify: &SpotifyState, delta: i32) -> Result<u8, String> {
 }
 
 pub fn set_volume(spotify: &SpotifyState, volume_percent: u8, device_id: Option<String>) -> Result<u8, String> {
-    if !uses_web_api(spotify) {
+    if !uses_web_api(spotify) && remote_playback_cached(spotify).is_none() {
         return crate::spotify_desktop::set_volume(spotify, volume_percent);
     }
     let device_id = match device_id {
@@ -2552,7 +2628,10 @@ pub fn set_volume(spotify: &SpotifyState, volume_percent: u8, device_id: Option<
         update_playback_cache_fields(spotify, |summary| {
             summary.volume_percent = volume_percent;
         });
-        persist_volume(spotify, volume_percent);
+        if uses_web_api(spotify) {
+            // Another device's volume must not become AstroDeck's own default.
+            persist_volume(spotify, volume_percent);
+        }
         Ok(volume_percent)
     } else {
         let status = response.status();
@@ -2562,7 +2641,7 @@ pub fn set_volume(spotify: &SpotifyState, volume_percent: u8, device_id: Option<
 }
 
 pub fn seek(spotify: &SpotifyState, position_ms: u64) -> Result<(), String> {
-    if !uses_web_api(spotify) {
+    if !uses_web_api(spotify) && remote_playback_cached(spotify).is_none() {
         return crate::spotify_desktop::seek(spotify, position_ms);
     }
     let playback = get_playback_for_mutation(spotify)?;
@@ -2644,6 +2723,13 @@ fn fetch_current_playback(spotify: &SpotifyState) -> Result<PlaybackSummary, Str
         .map_err(|e| e.to_string())?;
 
     if response.status().as_u16() == 204 {
+        if !uses_web_api(spotify) {
+            // Desktop-login mode only mirrors a device that is playing right now, so forget the old one.
+            let mut cache = spotify.playback_cache.lock().unwrap();
+            cache.summary = None;
+            cache.fetched_at = None;
+            cache.empty_at = Some(SystemTime::now());
+        }
         return Err("Spotify has no active playback device right now.".to_string());
     }
 
@@ -2685,21 +2771,121 @@ fn fetch_current_playback(spotify: &SpotifyState) -> Result<PlaybackSummary, Str
             .as_ref()
             .and_then(|item| item.duration_ms),
         shuffle_state: playback.shuffle_state,
-        context_playlist_id: playback
-            .context
-            .as_ref()
-            .filter(|context| context.context_type.as_deref() == Some("playlist"))
-            .and_then(|context| context.uri.as_deref())
-            .and_then(|uri| {
-                uri.strip_prefix("spotify:playlist:")
-                    .map(str::to_string)
-            }),
+        context_playlist_id: playback.context.as_ref().and_then(|context| {
+            let uri = context.uri.as_deref()?;
+            match context.context_type.as_deref() {
+                Some("playlist") => uri.strip_prefix("spotify:playlist:").map(str::to_string),
+                Some("collection") => Some(LIKED_SONGS_ID.to_string()),
+                _ => None,
+            }
+        }),
     };
     Ok(store_playback_from_api(spotify, &summary))
 }
 
+/// In desktop-login mode AstroDeck is itself a player, but music can also be playing on another
+/// Spotify device (the Spotify app on this PC, a phone). This says whether that device should be
+/// the one shown and controlled: it is when it is playing, or when AstroDeck has nothing of its own.
+fn prefer_remote(spotify: &SpotifyState, remote: &PlaybackSummary) -> bool {
+    if remote.device_name == crate::spotify_desktop::OFFICIAL_DEVICE_NAME {
+        return false;
+    }
+    let local = crate::spotify_desktop::playback_snapshot(spotify);
+    if local.is_playing {
+        return false;
+    }
+    remote.is_playing || local.track_name.is_none()
+}
+
+/// Cached view of playback on another device, without asking Spotify.
+pub(crate) fn remote_playback_cached(spotify: &SpotifyState) -> Option<PlaybackSummary> {
+    if uses_web_api(spotify) {
+        return None;
+    }
+    read_playback_cache_stale(spotify).filter(|remote| prefer_remote(spotify, remote))
+}
+
+/// Playback on another Spotify device, refreshed from Spotify at most every few seconds
+/// (or right away when `fresh`). `None` when nothing else is active or AstroDeck should win.
+fn remote_playback(spotify: &SpotifyState, fresh: bool) -> Option<PlaybackSummary> {
+    if uses_web_api(spotify) || !has_scope(spotify, "user-read-playback-state").unwrap_or(false) {
+        return None;
+    }
+    if !fresh {
+        if let Some(cached) = read_playback_cache(spotify, REMOTE_PLAYBACK_TTL) {
+            return Some(cached).filter(|remote| prefer_remote(spotify, remote));
+        }
+        let recently_empty = spotify
+            .playback_cache
+            .lock()
+            .unwrap()
+            .empty_at
+            .is_some_and(|at| at.elapsed().unwrap_or(Duration::MAX) < REMOTE_EMPTY_TTL);
+        if recently_empty {
+            return None;
+        }
+    }
+    match refresh_current_playback(spotify) {
+        Ok(remote) => Some(remote).filter(|remote| prefer_remote(spotify, remote)),
+        Err(_) => {
+            spotify.playback_cache.lock().unwrap().empty_at = Some(SystemTime::now());
+            None
+        }
+    }
+}
+
+/// Play/pause, next or previous on the other Spotify device, if that is what is being shown.
+/// `None` means AstroDeck's own player should handle the command.
+pub fn try_remote_transport(spotify: &SpotifyState, command: &str) -> Option<Result<(), String>> {
+    let remote = remote_playback(spotify, false)?;
+    Some(send_remote_transport(spotify, command, &remote))
+}
+
+fn send_remote_transport(
+    spotify: &SpotifyState,
+    command: &str,
+    remote: &PlaybackSummary,
+) -> Result<(), String> {
+    let (post, url) = match command {
+        "togglePlay" if remote.is_playing => (false, SPOTIFY_PAUSE_URL),
+        "togglePlay" => (false, SPOTIFY_PLAY_URL),
+        "nextTrack" => (true, SPOTIFY_NEXT_URL),
+        "prevTrack" => (true, SPOTIFY_PREVIOUS_URL),
+        other => return Err(format!("Unknown Spotify player command: {other}")),
+    };
+    let access_token = get_access_token(spotify)?;
+    let client = spotify_http_client()?;
+    let request = if post { client.post(url) } else { client.put(url) };
+    let response = request
+        .bearer_auth(access_token)
+        .query(&[("device_id", remote.device_id.as_str())])
+        .body("")
+        .send()
+        .map_err(|e| format!("Spotify {command} request failed: {e}"))?;
+
+    let status = response.status();
+    if status.is_success() || status.as_u16() == 204 {
+        if command == "togglePlay" {
+            let playing = !remote.is_playing;
+            update_playback_cache_fields(spotify, |summary| summary.is_playing = playing);
+        } else {
+            // The track changes a moment after Spotify accepts the skip; ask again for it.
+            invalidate_playback_cache(spotify);
+            invalidate_queue_cache(spotify);
+        }
+        log::info!("Spotify: {command} on {}", remote.device_name);
+        return Ok(());
+    }
+    let body = response.text().unwrap_or_default();
+    Err(match status.as_u16() {
+        403 => format!("{} would not accept that command (Spotify Premium is required).", remote.device_name),
+        404 => "Spotify has no active device to control.".to_string(),
+        _ => format!("Spotify {command} failed: {status} {body}"),
+    })
+}
+
 pub fn toggle_shuffle(spotify: &SpotifyState) -> Result<bool, String> {
-    if !uses_web_api(spotify) {
+    if !uses_web_api(spotify) && remote_playback_cached(spotify).is_none() {
         return crate::spotify_desktop::toggle_shuffle(spotify);
     }
     let playback = get_playback_for_mutation(spotify)?;
@@ -2916,6 +3102,249 @@ fn fetch_playlists_page(
     })
 }
 
+/// Remembers a playlist started in AstroDeck so it moves to the top of the browser right away.
+fn remember_played_playlist(spotify: &SpotifyState, playlist_id: &str) {
+    let mut played = spotify.played_here.lock().unwrap();
+    played.retain(|id| id != playlist_id);
+    played.insert(0, playlist_id.to_string());
+    played.truncate(50);
+}
+
+/// Playlists from Spotify's recently-played history, newest first.
+fn fetch_recent_playlist_ids(spotify: &SpotifyState) -> Option<Vec<String>> {
+    if !has_saved_tokens(spotify) || !has_scope(spotify, "user-read-recently-played").unwrap_or(false) {
+        return None;
+    }
+    let access_token = get_access_token(spotify).ok()?;
+    let client = spotify_http_client().ok()?;
+    let response = client
+        .get(SPOTIFY_RECENT_PLAYLISTS_URL)
+        .bearer_auth(&access_token)
+        .send()
+        .ok()?;
+    if !response.status().is_success() {
+        if response.status().as_u16() == 429 {
+            apply_scope_rate_limit_from_response(spotify, RateLimitScope::PlaybackRead, &response);
+        }
+        return None;
+    }
+    let payload: RecentlyPlayedResponse = response.json().ok()?;
+    let mut ids: Vec<String> = Vec::new();
+    for item in payload.items {
+        let Some(id) = item.context.and_then(|context| context.uri).and_then(|uri| {
+            if uri.ends_with(":collection") {
+                Some(LIKED_SONGS_ID.to_string())
+            } else {
+                uri.rsplit_once(":playlist:").map(|(_, id)| id.to_string())
+            }
+        }) else {
+            continue;
+        };
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Some(ids)
+}
+
+fn recent_playlist_history(spotify: &SpotifyState) -> Vec<String> {
+    {
+        let cache = spotify.recent_playlists.lock().unwrap();
+        if let Some(fetched_at) = cache.fetched_at {
+            if fetched_at.elapsed().unwrap_or(Duration::MAX) < RECENT_PLAYLISTS_TTL {
+                return cache.ids.clone();
+            }
+        }
+    }
+    let fetched = fetch_recent_playlist_ids(spotify);
+    let mut cache = spotify.recent_playlists.lock().unwrap();
+    if let Some(ids) = fetched {
+        cache.ids = ids;
+    }
+    // Also after a failure, so a rate limit or an offline moment is not retried on every page.
+    cache.fetched_at = Some(SystemTime::now());
+    cache.ids.clone()
+}
+
+/// The playlist playing right now, wherever it is playing.
+fn current_playlist_anywhere(spotify: &SpotifyState) -> Option<String> {
+    remote_playback_cached(spotify)
+        .and_then(|remote| remote.context_playlist_id)
+        .or_else(|| crate::spotify_desktop::current_playlist_id(spotify))
+}
+
+/// Orders playlists the way Spotify's own library does: pinned first, then the most recently
+/// played, then the rest in library order.
+fn order_playlists(spotify: &SpotifyState, items: Vec<SpotifyPlaylist>) -> Vec<SpotifyPlaylist> {
+    let pinned = spotify
+        .app_handle
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(crate::prefs::pinned_playlists))
+        .unwrap_or_default();
+
+    let mut recent: Vec<String> = Vec::new();
+    recent.extend(current_playlist_anywhere(spotify));
+    recent.extend(spotify.played_here.lock().unwrap().iter().cloned());
+    recent.extend(recent_playlist_history(spotify));
+
+    let rank = |playlist: &SpotifyPlaylist| -> (u8, usize) {
+        if let Some(position) = pinned.iter().position(|id| *id == playlist.id) {
+            (0, position)
+        } else if playlist.id == LIKED_SONGS_ID {
+            // Spotify keeps Liked Songs pinned by default; here it sits right after your own pins.
+            (0, pinned.len())
+        } else if let Some(position) = recent.iter().position(|id| *id == playlist.id) {
+            (1, position)
+        } else {
+            (2, 0)
+        }
+    };
+    let mut items = items;
+    // A stable sort keeps the library order inside the last group.
+    items.sort_by_key(rank);
+    items
+}
+
+fn ordered_page(spotify: &SpotifyState, mut page: SpotifyPlaylistPage) -> SpotifyPlaylistPage {
+    page.items = with_liked_songs(spotify, page.items);
+    page.total = page.items.len() as u32;
+    page.items = order_playlists(spotify, page.items);
+    page
+}
+
+fn liked_songs_request(
+    spotify: &SpotifyState,
+    offset: u32,
+    limit: u32,
+) -> Result<(u32, Vec<String>), String> {
+    #[derive(Deserialize)]
+    struct LikedPage {
+        total: u32,
+        #[serde(default)]
+        items: Vec<LikedItem>,
+    }
+    #[derive(Deserialize)]
+    struct LikedItem {
+        track: Option<LikedTrack>,
+    }
+    #[derive(Deserialize)]
+    struct LikedTrack {
+        id: Option<String>,
+    }
+    let access_token = get_access_token(spotify)?;
+    let client = spotify_http_client()?;
+    let response = client
+        .get("https://api.spotify.com/v1/me/tracks")
+        .bearer_auth(access_token)
+        .query(&[
+            ("limit", limit.to_string()),
+            ("offset", offset.to_string()),
+            ("fields", "total,items(track(id))".to_string()),
+        ])
+        .send()
+        .map_err(|e| format!("Spotify Liked Songs request failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Spotify Liked Songs query failed: {}", response.status()));
+    }
+    let page: LikedPage = response.json().map_err(|e| e.to_string())?;
+    let ids = page
+        .items
+        .into_iter()
+        .filter_map(|item| item.track.and_then(|track| track.id))
+        .collect();
+    Ok((page.total, ids))
+}
+
+/// Number of Liked Songs, cheap to ask for and cached.
+fn liked_total(spotify: &SpotifyState) -> Option<u32> {
+    {
+        let cache = spotify.liked_songs.lock().unwrap();
+        if let Some((_, ids)) = cache.ids.as_ref().filter(|(at, _)| at.elapsed().unwrap_or(Duration::MAX) < LIKED_SONGS_TTL) {
+            return Some(ids.len() as u32);
+        }
+        if let Some((at, total)) = cache.total {
+            if at.elapsed().unwrap_or(Duration::MAX) < LIKED_SONGS_TTL {
+                return Some(total);
+            }
+        }
+    }
+    let (total, _) = liked_songs_request(spotify, 0, 1).ok()?;
+    spotify.liked_songs.lock().unwrap().total = Some((SystemTime::now(), total));
+    Some(total)
+}
+
+/// Every Liked Songs track id, newest first. Cached, and fetched in parallel pages.
+pub fn liked_track_ids(spotify: &SpotifyState) -> Result<Arc<Vec<String>>, String> {
+    {
+        let cache = spotify.liked_songs.lock().unwrap();
+        if let Some((at, ids)) = cache.ids.as_ref() {
+            if at.elapsed().unwrap_or(Duration::MAX) < LIKED_SONGS_TTL {
+                return Ok(ids.clone());
+            }
+        }
+    }
+    let (total, mut ids) = liked_songs_request(spotify, 0, 50)?;
+    let total = total.min(LIKED_SONGS_MAX);
+    let offsets: Vec<u32> = (50..total).step_by(50).collect();
+    let pages = Mutex::new(Vec::<(u32, Vec<String>)>::new());
+    let queue = Mutex::new(offsets.into_iter());
+    let failure = Mutex::new(None::<String>);
+    std::thread::scope(|scope| {
+        for _ in 0..LIBRARY_WARM_WORKERS {
+            scope.spawn(|| loop {
+                let next = queue.lock().unwrap().next();
+                let Some(offset) = next else { break };
+                match liked_songs_request(spotify, offset, 50) {
+                    Ok((_, page)) => pages.lock().unwrap().push((offset, page)),
+                    Err(err) => {
+                        *failure.lock().unwrap() = Some(err);
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    if let Some(err) = failure.into_inner().unwrap() {
+        return Err(err);
+    }
+    let mut pages = pages.into_inner().unwrap();
+    pages.sort_by_key(|(offset, _)| *offset);
+    for (_, page) in pages {
+        ids.extend(page);
+    }
+    let ids = Arc::new(ids);
+    let mut cache = spotify.liked_songs.lock().unwrap();
+    cache.total = Some((SystemTime::now(), ids.len() as u32));
+    cache.ids = Some((SystemTime::now(), ids.clone()));
+    Ok(ids)
+}
+
+/// Puts Liked Songs in the list; Spotify's playlist list leaves it out because it is not a playlist.
+fn with_liked_songs(spotify: &SpotifyState, mut items: Vec<SpotifyPlaylist>) -> Vec<SpotifyPlaylist> {
+    if items.iter().any(|playlist| playlist.id == LIKED_SONGS_ID)
+        || !has_scope(spotify, "user-library-read").unwrap_or(false)
+    {
+        return items;
+    }
+    let Some(total) = liked_total(spotify) else {
+        return items;
+    };
+    items.insert(
+        0,
+        SpotifyPlaylist {
+            id: LIKED_SONGS_ID.to_string(),
+            name: "Liked Songs".to_string(),
+            uri: LIKED_SONGS_URI.to_string(),
+            image_url: Some(LIKED_SONGS_IMAGE.to_string()),
+            track_count: total,
+            owner_name: Some("You".to_string()),
+            owned: true,
+        },
+    );
+    items
+}
+
 pub fn list_playlists(
     spotify: &SpotifyState,
     offset: u32,
@@ -2927,12 +3356,14 @@ pub fn list_playlists(
             .playlist_fetch
             .lock()
             .map_err(|e| e.to_string())?;
+        // The library is cached for a while, but the order is applied on every read so a new
+        // pin or a song just played shows up immediately.
         if let Some(complete) = read_complete_playlist_cache(spotify, PLAYLIST_CACHE_TTL) {
-            return Ok(slice_playlist_page(&complete, offset, limit));
+            return Ok(slice_playlist_page(&ordered_page(spotify, complete), offset, limit));
         }
         let complete = crate::spotify_desktop::list_playlists(spotify, 0, u32::MAX)?;
         store_playlist_cache(spotify, 0, u32::MAX, &complete);
-        return Ok(slice_playlist_page(&complete, offset, limit));
+        return Ok(slice_playlist_page(&ordered_page(spotify, complete), offset, limit));
     }
 
     if !has_scope(spotify, "playlist-read-private")?
@@ -3177,8 +3608,28 @@ fn friendly_lyrics_error(err: &str) -> String {
 
 pub fn play_playlist(spotify: &SpotifyState, playlist: &str) -> Result<(), String> {
     if !uses_web_api(spotify) {
-        let context_uri = playlist_context_uri(playlist)?;
-        crate::spotify_desktop::play_context_uri(spotify, &context_uri)?;
+        let liked = playlist == LIKED_SONGS_URI || playlist == LIKED_SONGS_ID;
+        let context_uri = if liked {
+            LIKED_SONGS_URI.to_string()
+        } else {
+            playlist_context_uri(playlist)?
+        };
+        // Starting playback in AstroDeck should not leave the Spotify app playing as well.
+        if let Some(remote) = remote_playback_cached(spotify).filter(|remote| remote.is_playing) {
+            if let Err(err) = send_remote_transport(spotify, "togglePlay", &remote) {
+                log::warn!("Could not pause {} before playing here: {err}", remote.device_name);
+            }
+        }
+        if liked {
+            crate::spotify_desktop::play_liked_songs(spotify)?;
+            remember_played_playlist(spotify, LIKED_SONGS_ID);
+        } else {
+            crate::spotify_desktop::play_context_uri(spotify, &context_uri)?;
+            if let Some(id) = context_uri.strip_prefix("spotify:playlist:") {
+                remember_played_playlist(spotify, id);
+            }
+        }
+        invalidate_playback_cache(spotify);
         return Ok(());
     }
 
@@ -3322,17 +3773,32 @@ pub fn list_add_playlists(
                     .and_then(|summary| summary.context_playlist_id)
             })
     } else {
-        crate::spotify_desktop::current_playlist_id(spotify)
+        current_playlist_anywhere(spotify)
     };
+    let local_current_id = crate::spotify_desktop::current_playlist_id(spotify);
+    if !uses_web_api(spotify) && !track_id.is_empty() {
+        // Usually everything is already cached by the background warm-up; this fills any gaps
+        // in parallel instead of one playlist after another.
+        let missing: Vec<String> = owned
+            .iter()
+            .filter(|playlist| local_current_id.as_deref() != Some(playlist.id.as_str()))
+            .map(|playlist| playlist.id.clone())
+            .filter(|id| cached_playlist_track_ids(spotify, id).is_none())
+            .collect();
+        fetch_track_sets_parallel(spotify, missing);
+    }
     let mut items = Vec::new();
     for playlist in owned {
         let is_current = current_id.as_deref() == Some(playlist.id.as_str());
-        let contains_track = if is_current && !uses_web_api(spotify) {
-            crate::spotify_desktop::current_playlist_contains_track(spotify, track_id)
+        let contains_track = if track_id.is_empty() {
+            false
         } else if uses_web_api(spotify) {
             web_playlist_contains_track(spotify, &playlist.id, track_id).unwrap_or(false)
+        } else if local_current_id.as_deref() == Some(playlist.id.as_str()) {
+            crate::spotify_desktop::current_playlist_contains_track(spotify, track_id)
         } else {
-            crate::spotify_desktop::playlist_contains_track(spotify, &playlist.id, track_id)
+            playlist_track_ids(spotify, &playlist.id)
+                .map(|ids| ids.contains(track_id))
                 .unwrap_or(false)
         };
         items.push(SpotifyAddPlaylist {
@@ -3359,6 +3825,7 @@ pub fn set_playlist_track(
         web_set_playlist_track(spotify, playlist_id, track_id, add)?;
     } else {
         crate::spotify_desktop::set_playlist_track(spotify, playlist_id, track_id, add)?;
+        update_cached_playlist_track(spotify, playlist_id, track_id, add);
     }
     invalidate_playlist_cache(spotify);
     list_add_playlists(spotify, track_id)
@@ -3387,12 +3854,127 @@ pub fn create_owned_playlist(
     list_add_playlists(spotify, "")
 }
 
+fn cached_playlist_track_ids(spotify: &SpotifyState, playlist_id: &str) -> Option<Arc<HashSet<String>>> {
+    let cache = spotify.playlist_tracks.lock().unwrap();
+    let (fetched_at, ids) = cache.by_playlist.get(playlist_id)?;
+    (fetched_at.elapsed().unwrap_or(Duration::MAX) < PLAYLIST_TRACKS_TTL).then(|| ids.clone())
+}
+
+/// Track ids of a playlist: from the cache when fresh, otherwise fetched and remembered.
+fn playlist_track_ids(
+    spotify: &SpotifyState,
+    playlist_id: &str,
+) -> Result<Arc<HashSet<String>>, String> {
+    if let Some(ids) = cached_playlist_track_ids(spotify, playlist_id) {
+        return Ok(ids);
+    }
+    let ids = Arc::new(crate::spotify_desktop::fetch_playlist_track_ids(spotify, playlist_id)?);
+    spotify
+        .playlist_tracks
+        .lock()
+        .unwrap()
+        .by_playlist
+        .insert(playlist_id.to_string(), (SystemTime::now(), ids.clone()));
+    Ok(ids)
+}
+
+/// Keeps a cached playlist in step after a track was added or removed here.
+fn update_cached_playlist_track(spotify: &SpotifyState, playlist_id: &str, track_id: &str, add: bool) {
+    let mut cache = spotify.playlist_tracks.lock().unwrap();
+    if let Some((_, ids)) = cache.by_playlist.get_mut(playlist_id) {
+        let mut updated = (**ids).clone();
+        if add {
+            updated.insert(track_id.to_string());
+        } else {
+            updated.remove(track_id);
+        }
+        *ids = Arc::new(updated);
+    }
+}
+
+fn fetch_track_sets_parallel(spotify: &SpotifyState, playlist_ids: Vec<String>) {
+    if playlist_ids.is_empty() {
+        return;
+    }
+    let queue = Mutex::new(playlist_ids.into_iter());
+    std::thread::scope(|scope| {
+        for _ in 0..LIBRARY_WARM_WORKERS {
+            scope.spawn(|| loop {
+                let next = queue.lock().unwrap().next();
+                let Some(id) = next else { break };
+                if let Err(err) = playlist_track_ids(spotify, &id) {
+                    log::debug!("Spotify playlist {id} could not be cached: {err}");
+                }
+            });
+        }
+    });
+}
+
+/// Loads the playlist list and every owned playlist's tracks in the background, so the playlist
+/// browser and the add-to-playlist menu open instantly. Cheap to call: it runs at most every few minutes.
+pub fn warm_library(spotify: &SpotifyState) {
+    if uses_web_api(spotify) || !has_saved_tokens(spotify) {
+        return;
+    }
+    {
+        let mut cache = spotify.playlist_tracks.lock().unwrap();
+        if cache
+            .warmed_at
+            .is_some_and(|at| at.elapsed().unwrap_or(Duration::MAX) < LIBRARY_WARM_INTERVAL)
+        {
+            return;
+        }
+        cache.warmed_at = Some(SystemTime::now());
+    }
+    if spotify
+        .library_warming
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        return;
+    }
+    let app = spotify.app_handle.lock().ok().and_then(|guard| guard.clone());
+    let Some(app) = app else {
+        spotify
+            .library_warming
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        return;
+    };
+    std::thread::spawn(move || {
+        let state = app.state::<crate::AppState>();
+        let spotify = &state.spotify;
+        match load_owned_playlists(spotify) {
+            Ok(owned) => {
+                let stale = owned
+                    .into_iter()
+                    .map(|playlist| playlist.id)
+                    .filter(|id| cached_playlist_track_ids(spotify, id).is_none())
+                    .collect();
+                fetch_track_sets_parallel(spotify, stale);
+            }
+            Err(err) => log::debug!("Spotify library warm-up skipped: {err}"),
+        }
+        if has_scope(spotify, "user-library-read").unwrap_or(false) {
+            // Makes "play Liked Songs" start without first paging through the whole library.
+            if let Err(err) = liked_track_ids(spotify) {
+                log::debug!("Spotify Liked Songs warm-up skipped: {err}");
+            }
+        }
+        spotify
+            .library_warming
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    });
+}
+
 fn load_owned_playlists(spotify: &SpotifyState) -> Result<Vec<SpotifyPlaylist>, String> {
     let mut owned = Vec::new();
     let mut offset = 0u32;
     loop {
         let page = list_playlists(spotify, offset, 50)?;
-        owned.extend(page.items.into_iter().filter(|playlist| playlist.owned));
+        owned.extend(
+            page.items
+                .into_iter()
+                .filter(|playlist| playlist.owned && playlist.id != LIKED_SONGS_ID),
+        );
         match page.next_offset {
             Some(next) => offset = next,
             None => break,

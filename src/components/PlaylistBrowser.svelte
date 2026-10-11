@@ -1,16 +1,24 @@
 <script lang="ts">
   import {
     executeActionValue,
+    getPinnedPlaylists,
     listSpotifyPlaylists,
     playSpotifyPlaylist,
+    setPlaylistPinned,
     type SpotifyPlaylist,
   } from "../services/api";
 
   let {
     open = false,
+    preload = false,
+    currentPlaylistId = null,
     onClose,
   }: {
     open?: boolean;
+    /** Load the list in the background before it is opened, so opening needs no waiting. */
+    preload?: boolean;
+    /** The playlist Spotify is playing right now, wherever it is playing. */
+    currentPlaylistId?: string | null;
     onClose: () => void;
   } = $props();
 
@@ -22,10 +30,7 @@
   let playlistsError = $state<string | null>(null);
   let playlistsQuery = $state("");
   let playingPlaylistId = $state<string | null>(null);
-  const LAST_PLAYLIST_KEY = "astrodeck:lastSpotifyPlaylistId";
-  let selectedPlaylistId = $state<string | null>(
-    typeof window !== "undefined" ? window.localStorage.getItem(LAST_PLAYLIST_KEY) : null
-  );
+  let pinnedIds = $state<string[]>([]);
   let playlistListEl = $state<HTMLElement | null>(null);
   let loadSeq = 0;
   let sawOpen = false;
@@ -36,16 +41,12 @@
 
   const visiblePlaylists = $derived.by(() => {
     const query = playlistsQuery.trim().toLowerCase();
-    const filtered = !query
-      ? playlists
-      : playlists.filter((playlist) => {
+    // The list arrives ordered like Spotify's library: pinned first, then recently played.
+    if (!query) return playlists;
+    return playlists.filter((playlist) => {
       const owner = playlist.ownerName?.toLowerCase() ?? "";
       return playlist.name.toLowerCase().includes(query) || owner.includes(query);
     });
-    if (!selectedPlaylistId) return filtered;
-    return [...filtered].sort(
-      (a, b) => Number(b.id === selectedPlaylistId) - Number(a.id === selectedPlaylistId)
-    );
   });
 
   const BROWSER_DEMO_PLAYLISTS: SpotifyPlaylist[] = [
@@ -92,12 +93,16 @@
     return null;
   }
 
-  async function loadPlaylists(reset: boolean, allowAutoRetry = true) {
+  async function loadPlaylists(reset: boolean, allowAutoRetry = true, refresh = false) {
     if (!reset && (playlistsLoading || playlistsLoadingMore || playlistsNextOffset == null)) return;
     const seq = reset ? ++loadSeq : loadSeq;
+    // Refreshing a list that is already on screen happens quietly, without a loading state.
+    const quiet = refresh && reset && playlists.length > 0;
     if (reset) {
-      playlistsLoading = true;
-      playlistsError = null;
+      if (!quiet) {
+        playlistsLoading = true;
+        playlistsError = null;
+      }
     } else {
       playlistsLoadingMore = true;
     }
@@ -126,6 +131,7 @@
       playlistsTotal = page.total;
       playlistsNextOffset = page.nextOffset ?? null;
     } catch (e) {
+      if (quiet) return;
       const message = String(e);
       const waitMs = allowAutoRetry && reset ? playlistRateLimitWaitMs(message) : null;
       if (waitMs != null && seq === loadSeq) {
@@ -209,12 +215,28 @@
     if (isOpen && !sawOpen) {
       playlistsQuery = "";
       playingPlaylistId = null;
-      void loadPlaylists(true);
+      void getPinnedPlaylists()
+        .then((ids) => (pinnedIds = ids))
+        .catch(() => {});
+      void loadPlaylists(true, true, true);
     }
     if (!isOpen && sawOpen) {
       loadSeq += 1;
     }
     sawOpen = isOpen;
+  });
+
+  let preloaded = false;
+  $effect(() => {
+    if (!preload || !isTauriRuntime || open || preloaded) return;
+    preloaded = true;
+    const timer = window.setTimeout(() => {
+      void getPinnedPlaylists()
+        .then((ids) => (pinnedIds = ids))
+        .catch(() => {});
+      void loadPlaylists(true, false, true);
+    }, 1500);
+    return () => window.clearTimeout(timer);
   });
 
   $effect(() => {
@@ -237,6 +259,60 @@
     }
   }
 
+  // Pinning is done by pressing and holding a card (or right-clicking it), so the cards stay clean.
+  const HOLD_TO_PIN_MS = 600;
+  const HOLD_MOVE_LIMIT_PX = 12;
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  let holdStart = { x: 0, y: 0 };
+  let heldToPin = false;
+
+  function startHold(event: PointerEvent, playlist: SpotifyPlaylist) {
+    heldToPin = false;
+    clearTimeout(holdTimer);
+    if (event.button === 2) {
+      heldToPin = true;
+      void togglePin(playlist);
+      return;
+    }
+    holdStart = { x: event.clientX, y: event.clientY };
+    holdTimer = setTimeout(() => {
+      heldToPin = true;
+      void togglePin(playlist);
+    }, HOLD_TO_PIN_MS);
+  }
+
+  function moveHold(event: PointerEvent) {
+    if (
+      Math.abs(event.clientX - holdStart.x) > HOLD_MOVE_LIMIT_PX ||
+      Math.abs(event.clientY - holdStart.y) > HOLD_MOVE_LIMIT_PX
+    ) {
+      clearTimeout(holdTimer);
+    }
+  }
+
+  function endHold() {
+    clearTimeout(holdTimer);
+  }
+
+  function pressPlaylist(playlist: SpotifyPlaylist) {
+    // The press that just pinned a playlist must not also start playing it.
+    if (heldToPin) {
+      heldToPin = false;
+      return;
+    }
+    void playPlaylist(playlist);
+  }
+
+  async function togglePin(playlist: SpotifyPlaylist) {
+    const pin = !pinnedIds.includes(playlist.id);
+    try {
+      pinnedIds = await setPlaylistPinned(playlist.id, pin);
+      await loadPlaylists(true, false);
+    } catch (e) {
+      playlistsError = String(e);
+    }
+  }
+
   async function playPlaylist(playlist: SpotifyPlaylist) {
     playingPlaylistId = playlist.id;
     try {
@@ -245,8 +321,6 @@
       } else {
         await executeActionValue("spotify.playPlaylist", playlist.uri);
       }
-      selectedPlaylistId = playlist.id;
-      window.localStorage.setItem(LAST_PLAYLIST_KEY, playlist.id);
       window.dispatchEvent(
         new CustomEvent("astrodeck-action-executed", {
           detail: { action: "spotify.playPlaylist", label: playlist.name },
@@ -284,6 +358,7 @@
             {playlistsTotal > 0
               ? `${playlistsTotal} playlist${playlistsTotal === 1 ? "" : "s"}`
               : "Choose a playlist to play"}
+            · Press and hold a playlist to pin it
           </p>
         </div>
         <button type="button" class="playlist-close" aria-label="Close playlists" onclick={close}>
@@ -327,12 +402,19 @@
         {/if}
         <div class="playlist-list" bind:this={playlistListEl} onscroll={maybeLoadMore}>
           {#each visiblePlaylists as playlist (playlist.id)}
+            <div class="playlist-row">
             <button
               type="button"
               class="playlist-card"
-              class:playlist-card--selected={selectedPlaylistId === playlist.id}
+              class:playlist-card--selected={currentPlaylistId === playlist.id}
               disabled={playingPlaylistId === playlist.id}
-              onclick={() => void playPlaylist(playlist)}
+              onclick={() => pressPlaylist(playlist)}
+              onpointerdown={(event) => startHold(event, playlist)}
+              onpointermove={moveHold}
+              onpointerup={endHold}
+              onpointerleave={endHold}
+              onpointercancel={endHold}
+              oncontextmenu={(event) => event.preventDefault()}
             >
               <span class="playlist-card-art-wrap">
                 {#if playlist.imageUrl}
@@ -340,7 +422,7 @@
                 {:else}
                   <span class="playlist-art playlist-art-fallback" aria-hidden="true">♪</span>
                 {/if}
-                {#if selectedPlaylistId === playlist.id}
+                {#if currentPlaylistId === playlist.id}
                   <span class="playlist-now-playing">
                     <span class="playlist-equalizer" aria-hidden="true"><i></i><i></i><i></i></span>
                     Now playing
@@ -354,10 +436,27 @@
                   track{playlist.trackCount === 1 ? "" : "s"}
                 </em>
               </span>
-              <span class="playlist-play">
-                {playingPlaylistId === playlist.id ? "Starting…" : selectedPlaylistId === playlist.id ? "Selected" : "Play"}
-              </span>
+              {#if playingPlaylistId === playlist.id}
+                <span class="playlist-play">Starting…</span>
+              {/if}
             </button>
+            {#if pinnedIds.includes(playlist.id)}
+            <button
+              type="button"
+              class="playlist-pin"
+              aria-label={`Unpin ${playlist.name}`}
+              title="Unpin"
+              onclick={() => void togglePin(playlist)}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M16 3a1 1 0 0 1 .7 1.7L15.4 6l1.6 5.2 2 1.8a1 1 0 0 1-.7 1.7H13v5.3a1 1 0 0 1-2 0v-5.3H5.7a1 1 0 0 1-.7-1.7l2-1.8L8.6 6 7.3 4.7A1 1 0 0 1 8 3h8Z"
+                />
+              </svg>
+            </button>
+            {/if}
+            </div>
           {/each}
           {#if playlistsLoadingMore}
             <p class="playlist-loading-more">
@@ -389,7 +488,8 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
-    padding: 28px 32px;
+    /* Keep clear of the side menu, which sits on top of the left edge. */
+    padding: 28px 32px 28px calc(var(--side-inset, 0px) + 12px);
     background:
       radial-gradient(circle at 10% 0%, rgba(29, 185, 84, 0.12), transparent 32%),
       #141414;
@@ -475,6 +575,45 @@
 
   .playlist-list::-webkit-scrollbar-thumb:hover {
     background: #aab4c0;
+  }
+
+  .playlist-row {
+    position: relative;
+    display: flex;
+    min-width: 0;
+  }
+
+  .playlist-pin {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    z-index: 2;
+    display: grid;
+    width: 46px;
+    height: 46px;
+    place-items: center;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.58);
+    color: rgba(255, 255, 255, 0.78);
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .playlist-pin svg {
+    width: 24px;
+    height: 24px;
+    transform: rotate(35deg);
+  }
+
+  .playlist-pin:active {
+    background: rgba(0, 0, 0, 0.8);
+  }
+
+  .playlist-pin {
+    background: #1db954;
+    color: #04130a;
   }
 
   .playlist-card {

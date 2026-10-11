@@ -120,7 +120,8 @@
     padding: 18px 12px;
     border: none;
     border-radius: 0;
-    background: transparent;
+    /* Slightly see-through when idle; the full color shows on hover or touch. */
+    background: rgba(17, 17, 19, 0.42);
     box-shadow: none;
     transition: background 0.4s ease, box-shadow 0.4s ease;
   }
