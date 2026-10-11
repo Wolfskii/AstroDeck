@@ -2883,6 +2883,11 @@
     pointer-events: none;
   }
 
+  /* Keep websites clear of the 120px side nav so it never covers their left-edge controls. */
+  .app.has-side-nav .kept-web {
+    left: 120px;
+  }
+
   .kept-web-on {
     z-index: 2;
     visibility: visible;

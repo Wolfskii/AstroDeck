@@ -17,9 +17,41 @@
 
   const apps = $derived(BUILTIN_APPS.filter((item) => !disabledApps.includes(item.id)));
   const websites = $derived(customViews.filter((item) => !disabledApps.includes(item.id)));
+
+  // Touch taps leave CSS :hover stuck, so the expanded background is driven by
+  // pointer events: mouse hover while inside, touch for a short time after a tap.
+  const TOUCH_OPEN_MS = 2500;
+  let mouseInside = $state(false);
+  let touchOpen = $state(false);
+  let touchTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function onPointerEnter(event: PointerEvent) {
+    if (event.pointerType !== "touch") mouseInside = true;
+  }
+
+  function onPointerLeave() {
+    mouseInside = false;
+  }
+
+  function onPointerDown(event: PointerEvent) {
+    if (event.pointerType !== "touch") return;
+    touchOpen = true;
+    clearTimeout(touchTimer);
+    touchTimer = setTimeout(() => (touchOpen = false), TOUCH_OPEN_MS);
+  }
+
+  $effect(() => () => clearTimeout(touchTimer));
 </script>
 
-<nav class="side-nav" aria-label="Apps">
+<nav
+  class="side-nav"
+  class:open={mouseInside || touchOpen}
+  class:mouse={mouseInside}
+  aria-label="Apps"
+  onpointerenter={onPointerEnter}
+  onpointerleave={onPointerLeave}
+  onpointerdown={onPointerDown}
+>
   <div class="side-nav-views">
     {#each apps as item (item.id)}
       <button
@@ -93,7 +125,7 @@
     transition: background 0.4s ease, box-shadow 0.4s ease;
   }
 
-  .side-nav:hover {
+  .side-nav.open {
     background: #111113;
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
     transition: background 0.18s ease, box-shadow 0.18s ease;
@@ -135,12 +167,14 @@
     height: 48px;
   }
 
-  .side-nav-btn:hover {
+  .side-nav.mouse .side-nav-btn:hover,
+  .side-nav-btn:active {
     background: rgba(255, 255, 255, 0.08);
   }
 
   .side-nav-btn.active,
-  .side-nav-btn.active:hover {
+  .side-nav.mouse .side-nav-btn.active:hover,
+  .side-nav-btn.active:active {
     background: transparent;
     color: var(--nav-accent);
     box-shadow: none;
