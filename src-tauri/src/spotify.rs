@@ -3811,8 +3811,82 @@ pub fn list_add_playlists(
             is_current,
         });
     }
-    items.sort_by_key(|playlist| (!playlist.is_current, !playlist.contains_track, playlist.name.clone()));
+    items.extend(liked_add_entry(
+        spotify,
+        track_id,
+        current_id.as_deref() == Some(LIKED_SONGS_ID),
+    ));
+    // Liked Songs leads its group, like it does in Spotify's own library.
+    items.sort_by_key(|playlist| {
+        (
+            !playlist.is_current,
+            !playlist.contains_track,
+            playlist.id != LIKED_SONGS_ID,
+            playlist.name.clone(),
+        )
+    });
     Ok(items)
+}
+
+/// Liked Songs as a row of the add-to-playlist menu. It is a library collection rather than a
+/// playlist, so a song is saved to it the same way the heart button does it.
+fn liked_add_entry(
+    spotify: &SpotifyState,
+    track_id: &str,
+    is_current: bool,
+) -> Option<SpotifyAddPlaylist> {
+    if !has_scope(spotify, "user-library-read").unwrap_or(false) {
+        return None;
+    }
+    let contains_track = if track_id.is_empty() {
+        false
+    } else if uses_web_api(spotify) {
+        resolve_saved_track_state(spotify, track_id)
+    } else {
+        resolve_official_saved_state(spotify, track_id, false).unwrap_or(false)
+    };
+    Some(SpotifyAddPlaylist {
+        id: LIKED_SONGS_ID.to_string(),
+        name: "Liked Songs".to_string(),
+        uri: LIKED_SONGS_URI.to_string(),
+        image_url: Some(LIKED_SONGS_IMAGE.to_string()),
+        track_count: liked_total(spotify).unwrap_or(0),
+        contains_track,
+        is_current,
+    })
+}
+
+fn set_liked_songs_track(spotify: &SpotifyState, track_id: &str, add: bool) -> Result<(), String> {
+    if uses_web_api(spotify) {
+        ensure_scope(spotify, "user-library-modify")?;
+        apply_track_saved_state(spotify, track_id, add)?;
+        publish_status(spotify);
+    } else {
+        apply_official_track_saved_state(spotify, track_id, add)?;
+    }
+    update_cached_liked_track(spotify, track_id, add);
+    Ok(())
+}
+
+/// Keeps the cached Liked Songs in step after a song was saved or removed here.
+fn update_cached_liked_track(spotify: &SpotifyState, track_id: &str, saved: bool) {
+    let mut cache = spotify.liked_songs.lock().unwrap();
+    let total = match cache.ids.as_mut() {
+        Some((_, ids)) => {
+            let mut updated = (**ids).clone();
+            updated.retain(|id| id != track_id);
+            if saved {
+                // The list is newest first.
+                updated.insert(0, track_id.to_string());
+            }
+            let total = updated.len() as u32;
+            *ids = Arc::new(updated);
+            Some((SystemTime::now(), total))
+        }
+        // Nothing cached to adjust: the count is looked up again when it is next needed.
+        None => None,
+    };
+    cache.total = total;
 }
 
 pub fn set_playlist_track(
@@ -3821,6 +3895,10 @@ pub fn set_playlist_track(
     track_id: &str,
     add: bool,
 ) -> Result<Vec<SpotifyAddPlaylist>, String> {
+    if playlist_id == LIKED_SONGS_ID {
+        set_liked_songs_track(spotify, track_id, add)?;
+        return list_add_playlists(spotify, track_id);
+    }
     if uses_web_api(spotify) {
         web_set_playlist_track(spotify, playlist_id, track_id, add)?;
     } else {
@@ -4513,6 +4591,37 @@ mod tests {
         config.auth_mode = SpotifyAuthMode::Custom;
         drop(config);
         assert!(uses_web_api(&spotify));
+    }
+
+    #[test]
+    fn liked_songs_cache_follows_saves_and_removals() {
+        let spotify = SpotifyState::default();
+        spotify.liked_songs.lock().unwrap().ids = Some((
+            SystemTime::now(),
+            Arc::new(vec!["b".to_string(), "c".to_string()]),
+        ));
+
+        update_cached_liked_track(&spotify, "a", true);
+        update_cached_liked_track(&spotify, "a", true);
+        {
+            let cache = spotify.liked_songs.lock().unwrap();
+            assert_eq!(cache.ids.as_ref().unwrap().1.as_slice(), ["a", "b", "c"]);
+            assert_eq!(cache.total.unwrap().1, 3);
+        }
+
+        update_cached_liked_track(&spotify, "b", false);
+        let cache = spotify.liked_songs.lock().unwrap();
+        assert_eq!(cache.ids.as_ref().unwrap().1.as_slice(), ["a", "c"]);
+        assert_eq!(cache.total.unwrap().1, 2);
+    }
+
+    #[test]
+    fn liked_songs_total_is_looked_up_again_when_nothing_is_cached() {
+        let spotify = SpotifyState::default();
+        spotify.liked_songs.lock().unwrap().total = Some((SystemTime::now(), 9));
+
+        update_cached_liked_track(&spotify, "a", true);
+        assert!(spotify.liked_songs.lock().unwrap().total.is_none());
     }
 
     #[test]
