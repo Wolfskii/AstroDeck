@@ -258,6 +258,15 @@ fn is_version_newer(candidate: &str, current: &str) -> bool {
     }
 }
 
+/// Last path segment of `url` if it looks like a real file name (has an extension).
+fn installer_file_name(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let segment = parsed.path_segments()?.last()?;
+    let name = Path::new(segment).file_name()?.to_str()?;
+    Path::new(name).extension()?;
+    Some(name.to_string())
+}
+
 fn download_installer(
     client: &reqwest::blocking::Client,
     download_url: &str,
@@ -273,12 +282,11 @@ fn download_installer(
         ));
     }
 
-    let file_name = response
-        .url()
-        .path_segments()
-        .and_then(|segments| segments.last())
-        .map(str::to_string)
-        .filter(|name| !name.is_empty())
+    // Name the file from the original URL, not `response.url()`: GitHub redirects
+    // release assets to a CDN URL whose last segment is a bare UUID, which would
+    // leave the installer without an extension (Windows can't open/run it).
+    let file_name = installer_file_name(download_url)
+        .or_else(|| installer_file_name(response.url().as_str()))
         .unwrap_or_else(|| "AstroDeck-update.bin".to_string());
 
     let target_dir = std::env::temp_dir().join("AstroDeck-update");
@@ -448,6 +456,23 @@ mod tests {
         assert_eq!(
             pick_release_candidate(&releases, "0.1.4-1").map(|r| r.tag_name.as_str()),
             Some("v0.1.5")
+        );
+    }
+
+    #[test]
+    fn installer_file_name_ignores_extensionless_cdn_redirect() {
+        assert_eq!(
+            installer_file_name(
+                "https://github.com/Wolfskii/AstroDeck/releases/download/v0.1.24/installer-AstroDeck_0.1.24_x64-setup.exe"
+            )
+            .as_deref(),
+            Some("installer-AstroDeck_0.1.24_x64-setup.exe")
+        );
+        assert_eq!(
+            installer_file_name(
+                "https://release-assets.githubusercontent.com/github-production-release-asset/1180756466/c952eaec-993f-402d-8291-1f36b466158f?sp=r"
+            ),
+            None
         );
     }
 
