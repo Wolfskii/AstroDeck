@@ -7,8 +7,9 @@
   import { Menu } from "@tauri-apps/api/menu";
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import ClockWeatherView from "./components/ClockWeatherView.svelte";
+  import HomeView from "./components/HomeView.svelte";
   import PerformanceView from "./components/PerformanceView.svelte";
+  import AiStatusView from "./components/AiStatusView.svelte";
   import WeatherView from "./components/WeatherView.svelte";
   import DeckGrid from "./components/DeckGrid.svelte";
   import MediaPlayerView from "./components/MediaPlayerView.svelte";
@@ -88,7 +89,7 @@
   import { hydrateSceneBackground, sceneBackgroundId } from "./stores/appearance";
   import { sceneShaderColors, sceneShaderImage } from "./stores/sceneVisual";
   import { clockBgColor, clockBgColorCustom, clockDigitColor, loadClockSettings } from "./stores/clock";
-  import { performanceOpen, weatherDetailOpen } from "./stores/navigation";
+  import { aiStatusOpen, performanceOpen, weatherDetailOpen } from "./stores/navigation";
   import { startWeatherUpdates } from "./stores/weather";
 
   type SpotifyStatus = import("./services/api").SpotifyStatus;
@@ -126,7 +127,7 @@
   const showGlobalSceneBackground = $derived(
     !isSettingsWindow &&
       usesFullViewBackground($sceneBackgroundId) &&
-      !(viewMode === "deck" && !$performanceOpen && !$weatherDetailOpen && activeCustomViewId)
+      !(viewMode === "deck" && !$performanceOpen && !$aiStatusOpen && !$weatherDetailOpen && activeCustomViewId)
   );
   const showLogsPanel = $derived(isSettingsWindow && showSettingsTerminal);
   let logStatus = $state<"connecting" | "connected" | "disconnected">("connecting");
@@ -351,6 +352,7 @@
       !isSettingsWindow &&
       ($weatherDetailOpen ||
         $performanceOpen ||
+        $aiStatusOpen ||
         activeCustomViewId !== null ||
         currentMediaView !== null ||
         sceneId === "teams" ||
@@ -1488,6 +1490,8 @@
         ? activeCustomViewId
         : $performanceOpen
         ? "performance"
+        : $aiStatusOpen
+        ? "aiStatus"
         : $weatherDetailOpen
           ? "weather"
           : sceneId
@@ -1499,12 +1503,15 @@
     customViews.filter((view) => keptWebViewIds.includes(view.id))
   );
   const activeWebViewId = $derived(
-    viewMode === "deck" && !$performanceOpen && !$weatherDetailOpen ? activeCustomViewId : null
+    viewMode === "deck" && !$performanceOpen && !$aiStatusOpen && !$weatherDetailOpen
+      ? activeCustomViewId
+      : null
   );
 
   function closeWeatherToHome() {
     viewMode = "deck";
     performanceOpen.set(false);
+    aiStatusOpen.set(false);
     if (sceneId === "clock") {
       weatherDetailOpen.set(false);
       return;
@@ -1522,12 +1529,16 @@
     if (activeCustomViewId && !appEnabled(activeCustomViewId)) activeCustomViewId = null;
     if ($weatherDetailOpen && !appEnabled("weather")) weatherDetailOpen.set(false);
     if ($performanceOpen && !appEnabled("performance")) performanceOpen.set(false);
-    const shown = activeCustomViewId ?? ($weatherDetailOpen ? "weather" : sceneId);
+    if ($aiStatusOpen && !appEnabled("aiStatus")) aiStatusOpen.set(false);
+    const shown =
+      activeCustomViewId ??
+      ($weatherDetailOpen ? "weather" : $aiStatusOpen ? "aiStatus" : $performanceOpen ? "performance" : sceneId);
     if (appEnabled(shown)) return;
     if (shown !== "clock" && appEnabled("clock")) {
       activeCustomViewId = null;
       weatherDetailOpen.set(false);
       performanceOpen.set(false);
+      aiStatusOpen.set(false);
       sceneId = "clock";
       selectScene("clock");
       return;
@@ -1539,6 +1550,7 @@
     if (!customViews.some((view) => view.id === id) || !appEnabled(id)) return;
     weatherDetailOpen.set(false);
     performanceOpen.set(false);
+    aiStatusOpen.set(false);
     viewMode = "deck";
     if (!keptWebViewIds.includes(id)) keptWebViewIds = [...keptWebViewIds, id];
     activeCustomViewId = id;
@@ -1571,6 +1583,7 @@
     if (id === "settings") {
       weatherDetailOpen.set(false);
       performanceOpen.set(false);
+      aiStatusOpen.set(false);
       viewMode = "settings";
       return;
     }
@@ -1581,12 +1594,21 @@
     activeCustomViewId = null;
     if (id === "performance") {
       weatherDetailOpen.set(false);
+      aiStatusOpen.set(false);
       performanceOpen.set(true);
+      viewMode = "deck";
+      return;
+    }
+    if (id === "aiStatus") {
+      weatherDetailOpen.set(false);
+      performanceOpen.set(false);
+      aiStatusOpen.set(true);
       viewMode = "deck";
       return;
     }
     if (id === "weather") {
       performanceOpen.set(false);
+      aiStatusOpen.set(false);
       weatherDetailOpen.set(true);
       viewMode = "deck";
       return;
@@ -1597,6 +1619,7 @@
     }
     weatherDetailOpen.set(false);
     performanceOpen.set(false);
+    aiStatusOpen.set(false);
     selectScene(id);
   }
 
@@ -1895,6 +1918,7 @@
         if (isTauri) {
           weatherDetailOpen.set(false);
           performanceOpen.set(false);
+          aiStatusOpen.set(false);
           viewMode = "settings";
           const win = getCurrentWindow();
           if (!(await win.isVisible())) {
@@ -2599,6 +2623,8 @@
         <!-- The website stays mounted in .kept-web so leaving and returning does not reload it. -->
       {:else if $performanceOpen}
         <PerformanceView />
+      {:else if $aiStatusOpen}
+        <AiStatusView />
       {:else if $weatherDetailOpen}
         <WeatherView />
       {:else if loading}
@@ -2721,7 +2747,7 @@
           useLyricsFallback={isYouTubeMusicScene}
         />
       {:else if sceneId === "clock"}
-        <ClockWeatherView
+        <HomeView
           nowPlaying={homeNowPlaying}
           weatherEnabled={appEnabled("weather")}
           onOpenPlaying={(sceneIdToOpen) => selectScene(sceneIdToOpen)}

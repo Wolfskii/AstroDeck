@@ -9,7 +9,14 @@
   } from "../stores/clock";
   import { weatherDetailOpen } from "../stores/navigation";
   import { weatherSnapshot, weatherStatus } from "../stores/weather";
-  import { sceneBackgroundId } from "../stores/appearance";
+  import { audioVisualizerEnabled, sceneBackgroundId } from "../stores/appearance";
+  import {
+    acquireOsAudioFrames,
+    getOsAudioFrame,
+    releaseOsAudioFrames,
+    sampleBand,
+    type OsAudioFrame,
+  } from "../lib/osAudioViz";
   import { usesFullViewBackground } from "../lib/sceneBackgrounds";
   import { weatherIconName } from "../services/weather";
   import { executeAction } from "../services/api";
@@ -36,28 +43,45 @@
   );
 
   let now = $state(new Date());
-  let wavePhase = $state(0);
   const showShader = $derived(usesFullViewBackground($sceneBackgroundId));
 
   const parts = $derived(clockParts(now));
   const homeDate = $derived(formatHomeDate(now));
   let timeEl = $state<HTMLParagraphElement | null>(null);
   let dateEdge = $state(0);
-  const wavePoints = $derived.by(() => {
-    const count = 56;
+  const WAVE_SEGMENTS = 56;
+  // Smoothed loudness per point, so the line rises quickly on a hit and settles back gently.
+  const waveLevels = new Array<number>(WAVE_SEGMENTS + 1).fill(0.84);
+
+  /**
+   * One frame of the line. With speaker analysis the height at each point follows the song's
+   * frequency bands (bass in the middle, highs toward the edges); without it the line keeps a
+   * steady, gentle movement.
+   */
+  function renderWave(phase: number, audio: OsAudioFrame | null): string {
     const points: string[] = [];
-    for (let index = 0; index <= count; index += 1) {
-      const x = (index / count) * 100;
-      const t = wavePhase + index * 0.62;
-      const y =
-        12 +
-        Math.sin(t) * 6.4 +
-        Math.sin(t * 2.15 + 0.8) * 3.1 +
-        Math.sin(t * 0.45) * 1.4;
+    for (let index = 0; index <= WAVE_SEGMENTS; index += 1) {
+      const x = (index / WAVE_SEGMENTS) * 100;
+      const fromCenter = Math.abs(index - WAVE_SEGMENTS / 2) / (WAVE_SEGMENTS / 2);
+      let target = 0.84;
+      if (audio) {
+        const band = sampleBand(audio.bands, fromCenter, 2) ?? 0;
+        target = Math.min(1, band * 1.1 + audio.beat * 0.25);
+      }
+      const level = waveLevels[index];
+      waveLevels[index] = level + (target - level) * (target > level ? 0.5 : 0.16);
+      const scale = 0.2 + waveLevels[index] * 0.95;
+      const t = phase + index * 0.62;
+      const wave =
+        Math.sin(t) * 6.4 + Math.sin(t * 2.15 + 0.8) * 3.1 + Math.sin(t * 0.45) * 1.4;
+      const y = Math.min(23, Math.max(1, 12 + wave * scale));
       points.push(`${x.toFixed(2)},${y.toFixed(2)}`);
     }
     return points.join(" ");
-  });
+  }
+
+  let wavePoints = $state(renderWave(0, null));
+  let wavePhase = 0;
 
   $effect(() => {
     const timer = window.setInterval(() => {
@@ -93,13 +117,29 @@
 
   $effect(() => {
     if (!nowPlaying?.playing) return;
+    // Speaker analysis only runs while "React to system audio" is on.
+    let acquired = false;
+    const stopWatching = audioVisualizerEnabled.subscribe((enabled) => {
+      if (enabled && !acquired) {
+        acquireOsAudioFrames();
+        acquired = true;
+      } else if (!enabled && acquired) {
+        releaseOsAudioFrames();
+        acquired = false;
+      }
+    });
     let frame = 0;
     const tick = () => {
       wavePhase += 0.11;
+      wavePoints = renderWave(wavePhase, acquired ? getOsAudioFrame() : null);
       frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(frame);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      stopWatching();
+      if (acquired) releaseOsAudioFrames();
+    };
   });
 
   function clockParts(date: Date): { hours: string; minutes: string; meridian: string } {

@@ -175,6 +175,10 @@ pub fn handle(command: &str, spotify: &crate::spotify::SpotifyState) -> Result<(
         }
         "togglePlay" | "nextTrack" | "prevTrack" => {
             if !crate::spotify::uses_web_api(spotify) {
+                // Music playing on another Spotify device (the Spotify app, a phone) is steered there.
+                if let Some(result) = crate::spotify::try_remote_transport(spotify, command) {
+                    return result;
+                }
                 crate::spotify_desktop::handle_transport(spotify, command)?;
                 log::info!("Spotify: {command} via AstroDeck player");
                 return Ok(());

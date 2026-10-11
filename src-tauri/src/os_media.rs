@@ -762,7 +762,7 @@ mod win {
             return (None, None);
         };
         let start = timeline.StartTime().ok().map(timespan_ms).unwrap_or(0);
-        let progress = timeline
+        let mut progress = timeline
             .Position()
             .ok()
             .map(timespan_ms)
@@ -773,6 +773,30 @@ mod win {
             .map(timespan_ms)
             .map(|end| (end - start).max(0))
             .filter(|value| *value > 0);
+        // Players only refresh the position now and then. While playing, the true position is
+        // that value plus the time since it was written.
+        let playing = session
+            .GetPlaybackInfo()
+            .ok()
+            .and_then(|info| info.PlaybackStatus().ok())
+            == Some(GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing);
+        if let (true, Some(position), Some(updated)) = (
+            playing,
+            progress,
+            timeline.LastUpdatedTime().ok().map(|time| time.UniversalTime),
+        ) {
+            // UniversalTime counts 100 ns ticks since 1601; Unix time starts 11,644,473,600 s later.
+            const EPOCH_GAP_TICKS: i64 = 116_444_736_000_000_000;
+            let now_ticks = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| (elapsed.as_nanos() / 100) as i64 + EPOCH_GAP_TICKS)
+                .unwrap_or(0);
+            let elapsed_ms = (now_ticks - updated) / 10_000;
+            if updated > 0 && (0..12 * 3_600_000).contains(&elapsed_ms) {
+                let extrapolated = position + elapsed_ms;
+                progress = Some(duration.map_or(extrapolated, |end| extrapolated.min(end)));
+            }
+        }
         (progress, duration)
     }
 

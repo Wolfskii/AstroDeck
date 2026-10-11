@@ -41,6 +41,75 @@ struct Live {
     last_emit: Mutex<Instant>,
 }
 
+/// Counts bytes as they move and publishes the running speed, so the gauge follows the
+/// transfer instead of jumping when a whole request finishes.
+#[derive(Clone)]
+struct Meter {
+    live: std::sync::Arc<Live>,
+    app: tauri::AppHandle,
+    id: String,
+    phase: String,
+    quality: Option<PingStats>,
+    other: Option<f64>,
+}
+
+impl Meter {
+    fn add(&self, bytes: u64) {
+        self.live.bytes.fetch_add(bytes, Ordering::Relaxed);
+        let mut last = self.live.last_emit.lock().unwrap();
+        if last.elapsed() < Duration::from_millis(180) {
+            return;
+        }
+        *last = Instant::now();
+        drop(last);
+        let rate = mbps(self.live.bytes.load(Ordering::Relaxed), self.live.started);
+        let (down, up) = if self.phase == "upload" {
+            (self.other, Some(rate))
+        } else {
+            (Some(rate), None)
+        };
+        emit_phase(
+            &self.app,
+            &self.id,
+            &self.phase,
+            self.quality,
+            self.quality.map(|value| value.ping_ms),
+            down,
+            up,
+        );
+    }
+}
+
+/// Zero bytes, counted into the meter as the HTTP client pulls them.
+struct UploadBody {
+    left: u64,
+    meter: Meter,
+}
+
+impl Read for UploadBody {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let count = (buf.len() as u64).min(self.left) as usize;
+        buf[..count].fill(0);
+        self.left -= count as u64;
+        if count > 0 {
+            self.meter.add(count as u64);
+        }
+        Ok(count)
+    }
+}
+
+const UPLOAD_CHUNK: u64 = 1_000_000;
+
+fn upload_body(meter: &Meter) -> reqwest::blocking::Body {
+    reqwest::blocking::Body::sized(
+        UploadBody {
+            left: UPLOAD_CHUNK,
+            meter: meter.clone(),
+        },
+        UPLOAD_CHUNK,
+    )
+}
+
 fn flags() -> &'static Mutex<std::collections::HashMap<String, std::sync::Arc<AtomicBool>>> {
     static FLAGS: OnceLock<Mutex<std::collections::HashMap<String, std::sync::Arc<AtomicBool>>>> =
         OnceLock::new();
@@ -148,12 +217,12 @@ fn run_fast(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> Result<(), S
         None,
         None,
     );
-    let down = transfer(app, id, flag, "download", Some(quality), None, 3, |until| {
+    let down = transfer(app, id, flag, "download", Some(quality), None, 3, |until, meter| {
         let response = http
             .get(with_range(&target.url, 25_000_000)?)
             .send()
             .map_err(|_| "Download test failed".to_string())?;
-        read_body(response, until)
+        read_body(response, until, meter)
     })?;
     if cancelled(flag) {
         return Ok(());
@@ -167,17 +236,16 @@ fn run_fast(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> Result<(), S
         Some(down),
         None,
     );
-    let payload = vec![0u8; 1_000_000];
-    let up = transfer(app, id, flag, "upload", Some(quality), Some(down), 2, |_until| {
+    let up = transfer(app, id, flag, "upload", Some(quality), Some(down), 2, |_until, meter| {
         let response = http
             .post(with_range(&target.url, 0)?)
-            .body(payload.clone())
+            .body(upload_body(meter))
             .send()
             .map_err(|_| "Upload test failed".to_string())?;
         if !response.status().is_success() {
             return Err("Upload test failed".to_string());
         }
-        Ok(payload.len() as u64)
+        Ok(())
     })?;
     emit_phase(
         app,
@@ -237,7 +305,7 @@ fn run_bredbandskollen(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> R
         None,
         None,
     );
-    let down = transfer(app, id, flag, "download", Some(quality), None, 3, |until| {
+    let down = transfer(app, id, flag, "download", Some(quality), None, 3, |until, meter| {
         let url = format!(
             "https://{host}/bigfile.bin?t={ticket}&len=8000000&id=1&b={}",
             rand_token()
@@ -246,7 +314,7 @@ fn run_bredbandskollen(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> R
             .get(url)
             .send()
             .map_err(|_| "Download test failed".to_string())?;
-        read_body(response, until)
+        read_body(response, until, meter)
     })?;
     if cancelled(flag) {
         return Ok(());
@@ -260,21 +328,20 @@ fn run_bredbandskollen(app: &tauri::AppHandle, id: &str, flag: &AtomicBool) -> R
         Some(down),
         None,
     );
-    let payload = vec![0u8; 1_000_000];
-    let up = transfer(app, id, flag, "upload", Some(quality), Some(down), 2, |_until| {
+    let up = transfer(app, id, flag, "upload", Some(quality), Some(down), 2, |_until, meter| {
         let url = format!(
             "https://{host}/cgi/upload.cgi?t={ticket}&id=1&b={}",
             rand_token()
         );
         let response = http
             .post(url)
-            .body(payload.clone())
+            .body(upload_body(meter))
             .send()
             .map_err(|_| "Upload test failed".to_string())?;
         if !response.status().is_success() {
             return Err("Upload test failed".to_string());
         }
-        Ok(payload.len() as u64)
+        Ok(())
     })?;
     emit_phase(
         app,
@@ -400,14 +467,22 @@ fn transfer(
     quality: Option<PingStats>,
     other: Option<f64>,
     workers: usize,
-    transfer_once: impl Fn(Instant) -> Result<u64, String> + Sync,
+    transfer_once: impl Fn(Instant, &Meter) -> Result<(), String> + Sync,
 ) -> Result<f64, String> {
-    let live = Live {
-        bytes: AtomicU64::new(0),
-        started: Instant::now(),
-        stop: AtomicBool::new(false),
-        last_emit: Mutex::new(Instant::now() - Duration::from_secs(1)),
+    let meter = Meter {
+        live: std::sync::Arc::new(Live {
+            bytes: AtomicU64::new(0),
+            started: Instant::now(),
+            stop: AtomicBool::new(false),
+            last_emit: Mutex::new(Instant::now() - Duration::from_secs(1)),
+        }),
+        app: app.clone(),
+        id: id.to_string(),
+        phase: phase.to_string(),
+        quality,
+        other,
     };
+    let live = &meter.live;
     let error = Mutex::new(None::<String>);
     let until = live.started + MEASURE_FOR;
     std::thread::scope(|scope| {
@@ -416,17 +491,14 @@ fn transfer(
                 if cancelled(flag) || live.stop.load(Ordering::Relaxed) || Instant::now() >= until {
                     return;
                 }
-                match transfer_once(until) {
-                    Ok(bytes) => publish(app, id, phase, quality, other, &live, bytes),
-                    Err(message) => {
-                        let mut slot = error.lock().unwrap();
-                        if slot.is_none() {
-                            *slot = Some(message);
-                        }
-                        drop(slot);
-                        live.stop.store(true, Ordering::Relaxed);
-                        return;
+                if let Err(message) = transfer_once(until, &meter) {
+                    let mut slot = error.lock().unwrap();
+                    if slot.is_none() {
+                        *slot = Some(message);
                     }
+                    drop(slot);
+                    live.stop.store(true, Ordering::Relaxed);
+                    return;
                 }
             });
         }
@@ -439,60 +511,32 @@ fn transfer(
     Ok(mbps(live.bytes.load(Ordering::Relaxed), live.started))
 }
 
-fn publish(
-    app: &tauri::AppHandle,
-    id: &str,
-    phase: &str,
-    quality: Option<PingStats>,
-    other: Option<f64>,
-    live: &Live,
-    bytes: u64,
-) {
-    live.bytes.fetch_add(bytes, Ordering::Relaxed);
-    let mut last = live.last_emit.lock().unwrap();
-    if last.elapsed() < Duration::from_millis(180) {
-        return;
-    }
-    *last = Instant::now();
-    drop(last);
-    let rate = mbps(live.bytes.load(Ordering::Relaxed), live.started);
-    let (down, up) = if phase == "upload" {
-        (other, Some(rate))
-    } else {
-        (Some(rate), None)
-    };
-    emit_phase(
-        app,
-        id,
-        phase,
-        quality,
-        quality.map(|value| value.ping_ms),
-        down,
-        up,
-    );
-}
-
-fn read_body(mut response: reqwest::blocking::Response, until: Instant) -> Result<u64, String> {
+fn read_body(
+    mut response: reqwest::blocking::Response,
+    until: Instant,
+    meter: &Meter,
+) -> Result<(), String> {
     if !response.status().is_success() {
         return Err("Download test failed".to_string());
     }
     let mut buf = [0u8; 64 * 1024];
     let mut total = 0u64;
     if Instant::now() >= until {
-        return Ok(0);
+        return Ok(());
     }
     loop {
         match response.read(&mut buf) {
-            Ok(0) => return Ok(total),
+            Ok(0) => return Ok(()),
             Ok(read) => {
                 total += read as u64;
+                meter.add(read as u64);
                 if Instant::now() >= until {
-                    return Ok(total);
+                    return Ok(());
                 }
             }
             Err(_) => {
                 if total > 0 {
-                    return Ok(total);
+                    return Ok(());
                 }
                 return Err("Download test failed".to_string());
             }

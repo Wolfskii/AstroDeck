@@ -6,7 +6,7 @@ The sidebar apps are the screens people use. Plugin layouts still describe butto
 
 | Screen | How it is built |
 |--------|-----------------|
-| Home | `ClockWeatherView`. Not a button grid. Clock, date, weather, and the current track. |
+| Home | `HomeView`. Not a button grid. Clock, date, weather, and the current track. |
 | Spotify, YouTube Music, system media | `MediaPlayerView` when the plugin `view.type` is `mediaPlayer`. |
 | Teams | `TeamsScene` from the Teams button layout. |
 | VS Code | `VsCodeScene` from the VS Code button layout. |

@@ -24,6 +24,7 @@
     onSetEnabled?: (id: string, enabled: boolean) => Promise<void>;
   } = $props();
 
+  let formOpen = $state(false);
   let editingId = $state<string | null>(null);
   let name = $state("");
   let url = $state("");
@@ -41,6 +42,7 @@
   });
 
   function resetForm() {
+    formOpen = false;
     editingId = null;
     name = "";
     url = "";
@@ -51,6 +53,7 @@
   }
 
   function editView(view: CustomView) {
+    formOpen = true;
     editingId = view.id;
     name = view.name;
     url = view.url;
@@ -149,6 +152,17 @@
     </ul>
   </div>
 
+  {#if !formOpen}
+    <div class="card add-row">
+      <div class="add-copy">
+        <p class="title">Add a website</p>
+        <p class="desc">Show any site as its own app in the sidebar.</p>
+      </div>
+      <button type="button" class="btn primary" disabled={busy} onclick={() => (formOpen = true)}>
+        + Add website
+      </button>
+    </div>
+  {:else}
   <div class="card">
     <p class="title">{editingId ? "Edit app" : "Add a website"}</p>
     <p class="desc">
@@ -224,14 +238,13 @@
       <p class="error">{formError}</p>
     {/if}
     <div class="actions">
-      {#if editingId}
-        <button type="button" class="btn" disabled={busy} onclick={resetForm}>Cancel</button>
-      {/if}
+      <button type="button" class="btn" disabled={busy} onclick={resetForm}>Cancel</button>
       <button type="button" class="btn primary" disabled={busy} onclick={() => void saveView()}>
         {editingId ? "Save app" : "Add app"}
       </button>
     </div>
   </div>
+  {/if}
 </div>
 
 <style>
@@ -245,6 +258,21 @@
     border: 1px solid var(--md-line);
     border-radius: 10px;
     background: var(--md-surface);
+  }
+
+  .add-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .add-copy .desc {
+    margin-top: 4px;
+  }
+
+  .add-row .btn {
+    flex: 0 0 auto;
   }
 
   .title {

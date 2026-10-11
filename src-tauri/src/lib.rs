@@ -10,6 +10,7 @@ mod prefs;
 mod spotify;
 mod spotify_desktop;
 mod speed_test;
+mod ai_status;
 mod system_stats;
 mod teams_api;
 mod updater;
@@ -598,6 +599,11 @@ pub fn run() {
             log_to_bus,
             get_os_now_playing,
             system_stats::get_system_stats,
+            ai_status::get_ai_sessions,
+            ai_status::get_ai_usage,
+            prefs::set_copilot_token,
+            prefs::get_pinned_playlists,
+            prefs::set_playlist_pinned,
             get_output_volume,
             get_teams_setup_status,
             get_teams_status,

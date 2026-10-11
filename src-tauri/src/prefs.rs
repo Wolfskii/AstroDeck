@@ -63,6 +63,12 @@ pub struct AppPreferences {
     pub custom_views: Vec<CustomViewPref>,
     #[serde(default)]
     pub disabled_apps: Vec<String>,
+    /// Spotify playlists pinned to the top of the playlist browser, newest pin first.
+    #[serde(default)]
+    pub pinned_playlists: Vec<String>,
+    /// GitHub token used only to read Copilot usage. Never sent to the frontend.
+    #[serde(default)]
+    pub copilot_token: String,
 }
 
 impl Default for AppPreferences {
@@ -95,6 +101,8 @@ impl Default for AppPreferences {
             clock_weather_card_color: default_clock_weather_card_color(),
             custom_views: Vec::new(),
             disabled_apps: Vec::new(),
+            pinned_playlists: Vec::new(),
+            copilot_token: String::new(),
         }
     }
 }
@@ -451,7 +459,7 @@ pub fn set_custom_views(
 fn known_app_id(id: &str) -> bool {
     matches!(
         id,
-        "clock" | "spotify" | "youtubeMusic" | "media" | "teams" | "vscode" | "weather" | "performance"
+        "clock" | "spotify" | "youtubeMusic" | "media" | "teams" | "vscode" | "weather" | "performance" | "aiStatus"
     ) || (id.starts_with("view-")
         && (12..=64).contains(&id.len())
         && id
@@ -652,6 +660,56 @@ pub fn set_audio_visualizer_enabled(app: tauri::AppHandle, enabled: bool) -> Res
     crate::audio_viz::sync(&app, enabled);
     let _ = app.emit("audio-visualizer-changed", enabled);
     Ok(())
+}
+
+pub fn pinned_playlists(app: &tauri::AppHandle) -> Vec<String> {
+    preferences_path(app)
+        .and_then(|path| load_preferences(&path))
+        .map(|preferences| preferences.pinned_playlists)
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn get_pinned_playlists(app: tauri::AppHandle) -> Vec<String> {
+    pinned_playlists(&app)
+}
+
+/// Pins or unpins a playlist. Spotify keeps its own pins private, so AstroDeck keeps these itself.
+#[tauri::command]
+pub fn set_playlist_pinned(
+    app: tauri::AppHandle,
+    playlist_id: String,
+    pinned: bool,
+) -> Result<Vec<String>, String> {
+    let id = playlist_id.trim();
+    if id.is_empty() || id.len() > 64 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return Err("That playlist cannot be pinned".to_string());
+    }
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.pinned_playlists.retain(|existing| existing != id);
+    if pinned {
+        preferences.pinned_playlists.insert(0, id.to_string());
+        preferences.pinned_playlists.truncate(100);
+    }
+    save_preferences(&path, &preferences)?;
+    Ok(preferences.pinned_playlists)
+}
+
+pub fn copilot_token(app: &tauri::AppHandle) -> String {
+    preferences_path(app)
+        .and_then(|path| load_preferences(&path))
+        .map(|preferences| preferences.copilot_token)
+        .unwrap_or_default()
+}
+
+/// Stores (or, when empty, clears) the GitHub token used for Copilot usage.
+#[tauri::command]
+pub fn set_copilot_token(app: tauri::AppHandle, token: String) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.copilot_token = token.trim().to_string();
+    save_preferences(&path, &preferences)
 }
 
 #[tauri::command]

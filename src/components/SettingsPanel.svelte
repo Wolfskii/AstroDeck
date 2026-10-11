@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import ReleaseNotes from "./ReleaseNotes.svelte";
   import CustomViewsSettings from "./CustomViewsSettings.svelte";
   import appIconUrl from "../assets/app-icon.png";
@@ -69,6 +70,7 @@
     | "general"
     | "appearance"
     | "performance"
+    | "aiStatus"
     | "clock"
     | "updates"
     | "customViews"
@@ -208,12 +210,41 @@
   } = $props();
 
   let section = $state<SettingsSection>("general");
+
+  let copilotTokenDraft = $state("");
+  let copilotTokenSaved = $state(false);
+  let copilotTokenBusy = $state(false);
+  let copilotTokenMessage = $state("");
+
+  $effect(() => {
+    if (activeSection !== "aiStatus") return;
+    void invoke<{ copilotTokenSaved: boolean }>("get_ai_usage")
+      .then((usage) => (copilotTokenSaved = usage.copilotTokenSaved))
+      .catch(() => {});
+  });
+
+  async function saveCopilotToken(token: string) {
+    copilotTokenBusy = true;
+    try {
+      await invoke("set_copilot_token", { token });
+      copilotTokenSaved = token.trim().length > 0;
+      copilotTokenDraft = "";
+      copilotTokenMessage = copilotTokenSaved ? "Token saved." : "Token removed.";
+      // Drop the cached usage so the AI status app picks up the new token.
+      void invoke("get_ai_usage", { force: true }).catch(() => {});
+    } catch (error) {
+      copilotTokenMessage = `Could not save the token: ${error}`;
+    } finally {
+      copilotTokenBusy = false;
+    }
+  }
   const activeSection = $derived(section);
 
   const titles: Record<SettingsSection, string> = {
     general: "General",
     appearance: "Appearance",
     performance: "Performance",
+    aiStatus: "AI status",
     clock: "Home",
     updates: "Updates",
     customViews: "Apps",
@@ -364,6 +395,20 @@
           />
         </svg>
         Performance
+      </button>
+      <button
+        type="button"
+        class="settings-nav-item"
+        class:active={activeSection === "aiStatus"}
+        onclick={() => (section = "aiStatus")}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M12 2.5a1.1 1.1 0 0 1 1.06.8l1.3 4.34a3.4 3.4 0 0 0 2.3 2.3l4.34 1.3a1.1 1.1 0 0 1 0 2.12l-4.34 1.3a3.4 3.4 0 0 0-2.3 2.3l-1.3 4.34a1.1 1.1 0 0 1-2.12 0l-1.3-4.34a3.4 3.4 0 0 0-2.3-2.3l-4.34-1.3a1.1 1.1 0 0 1 0-2.12l4.34-1.3a3.4 3.4 0 0 0 2.3-2.3l1.3-4.34A1.1 1.1 0 0 1 12 2.5Z"
+          />
+        </svg>
+        AI status
       </button>
       <button
         type="button"
@@ -758,6 +803,58 @@
             {/each}
           </div>
         </div>
+      </div>
+    {:else if activeSection === "aiStatus"}
+      <p class="settings-lead">
+        The AI status app shows running Claude Code sessions and plan usage for Claude and GitHub
+        Copilot. Hide it any time under Apps.
+      </p>
+      <div class="settings-card settings-card-pad">
+        <p class="setting-title">Claude usage</p>
+        <p class="setting-desc">
+          Uses the login Claude Code already keeps on this computer. It is sent only to Anthropic to
+          read your usage. Sign in to Claude Code if no usage shows.
+        </p>
+      </div>
+      <div class="settings-card settings-card-pad">
+        <p class="setting-title">GitHub token for Copilot usage</p>
+        <p class="setting-desc">
+          Paste a GitHub token to show Copilot premium request usage. If you leave this empty and
+          the GitHub CLI (<code>gh</code>) is signed in, its token is used. The token is saved on
+          this computer and never shown again.
+        </p>
+        <div class="settings-field-row">
+          <input
+            id="copilot-token"
+            class="md-input"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder={copilotTokenSaved ? "Token saved. Paste a new one to replace it" : "GitHub token"}
+            bind:value={copilotTokenDraft}
+          />
+          <button
+            type="button"
+            class="md-btn md-btn-primary"
+            onclick={() => void saveCopilotToken(copilotTokenDraft)}
+            disabled={copilotTokenBusy || !copilotTokenDraft.trim()}
+          >
+            {copilotTokenBusy ? "Saving…" : "Save"}
+          </button>
+          {#if copilotTokenSaved}
+            <button
+              type="button"
+              class="md-btn"
+              onclick={() => void saveCopilotToken("")}
+              disabled={copilotTokenBusy}
+            >
+              Remove
+            </button>
+          {/if}
+        </div>
+        {#if copilotTokenMessage}
+          <p class="setting-desc">{copilotTokenMessage}</p>
+        {/if}
       </div>
     {:else if activeSection === "clock"}
       <div class="settings-card">

@@ -307,7 +307,28 @@ pub fn play_context_uri(spotify: &SpotifyState, context_uri: &str) -> Result<(),
     if tracks.is_empty() {
         return Err("This playlist has no playable tracks.".to_string());
     }
+    start_context(spotify, tracks, context_uri)
+}
 
+/// Plays the user's Liked Songs, which is a library collection rather than a playlist.
+pub fn play_liked_songs(spotify: &SpotifyState) -> Result<(), String> {
+    ensure_player(spotify)?;
+    let ids = crate::spotify::liked_track_ids(spotify)?;
+    let tracks: Vec<SpotifyUri> = ids
+        .iter()
+        .filter_map(|id| SpotifyUri::from_uri(&format!("spotify:track:{id}")).ok())
+        .collect();
+    if tracks.is_empty() {
+        return Err("Liked Songs has no playable tracks.".to_string());
+    }
+    start_context(spotify, tracks, crate::spotify::LIKED_SONGS_URI)
+}
+
+fn start_context(
+    spotify: &SpotifyState,
+    tracks: Vec<SpotifyUri>,
+    context_uri: &str,
+) -> Result<(), String> {
     let shuffle = spotify
         .desktop_playback
         .lock()
@@ -1160,13 +1181,10 @@ fn playlist_id_from_uri(uri: &str) -> Option<&str> {
 }
 
 fn page_from_playlists(
-    mut items: Vec<SpotifyPlaylist>,
+    items: Vec<SpotifyPlaylist>,
     offset: u32,
     limit: u32,
 ) -> SpotifyPlaylistPage {
-    // Make playlists created by the authenticated account immediately visible
-    // instead of burying them behind followed playlists and "Load more".
-    items.sort_by_key(|playlist| !playlist.owned);
     let total = items.len() as u32;
     let start = (offset as usize).min(items.len());
     let end = (start + limit as usize).min(items.len());
@@ -1404,7 +1422,11 @@ fn image_url(file_id: &[u8]) -> Option<String> {
 
 pub fn current_playlist_id(spotify: &SpotifyState) -> Option<String> {
     let queue = spotify.desktop_queue.lock().ok()?;
-    playlist_id_from_uri(queue.context_uri()?).map(str::to_string)
+    let uri = queue.context_uri()?;
+    if uri == crate::spotify::LIKED_SONGS_URI {
+        return Some(crate::spotify::LIKED_SONGS_ID.to_string());
+    }
+    playlist_id_from_uri(uri).map(str::to_string)
 }
 
 pub fn current_playlist_contains_track(spotify: &SpotifyState, track_id: &str) -> bool {
@@ -1414,22 +1436,14 @@ pub fn current_playlist_contains_track(spotify: &SpotifyState, track_id: &str) -
     queue.contains_track_id(track_id)
 }
 
-pub fn playlist_contains_track(
+/// Every track id in a playlist, fetched from Spotify.
+pub fn fetch_playlist_track_ids(
     spotify: &SpotifyState,
     playlist_id: &str,
-    track_id: &str,
-) -> Result<bool, String> {
-    if current_playlist_id(spotify).as_deref() == Some(playlist_id) {
-        return Ok(current_playlist_contains_track(spotify, track_id));
-    }
+) -> Result<std::collections::HashSet<String>, String> {
     let session = ensure_session(spotify)?;
-    let context_uri = format!("spotify:playlist:{playlist_id}");
-    let tracks = fetch_context_tracks(&session, &context_uri)?;
-    Ok(tracks.iter().any(|uri| {
-        uri.to_id()
-            .ok()
-            .is_some_and(|id| id.eq_ignore_ascii_case(track_id))
-    }))
+    let tracks = fetch_context_tracks(&session, &format!("spotify:playlist:{playlist_id}"))?;
+    Ok(tracks.iter().filter_map(|uri| uri.to_id().ok()).collect())
 }
 
 pub fn set_playlist_track(
@@ -1652,7 +1666,7 @@ mod tests {
     }
 
     #[test]
-    fn owned_playlists_are_paged_before_followed_playlists() {
+    fn playlists_keep_library_order_when_paged() {
         let playlist = |id: &str, owner: &str| SpotifyPlaylist {
             id: id.to_string(),
             name: id.to_string(),
@@ -1670,7 +1684,7 @@ mod tests {
             0,
             1,
         );
-        assert_eq!(page.items[0].id, "owned");
+        assert_eq!(page.items[0].id, "followed");
         assert_eq!(page.total, 2);
         assert_eq!(page.next_offset, Some(1));
     }

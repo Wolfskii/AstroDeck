@@ -4,7 +4,7 @@
 
 AstroDeck is a free, modern dashboard for your other screen: time, music, and everyday apps, with built-in Spotify and YouTube Music support. Use a mouse or a touchscreen. Built with **Tauri 2** (Rust backend) and **Svelte 5** (TypeScript frontend).
 
-The window is one full-screen dashboard. A left sidebar switches apps: Home, Spotify, YouTube Music, system media, Teams, VS Code, Weather, websites added in Settings, and Settings. Backgrounds draw behind that bar. Each app can be hidden from **Settings → Apps**.
+The window is one full-screen dashboard. A left sidebar switches apps: Home, Spotify, YouTube Music, system media, Teams, VS Code, Weather, Performance, AI status (Claude Code sessions and Claude/Copilot usage), websites added in Settings, and Settings. Backgrounds draw behind that bar. Each app can be hidden from **Settings → Apps**.
 
 ## High-Level System Architecture
 
@@ -57,7 +57,7 @@ flowchart LR
 - **Svelte 5** with runes (`$props`, `$state`, `$derived`)
 - **Vite** for build and dev server
 - **TypeScript** for type safety
-- Components: `SideNav`, `ClockWeatherView`, `MediaPlayerView`, `TeamsScene`, `VsCodeScene`, `WeatherView`, `EmbedView`, `SettingsPanel`
+- Components: `SideNav`, `HomeView`, `MediaPlayerView`, `TeamsScene`, `VsCodeScene`, `WeatherView`, `EmbedView`, `SettingsPanel`
 
 ## Backend Stack
 

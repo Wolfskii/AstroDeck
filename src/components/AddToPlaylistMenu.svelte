@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import {
     addCurrentYouTubeMusicTrackToPlaylist,
     createSpotifyPlaylist,
@@ -45,6 +46,9 @@
   let creating = $state(false);
   let newName = $state("");
   let busyId = $state<string | null>(null);
+  /** Which provider and track `items` belongs to, so a prefetched list can be shown instantly. */
+  let itemsFor = $state<string | null>(null);
+  let loadSeq = 0;
 
   const visible = $derived.by(() => {
     const needle = query.trim().toLowerCase();
@@ -64,9 +68,19 @@
       error = null;
       return;
     }
+    const key = `${provider}:${trackId ?? ""}`;
     trackId;
     currentPlaylistId;
-    void loadItems();
+    // A list prefetched for this song is shown at once and refreshed quietly.
+    const ready = untrack(() => itemsFor === key && items.length > 0);
+    void loadItems(ready);
+  });
+
+  // Look the lists up while the menu is closed, so opening it needs no waiting.
+  $effect(() => {
+    if (open || provider !== "spotify" || !trackId) return;
+    const timer = window.setTimeout(() => void loadItems(true), 1200);
+    return () => window.clearTimeout(timer);
   });
 
   function close() {
@@ -101,24 +115,33 @@
     onMembershipChange?.(next.some((item) => item.isCurrent && item.containsTrack));
   }
 
-  async function loadItems() {
-    loading = true;
-    error = null;
+  async function loadItems(quiet = false) {
+    const seq = ++loadSeq;
+    const key = `${provider}:${trackId ?? ""}`;
+    if (!quiet) {
+      loading = true;
+      error = null;
+    }
     try {
+      let next: PickerItem[];
       if (provider === "spotify") {
         if (!trackId) {
           items = [];
+          itemsFor = null;
           return;
         }
-        items = fromSpotify(await listSpotifyAddPlaylists(trackId));
+        next = fromSpotify(await listSpotifyAddPlaylists(trackId));
       } else {
-        items = fromYouTube(await getYouTubeMusicLibrary(), trackId);
+        next = fromYouTube(await getYouTubeMusicLibrary(), trackId);
       }
+      if (seq !== loadSeq) return;
+      items = next;
+      itemsFor = key;
       publishMembership(items);
     } catch (e) {
-      error = String(e).replace(/^Error:\s*/i, "");
+      if (!quiet && seq === loadSeq) error = String(e).replace(/^Error:\s*/i, "");
     } finally {
-      loading = false;
+      if (!quiet && seq === loadSeq) loading = false;
     }
   }
 
@@ -231,6 +254,7 @@
       {:else if visible.saved.length === 0 && visible.rest.length === 0}
         <p class="add-status">No playlists yet. Create one to save this song.</p>
       {:else}
+        <div class="add-scroll">
         {#if error}
           <p class="add-status add-error">{error}</p>
         {/if}
@@ -294,6 +318,7 @@
             {/each}
           </div>
         {/if}
+        </div>
       {/if}
     </div>
   </div>
@@ -305,14 +330,14 @@
     inset: 0;
     z-index: 60;
     display: grid;
-    place-items: end center;
+    place-items: center;
     padding: 18px;
     background: rgba(0, 0, 0, 0.55);
   }
 
   .add-sheet {
-    width: min(520px, 100%);
-    max-height: min(78vh, 760px);
+    width: min(900px, 100%);
+    max-height: min(94vh, 840px);
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -417,14 +442,24 @@
     color: #071b0d;
   }
 
-  .add-list {
+  /* Both sections scroll together, so neither one is squeezed by the other. */
+  .add-scroll {
     display: flex;
+    flex: 1 1 auto;
     flex-direction: column;
+    gap: 12px;
     min-height: 0;
     overflow: auto;
     padding-right: 8px;
     scrollbar-width: thick;
     scrollbar-color: #77808d #242424;
+  }
+
+  .add-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 2px 14px;
+    flex: 0 0 auto;
   }
 
   .add-row:hover,

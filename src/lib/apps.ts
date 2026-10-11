@@ -4,6 +4,7 @@ export const BUILTIN_APPS = [
   { id: "youtubeMusic", name: "YouTube", color: "#ff0033" },
   { id: "media", name: "System media", color: "#f59e0b" },
   { id: "performance", name: "Performance", color: "#8ec5ff" },
+  { id: "aiStatus", name: "AI status", color: "#d97757" },
   { id: "teams", name: "Teams", color: "#7b83eb" },
   { id: "vscode", name: "VS Code", color: "#3794ff" },
   { id: "weather", name: "Weather", color: "#38bdf8" },
