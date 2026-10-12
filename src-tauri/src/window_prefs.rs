@@ -53,8 +53,9 @@ fn apply_fullscreen(window: &tauri::WebviewWindow, start_fullscreen: bool) {
 /// Hide or restore the OS taskbar button for every AstroDeck window.
 /// The tray icon is unchanged.
 pub fn apply_taskbar_button(window: &tauri::WebviewWindow, hide: bool) {
-    let _ = window.set_skip_taskbar(hide);
+    // Styles first: changing them can bring the button back, and DeleteTab must have the last word.
     no_activate::set_taskbar_button_hidden(window, hide);
+    let _ = window.set_skip_taskbar(hide);
 }
 
 pub fn apply_taskbar_button_all(app: &tauri::AppHandle, hide: bool) {

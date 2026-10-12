@@ -100,15 +100,13 @@ mod platform {
         unsafe {
             let mut style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             // Never use WS_EX_TOOLWINDOW: it removes the window from Alt+Tab as well as the
-            // taskbar. The taskbar button alone is removed by set_skip_taskbar (ITaskbarList
-            // DeleteTab), so here we only make sure no style forces the button or hides the window
-            // from Alt+Tab. Without WS_EX_APPWINDOW an unowned visible window stays in Alt+Tab.
+            // taskbar. The window is WS_EX_NOACTIVATE, and the shell leaves such windows out of
+            // Alt+Tab unless they are WS_EX_APPWINDOW, so that style stays on in both cases. The
+            // taskbar button alone is removed afterwards by set_skip_taskbar (ITaskbarList
+            // DeleteTab), which leaves Alt+Tab alone.
             style &= !WS_EX_TOOLWINDOW;
-            if hidden {
-                style &= !WS_EX_APPWINDOW;
-            } else {
-                style |= WS_EX_APPWINDOW;
-            }
+            style |= WS_EX_APPWINDOW;
+            let _ = hidden;
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style);
             let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED;
             let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, flags);
