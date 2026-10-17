@@ -12,6 +12,8 @@ concurrency:
 
 permissions:
   contents: write
+  # The release job deletes the run's artifacts once they are in the release.
+  actions: write
 
 jobs:
   version:
@@ -228,6 +230,32 @@ jobs:
             dist/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Each develop build is a pre-release with about 230 MB of files. Keep the newest two -dev
+      # pre-releases and delete the older ones (with their tags) so the account's storage does not fill up.
+      - name: Keep only the newest development pre-releases
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: "2"
+        run: |
+          gh release list --limit 200 --json tagName,isPrerelease,createdAt \
+            --jq '.[] | select(.isPrerelease and (.tagName | test("-dev$"))) | "\(.createdAt) \(.tagName)"' \
+            | sort -r | tail -n +$((KEEP + 1)) | awk '{print $2}' | while read -r tag; do
+            gh release delete "$tag" --cleanup-tag --yes && echo "deleted old pre-release $tag"
+          done
+
+      # The builds are in the release now; drop this run's artifacts so they stop counting
+      # against the account's artifact storage.
+      - name: Delete the run's build artifacts
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq '.artifacts[].id' | while read -r id; do
+            gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" >/dev/null && echo "deleted artifact $id"
+          done
 
       - name: Commit version bump
         run: |
