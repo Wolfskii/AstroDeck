@@ -126,6 +126,11 @@
   let appToggleBusyId = $state<string | null>(null);
   let activeCustomViewId = $state<string | null>(null);
   let keptWebViewIds = $state<string[]>([]);
+  // Kept web views unmount after this long out of view, to free their memory.
+  const KEPT_WEB_VIEW_IDLE_MS = 5 * 60 * 1000;
+  const KEPT_WEB_VIEW_SWEEP_MS = 30 * 1000;
+  // Plain map, not state: only read by the sweep timer below.
+  const keptWebViewIdleSince = new Map<string, number>();
   const isSettingsWindow = $derived(!isTauri || viewMode === "settings");
   const showGlobalSceneBackground = $derived(
     !isSettingsWindow &&
@@ -1510,6 +1515,28 @@
       ? activeCustomViewId
       : null
   );
+
+  $effect(() => {
+    const active = activeWebViewId;
+    const now = Date.now();
+    for (const id of keptWebViewIds) {
+      if (id === active) keptWebViewIdleSince.delete(id);
+      else if (!keptWebViewIdleSince.has(id)) keptWebViewIdleSince.set(id, now);
+    }
+  });
+
+  $effect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      const expired = [...keptWebViewIdleSince]
+        .filter(([, since]) => now - since >= KEPT_WEB_VIEW_IDLE_MS)
+        .map(([id]) => id);
+      if (expired.length === 0) return;
+      for (const id of expired) keptWebViewIdleSince.delete(id);
+      keptWebViewIds = keptWebViewIds.filter((id) => !expired.includes(id));
+    }, KEPT_WEB_VIEW_SWEEP_MS);
+    return () => window.clearInterval(timer);
+  });
 
   function closeWeatherToHome() {
     viewMode = "deck";
