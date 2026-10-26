@@ -62,7 +62,9 @@
     checkForAppUpdate,
     downloadAndInstallUpdate,
     getAppVersion,
+    getSkippedUpdateVersion,
     getUpdatePopupsEnabled,
+    setSkippedUpdateVersion,
     setUpdatePopupsEnabled,
     type AppUpdateInfo,
   } from "./services/updater";
@@ -103,6 +105,7 @@
   let appUpdateError = $state<string | null>(null);
   let appVersion = $state("");
   let updatePopupOpen = $state(false);
+  let skippedUpdateVersion = $state<string | null>(null);
   let showUpdatePopups = $state(true);
   let showUpdatePopupsBusy = $state(false);
   const installableUpdate = $derived(
@@ -1769,7 +1772,7 @@
           `Update available: ${update.latestVersion} (current ${update.currentVersion})`,
           "Updater"
         );
-        if (showPopup && showUpdatePopups) {
+        if (showPopup && showUpdatePopups && update.latestVersion !== skippedUpdateVersion) {
           updatePopupOpen = true;
           await revealMainWindow();
           const item = await trayMenu?.get("toggle");
@@ -1783,6 +1786,19 @@
       return null;
     } finally {
       appUpdateChecking = false;
+    }
+  }
+
+  async function skipAppUpdate() {
+    const version = appUpdate?.latestVersion;
+    updatePopupOpen = false;
+    if (!version) return;
+    skippedUpdateVersion = version;
+    try {
+      await setSkippedUpdateVersion(version);
+      logInfo(`Skipping update ${version}`, "Updater");
+    } catch (e) {
+      logError(`Failed to save skipped update: ${String(e)}`, "Updater");
     }
   }
 
@@ -1802,11 +1818,6 @@
       appUpdateError = String(e);
       logError(`Update install failed: ${String(e)}`, "Updater");
     }
-  }
-
-  function openUpdatePopup() {
-    if (!installableUpdate) return;
-    updatePopupOpen = true;
   }
 
   async function onShowUpdatePopupsChange(event: Event) {
@@ -2293,6 +2304,11 @@
           showUpdatePopups = true;
         }
         try {
+          skippedUpdateVersion = await getSkippedUpdateVersion();
+        } catch {
+          skippedUpdateVersion = null;
+        }
+        try {
           showSettingsTerminal = await getShowSettingsTerminal();
         } catch {
           showSettingsTerminal = false;
@@ -2489,56 +2505,7 @@
           <span class="scene-badge">{sceneId}</span>
         {/if}
       </div>
-      {#if isTauri}
-        <div class="app-header-actions">
-          {#if appUpdate?.available}
-            <button
-              type="button"
-              class="header-update-btn"
-              title={appUpdate.latestVersion
-                ? `Update to ${appUpdate.latestVersion}`
-                : "Update available"}
-              aria-label={appUpdate.latestVersion
-                ? `Update to ${appUpdate.latestVersion}`
-                : "Update available"}
-              disabled={appUpdateBusy}
-              onclick={() => openUpdatePopup()}
-            >
-              <svg class="header-update-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M12 4a1 1 0 0 1 1 1v5.59l1.3-1.3a1 1 0 1 1 1.4 1.42l-3 3a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.42l1.3 1.3V5a1 1 0 0 1 1-1zm-7 9a1 1 0 0 1 1 1 7 7 0 0 0 14 0 1 1 0 1 1 2 0 9 9 0 1 1-18 0 1 1 0 0 1 1-1z"
-                />
-              </svg>
-              {#if appUpdate.latestVersion}
-                <span class="header-update-label">{appUpdate.latestVersion}</span>
-              {/if}
-            </button>
-          {/if}
-        </div>
-      {/if}
     </header>
-  {/if}
-
-  {#if isTauri && isImmersiveDeckView && appUpdate?.available}
-    <button
-      type="button"
-      class="update-fab"
-      title={appUpdate.latestVersion ? `Update to ${appUpdate.latestVersion}` : "Update available"}
-      aria-label={appUpdate.latestVersion ? `Update to ${appUpdate.latestVersion}` : "Update available"}
-      disabled={appUpdateBusy}
-      onclick={() => openUpdatePopup()}
-    >
-      <svg class="update-fab-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path
-          fill="currentColor"
-          d="M12 4a1 1 0 0 1 1 1v5.59l1.3-1.3a1 1 0 1 1 1.4 1.42l-3 3a1 1 0 0 1-1.4 0l-3-3a1 1 0 0 1 1.4-1.42l1.3 1.3V5a1 1 0 0 1 1-1zm-7 9a1 1 0 0 1 1 1 7 7 0 0 0 14 0 1 1 0 1 1 2 0 9 9 0 1 1-18 0 1 1 0 0 1 1-1z"
-        />
-      </svg>
-      {#if appUpdate.latestVersion}
-        <span class="update-fab-label">{appUpdate.latestVersion}</span>
-      {/if}
-    </button>
   {/if}
 
   <main class="app-main">
@@ -2864,6 +2831,13 @@
           <button
             type="button"
             class="settings-secondary-btn"
+            onclick={() => void skipAppUpdate()}
+          >
+            Skip this version
+          </button>
+          <button
+            type="button"
+            class="settings-secondary-btn"
             onclick={() => (updatePopupOpen = false)}
           >
             No, later
@@ -2962,70 +2936,6 @@
     align-items: center;
     gap: 12px;
     min-width: 0;
-  }
-
-  .app-header-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-
-  .header-update-btn,
-  .update-fab {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: 1px solid rgba(29, 185, 84, 0.45);
-    background: rgba(29, 185, 84, 0.14);
-    color: #1ed760;
-    cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease;
-  }
-
-  .header-update-btn {
-    padding: 6px 10px;
-    border-radius: 999px;
-    font-size: 0.78rem;
-    font-weight: 700;
-    line-height: 1;
-  }
-
-  .header-update-btn:hover:not(:disabled),
-  .update-fab:hover:not(:disabled) {
-    background: rgba(29, 185, 84, 0.24);
-    border-color: rgba(29, 185, 84, 0.7);
-  }
-
-  .header-update-btn:disabled,
-  .update-fab:disabled {
-    opacity: 0.6;
-    cursor: wait;
-  }
-
-  .header-update-icon,
-  .update-fab-icon {
-    width: 16px;
-    height: 16px;
-    flex-shrink: 0;
-  }
-
-  .header-update-label,
-  .update-fab-label {
-    white-space: nowrap;
-  }
-
-  .update-fab {
-    position: fixed;
-    top: 12px;
-    right: 148px;
-    z-index: 5;
-    padding: 8px 12px;
-    border-radius: 999px;
-    font-size: 0.8rem;
-    font-weight: 700;
-    line-height: 1;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   }
 
   .app-title {

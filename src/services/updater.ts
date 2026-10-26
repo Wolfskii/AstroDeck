@@ -47,6 +47,16 @@ export async function getUpdatePopupsEnabled(): Promise<boolean> {
   return invoke<boolean>("get_update_popups_enabled");
 }
 
+export async function getSkippedUpdateVersion(): Promise<string | null> {
+  if (!isTauri) return null;
+  return invoke<string | null>("get_skipped_update_version");
+}
+
+export async function setSkippedUpdateVersion(version: string | null): Promise<void> {
+  if (!isTauri) return;
+  await invoke("set_skipped_update_version", { version });
+}
+
 export async function setUpdatePopupsEnabled(enabled: boolean): Promise<void> {
   if (!isTauri) return;
   await invoke("set_update_popups_enabled", { enabled });

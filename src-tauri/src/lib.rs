@@ -748,6 +748,8 @@ pub fn run() {
             updater::download_and_install_update,
             prefs::get_update_popups_enabled,
             prefs::set_update_popups_enabled,
+            prefs::get_skipped_update_version,
+            prefs::set_skipped_update_version,
             prefs::get_start_minimized,
             prefs::set_start_minimized,
             prefs::get_hide_taskbar_icon,

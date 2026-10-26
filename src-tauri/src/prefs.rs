@@ -15,6 +15,9 @@ pub struct AppPreferences {
     pub start_fullscreen: bool,
     #[serde(default = "default_show_update_popups")]
     pub show_update_popups: bool,
+    /// Version the user chose to skip in the update popup. Newer versions still prompt.
+    #[serde(default)]
+    pub skipped_update_version: Option<String>,
     #[serde(default = "default_scene_background")]
     pub scene_background: String,
     #[serde(default)]
@@ -78,6 +81,7 @@ impl Default for AppPreferences {
             hide_taskbar_icon: false,
             start_fullscreen: false,
             show_update_popups: default_show_update_popups(),
+            skipped_update_version: None,
             scene_background: default_scene_background(),
             show_settings_terminal: false,
             controls_backdrop: default_controls_backdrop(),
@@ -381,6 +385,22 @@ pub fn set_update_popups_enabled(app: tauri::AppHandle, enabled: bool) -> Result
     let path = preferences_path(&app)?;
     let mut preferences = load_preferences(&path)?;
     preferences.show_update_popups = enabled;
+    save_preferences(&path, &preferences)
+}
+
+#[tauri::command]
+pub fn get_skipped_update_version(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    Ok(load_preferences(&preferences_path(&app)?)?.skipped_update_version)
+}
+
+/// Pass `None` to clear the skip. Stored without a leading `v` so it matches `latestVersion`.
+#[tauri::command]
+pub fn set_skipped_update_version(app: tauri::AppHandle, version: Option<String>) -> Result<(), String> {
+    let path = preferences_path(&app)?;
+    let mut preferences = load_preferences(&path)?;
+    preferences.skipped_update_version = version
+        .map(|v| v.trim().trim_start_matches('v').to_string())
+        .filter(|v| !v.is_empty());
     save_preferences(&path, &preferences)
 }
 
