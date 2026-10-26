@@ -80,7 +80,7 @@ async fn handle_client(
             broadcast_msg = rx.recv() => {
                 match broadcast_msg {
                     Ok(msg) => {
-                        if sender.send(Message::Text(msg.into())).await.is_err() {
+                        if sender.send(Message::Text(msg)).await.is_err() {
                             break;
                         }
                     }
@@ -215,7 +215,7 @@ async fn handle_client(
 async fn send_json<T: Serialize>(sender: &mut WsSender, payload: &T) -> Result<(), String> {
     let text = serde_json::to_string(payload).map_err(|e| e.to_string())?;
     sender
-        .send(Message::Text(text.into()))
+        .send(Message::Text(text))
         .await
         .map_err(|e| e.to_string())
 }

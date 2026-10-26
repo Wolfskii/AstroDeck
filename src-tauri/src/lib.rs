@@ -41,6 +41,12 @@ pub struct AppState {
     pub log_bus: broadcast::Sender<String>,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     pub fn new() -> Self {
         let (log_tx, _) = broadcast::channel(512);
@@ -140,6 +146,18 @@ pub fn launch_spotify_auth(app: &tauri::AppHandle, state: &AppState) -> Result<S
     Ok(auth_url)
 }
 
+/// Plain sync commands run on the main (UI) thread, so commands that wait on the
+/// network go through here to keep the window and tray responsive.
+async fn run_blocking<T, F>(app: tauri::AppHandle, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&AppState) -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || f(&app.state::<AppState>()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[derive(serde::Serialize, Clone)]
 pub struct SceneResponse {
     #[serde(rename = "activeSceneId")]
@@ -229,50 +247,60 @@ fn setup_teams_integration() -> Result<teams_api::TeamsSetupStatus, String> {
 }
 
 #[tauri::command]
-fn get_spotify_status(
+async fn get_spotify_status(
     fresh: Option<bool>,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<spotify::SpotifyStatus, String> {
-    if fresh.unwrap_or(false) {
-        spotify::get_status_fresh(&state.spotify)
-    } else {
-        spotify::get_status(&state.spotify)
-    }
+    run_blocking(app, move |state| {
+        if fresh.unwrap_or(false) {
+            spotify::get_status_fresh(&state.spotify)
+        } else {
+            spotify::get_status(&state.spotify)
+        }
+    })
+    .await
 }
 
 #[tauri::command]
-fn get_lyrics(
+async fn get_lyrics(
     track_id: String,
     title: String,
     artist: String,
     album: Option<String>,
     duration_ms: Option<u64>,
     provider_order: Vec<String>,
+    app: tauri::AppHandle,
 ) -> Result<lyrics::LyricsDocument, String> {
-    lyrics::fetch(
-        &provider_order,
-        &track_id,
-        &title,
-        &artist,
-        album.as_deref(),
-        duration_ms,
-    )
+    run_blocking(app, move |_| {
+        lyrics::fetch(
+            &provider_order,
+            &track_id,
+            &title,
+            &artist,
+            album.as_deref(),
+            duration_ms,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-fn search_youtube_music(
+async fn search_youtube_music(
     query: String,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<youtube_music::YouTubeSearchTrack>, String> {
-    youtube_music::search(&state.youtube_music, &query)
+    run_blocking(app, move |state| youtube_music::search(&state.youtube_music, &query)).await
 }
 
 #[tauri::command]
-fn discover_youtube_music(
+async fn discover_youtube_music(
     category: String,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<youtube_music::YouTubeSearchTrack>, String> {
-    youtube_music::discover(&state.youtube_music, &category)
+    run_blocking(app, move |state| {
+        youtube_music::discover(&state.youtube_music, &category)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -418,111 +446,141 @@ fn set_spotify_client_id(client_id: String, state: tauri::State<AppState>) -> Re
 }
 
 #[tauri::command]
-fn list_spotify_playlists(
+async fn list_spotify_playlists(
     offset: Option<u32>,
     limit: Option<u32>,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<spotify::SpotifyPlaylistPage, String> {
-    spotify::list_playlists(&state.spotify, offset.unwrap_or(0), limit.unwrap_or(50))
+    run_blocking(app, move |state| {
+        spotify::list_playlists(&state.spotify, offset.unwrap_or(0), limit.unwrap_or(50))
+    })
+    .await
 }
 
 #[tauri::command]
-fn play_spotify_playlist(
+async fn play_spotify_playlist(
     playlist: String,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    youtube_music::pause(&state.youtube_music);
-    spotify::play_playlist(&state.spotify, &playlist)?;
-    if let Ok(status) = spotify::get_status_fresh(&state.spotify) {
-        let payload = serde_json::json!({
-            "type": "spotifyStatus",
-            "payload": status,
-        });
-        let _ = state.log_bus.send(payload.to_string());
-    }
-    Ok(())
+    run_blocking(app, move |state| {
+        youtube_music::pause(&state.youtube_music);
+        spotify::play_playlist(&state.spotify, &playlist)?;
+        if let Ok(status) = spotify::get_status_fresh(&state.spotify) {
+            let payload = serde_json::json!({
+                "type": "spotifyStatus",
+                "payload": status,
+            });
+            let _ = state.log_bus.send(payload.to_string());
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-fn get_spotify_queue(
+async fn get_spotify_queue(
     offset: Option<u32>,
     limit: Option<u32>,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<spotify::SpotifyQueueView, String> {
-    spotify::get_queue(&state.spotify, offset.unwrap_or(0), limit.unwrap_or(50).min(100))
+    run_blocking(app, move |state| {
+        spotify::get_queue(&state.spotify, offset.unwrap_or(0), limit.unwrap_or(50).min(100))
+    })
+    .await
 }
 
 #[tauri::command]
-fn move_spotify_queue_item(
+async fn move_spotify_queue_item(
     from: usize,
     to: usize,
     item_id: String,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    spotify::move_queue_item(&state.spotify, from, to, &item_id)
+    run_blocking(app, move |state| {
+        spotify::move_queue_item(&state.spotify, from, to, &item_id)
+    })
+    .await
 }
 
 #[tauri::command]
-fn remove_spotify_queue_item(
+async fn remove_spotify_queue_item(
     index: usize,
     item_id: String,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    spotify::remove_queue_item(&state.spotify, index, &item_id)
+    run_blocking(app, move |state| {
+        spotify::remove_queue_item(&state.spotify, index, &item_id)
+    })
+    .await
 }
 
 #[tauri::command]
-fn play_spotify_queue_item(
+async fn play_spotify_queue_item(
     index: usize,
     item_id: String,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    youtube_music::pause(&state.youtube_music);
-    spotify::play_queue_item(&state.spotify, index, &item_id)
+    run_blocking(app, move |state| {
+        youtube_music::pause(&state.youtube_music);
+        spotify::play_queue_item(&state.spotify, index, &item_id)
+    })
+    .await
 }
 
 #[tauri::command]
-fn list_spotify_add_playlists(
+async fn list_spotify_add_playlists(
     track_id: String,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<spotify::SpotifyAddPlaylist>, String> {
-    spotify::list_add_playlists(&state.spotify, &track_id)
+    run_blocking(app, move |state| {
+        spotify::list_add_playlists(&state.spotify, &track_id)
+    })
+    .await
 }
 
 #[tauri::command]
-fn set_spotify_playlist_track(
+async fn set_spotify_playlist_track(
     playlist_id: String,
     track_id: String,
     add: bool,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<spotify::SpotifyAddPlaylist>, String> {
-    spotify::set_playlist_track(&state.spotify, &playlist_id, &track_id, add)
+    run_blocking(app, move |state| {
+        spotify::set_playlist_track(&state.spotify, &playlist_id, &track_id, add)
+    })
+    .await
 }
 
 #[tauri::command]
-fn create_spotify_playlist(
+async fn create_spotify_playlist(
     name: String,
     track_id: Option<String>,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<spotify::SpotifyAddPlaylist>, String> {
-    spotify::create_owned_playlist(&state.spotify, &name, track_id.as_deref())
+    run_blocking(app, move |state| {
+        spotify::create_owned_playlist(&state.spotify, &name, track_id.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
-fn get_spotify_lyrics(
+async fn get_spotify_lyrics(
     track_id: Option<String>,
-    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<spotify::SpotifyTrackLyrics, String> {
-    let track_id = track_id
-        .map(|id| id.trim().to_string())
-        .filter(|id| !id.is_empty())
-        .or_else(|| {
-            spotify::get_status(&state.spotify)
-                .ok()
-                .and_then(|status| status.current_item_id)
-        })
-        .ok_or_else(|| "Spotify has no current track for lyrics".to_string())?;
-    spotify::get_track_lyrics(&state.spotify, &track_id)
+    run_blocking(app, move |state| {
+        let track_id = track_id
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .or_else(|| {
+                spotify::get_status(&state.spotify)
+                    .ok()
+                    .and_then(|status| status.current_item_id)
+            })
+            .ok_or_else(|| "Spotify has no current track for lyrics".to_string())?;
+        spotify::get_track_lyrics(&state.spotify, &track_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -733,7 +791,7 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
-                window_prefs::persist(&window.app_handle());
+                window_prefs::persist(window.app_handle());
             }
         })
         .setup(|app| {

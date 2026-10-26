@@ -196,7 +196,7 @@ pub fn handle(command: &str, spotify: &crate::spotify::SpotifyState) -> Result<(
 fn os_media_transport(command: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
-        return handle_windows(command);
+        handle_windows(command)
     }
     #[cfg(target_os = "macos")]
     {

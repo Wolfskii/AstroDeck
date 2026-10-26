@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 const GITHUB_REPO: &str = "Wolfskii/AstroDeck";
 const USER_AGENT: &str = "AstroDeck-Updater";
@@ -58,14 +59,42 @@ fn empty_update_info() -> AppUpdateInfo {
     }
 }
 
+const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
+
 #[tauri::command]
-pub fn check_for_app_update() -> Result<AppUpdateInfo, String> {
+pub async fn check_for_app_update() -> Result<AppUpdateInfo, String> {
+    tauri::async_runtime::spawn_blocking(check_for_app_update_blocking)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn download_and_install_update(
+    download_url: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = http_client(DOWNLOAD_TIMEOUT)?;
+        let installer_path = download_installer(&client, &download_url)?;
+        launch_installer(&installer_path)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(750));
+        app.exit(0);
+    });
+    Ok(())
+}
+
+fn check_for_app_update_blocking() -> Result<AppUpdateInfo, String> {
     if cfg!(debug_assertions) {
         return Ok(empty_update_info());
     }
 
     let current = current_app_version();
-    let client = http_client()?;
+    let client = http_client(CHECK_TIMEOUT)?;
     let releases = fetch_recent_releases(&client)?;
     let candidate = pick_release_candidate(&releases, &current);
 
@@ -99,22 +128,10 @@ pub fn check_for_app_update() -> Result<AppUpdateInfo, String> {
     })
 }
 
-#[tauri::command]
-pub fn download_and_install_update(download_url: String, app: tauri::AppHandle) -> Result<(), String> {
-    let client = http_client()?;
-    let installer_path = download_installer(&client, &download_url)?;
-    launch_installer(&installer_path)?;
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(750));
-        app.exit(0);
-    });
-    Ok(())
-}
-
-fn http_client() -> Result<reqwest::blocking::Client, String> {
+fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(std::time::Duration::from_secs(600))
+        .timeout(timeout)
         .build()
         .map_err(|e| e.to_string())
 }
@@ -138,7 +155,7 @@ fn pick_release_candidate<'a>(
     let mut stable: Option<&GitHubRelease> = None;
     let mut prerelease: Option<&GitHubRelease> = None;
 
-    for release in releases.iter().filter(|r| !r.draft) {
+    for release in releases.iter().filter(|r| !r.draft && !is_dev_tag(&r.tag_name)) {
         if !is_version_newer(&release.tag_name, current_version) {
             continue;
         }
@@ -204,6 +221,11 @@ fn installer_asset_rank() -> Vec<fn(&str) -> bool> {
     }
 }
 
+/// `-dev` tags are CI builds from `develop` and are never offered as updates.
+fn is_dev_tag(tag: &str) -> bool {
+    tag.trim().to_ascii_lowercase().ends_with("-dev")
+}
+
 fn normalize_tag_version(tag: &str) -> String {
     tag.trim().trim_start_matches('v').to_string()
 }
@@ -261,7 +283,7 @@ fn is_version_newer(candidate: &str, current: &str) -> bool {
 /// Last path segment of `url` if it looks like a real file name (has an extension).
 fn installer_file_name(url: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(url).ok()?;
-    let segment = parsed.path_segments()?.last()?;
+    let segment = parsed.path_segments()?.next_back()?;
     let name = Path::new(segment).file_name()?.to_str()?;
     Path::new(name).extension()?;
     Some(name.to_string())
@@ -314,6 +336,9 @@ fn to_wide(value: &str) -> Vec<u16> {
 fn launch_elevated(file: &str, params: &str) -> Result<(), String> {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, HWND};
+    use windows::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    };
     use windows::Win32::UI::Shell::{
         ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
     };
@@ -333,7 +358,15 @@ fn launch_elevated(file: &str, params: &str) -> Result<(), String> {
         ..Default::default()
     };
 
-    unsafe { ShellExecuteExW(&mut info) }.map_err(|err: windows::core::Error| {
+    // This runs on a worker thread, and ShellExecuteEx expects COM to be initialized.
+    let com_initialized =
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }.is_ok();
+    let result = unsafe { ShellExecuteExW(&mut info) };
+    if com_initialized {
+        unsafe { CoUninitialize() };
+    }
+
+    result.map_err(|err: windows::core::Error| {
         if err.code() == ERROR_CANCELLED.to_hresult() {
             "Update cancelled".to_string()
         } else {
@@ -367,7 +400,7 @@ fn launch_installer(path: &Path) -> Result<(), String> {
         }
 
         launch_elevated(path_str, "/P /UPDATE")?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]
@@ -456,6 +489,18 @@ mod tests {
         assert_eq!(
             pick_release_candidate(&releases, "0.1.4-1").map(|r| r.tag_name.as_str()),
             Some("v0.1.5")
+        );
+    }
+
+    #[test]
+    fn skips_dev_releases() {
+        let releases = vec![release("v0.2.5-dev", true), release("v0.2.4-dev", true)];
+        assert!(pick_release_candidate(&releases, "0.2.3").is_none());
+
+        let releases = vec![release("v0.2.6-dev", true), release("v0.2.5", false)];
+        assert_eq!(
+            pick_release_candidate(&releases, "0.2.4").map(|r| r.tag_name.as_str()),
+            Some("v0.2.5")
         );
     }
 

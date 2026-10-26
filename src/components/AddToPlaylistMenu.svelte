@@ -207,10 +207,16 @@
   <div
     class="add-overlay"
     role="dialog"
+    tabindex="-1"
     aria-modal="true"
     aria-label="Add to playlist"
     onclick={(event) => {
       if (event.target === event.currentTarget) close();
+    }}
+    onkeydown={(event) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      close();
     }}
   >
     <div class="add-sheet">

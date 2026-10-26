@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { hexToHsv, hsvToHex, type Hsv } from "../lib/color";
 
   let {
@@ -13,7 +14,7 @@
     onCommit?: (hex: string) => void;
   } = $props();
 
-  let hsv = $state<Hsv>(hexToHsv(value));
+  let hsv = $state<Hsv>(hexToHsv(untrack(() => value)));
   let open = $state(false);
 
   $effect(() => {

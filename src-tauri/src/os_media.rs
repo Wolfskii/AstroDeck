@@ -321,7 +321,7 @@ enum ControlOp {
 fn control_playback(op: ControlOp) -> Result<(), String> {
     #[cfg(windows)]
     {
-        return win::dispatch_control(op);
+        win::dispatch_control(op)
     }
 
     #[cfg(target_os = "macos")]
@@ -339,7 +339,7 @@ fn control_playback(op: ControlOp) -> Result<(), String> {
 pub fn get_output_volume() -> Result<u8, String> {
     #[cfg(windows)]
     {
-        return win::get_output_volume();
+        win::get_output_volume()
     }
 
     #[cfg(target_os = "macos")]

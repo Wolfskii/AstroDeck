@@ -101,7 +101,7 @@ fn number(value: &Value, key: &str) -> u64 {
 fn process_name_matches(name: &str, wanted: &[&str]) -> bool {
     let name = name.to_ascii_lowercase();
     let name = name.strip_suffix(".exe").unwrap_or(&name);
-    wanted.iter().any(|candidate| name == *candidate)
+    wanted.contains(&name)
 }
 
 /// VS Code's per-user data folders (`Code`, `Code - Insiders`) for this platform.
@@ -377,7 +377,7 @@ fn grouped(value: i64) -> String {
     let digits = value.abs().to_string();
     let mut out = String::new();
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push(',');
         }
         out.push(digit);

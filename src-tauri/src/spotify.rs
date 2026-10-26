@@ -1481,7 +1481,7 @@ fn maybe_enrich_idle_status(spotify: &SpotifyState, status: &mut SpotifyStatus, 
 pub(crate) fn last_played_track_id(spotify: &SpotifyState) -> Option<String> {
     let display = idle_playback_display(spotify, false)?;
     (display.item_type.as_deref() == Some("track"))
-        .then(|| display.item_id)
+        .then_some(display.item_id)
         .flatten()
 }
 

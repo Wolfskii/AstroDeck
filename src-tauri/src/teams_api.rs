@@ -100,7 +100,7 @@ pub fn setup() -> Result<TeamsSetupStatus, String> {
         serde_json::from_str::<Value>(&text)
             .ok()
             .and_then(|value| value.as_object().cloned())
-            .unwrap_or_else(Map::new)
+            .unwrap_or_default()
     } else {
         Map::new()
     };
@@ -366,7 +366,7 @@ async fn connection_loop(app: tauri::AppHandle, state: TeamsState, mut token: St
                     request_id: state.request_id.fetch_add(1, Ordering::Relaxed) + 1,
                 };
                 let _ = writer.send(Message::Text(
-                    serde_json::to_string(&query).unwrap_or_default().into(),
+                    serde_json::to_string(&query).unwrap_or_default(),
                 )).await;
                 loop {
                     tokio::select! {
@@ -378,7 +378,7 @@ async fn connection_loop(app: tauri::AppHandle, state: TeamsState, mut token: St
                                 request_id,
                             };
                             let payload = serde_json::to_string(&message).unwrap_or_default();
-                            if writer.send(Message::Text(payload.into())).await.is_err() {
+                            if writer.send(Message::Text(payload)).await.is_err() {
                                 break;
                             }
                         }

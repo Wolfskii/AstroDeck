@@ -71,7 +71,7 @@ impl Sampler {
         self.system.refresh_cpu_usage();
         self.system.refresh_cpu_frequency();
         self.system.refresh_memory();
-        let _ = self.disks.refresh(false);
+        self.disks.refresh(false);
 
         let now = Instant::now();
         let elapsed = self
@@ -201,7 +201,7 @@ fn disk_stats(disks: &Disks) -> Vec<DiskStat> {
     #[cfg(windows)]
     {
         let _ = disks;
-        return windows_logical_drives();
+        windows_logical_drives()
     }
     #[cfg(not(windows))]
     {

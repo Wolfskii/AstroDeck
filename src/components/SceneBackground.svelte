@@ -72,10 +72,10 @@
   };
 
   let live: LiveShader | null = null;
-  let pendingPalette = [...colors];
+  let pendingPalette = [...untrack(() => colors)];
   let animFrameMs = 0;
   let animStyle: SceneBackgroundId | null = null;
-  let renderPlaying = $state(playing);
+  let renderPlaying = $state(untrack(() => playing));
 
   $effect(() => {
     pendingPalette = [...colors];
